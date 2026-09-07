@@ -15,6 +15,19 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 RUN pip install --no-cache-dir uv
 
+FROM base AS runtime
+RUN uv sync --frozen --no-dev
+
+COPY app ./app
+COPY migrations ./migrations
+COPY scripts ./scripts
+COPY retrieval-schema.sql ./retrieval-schema.sql
+COPY alembic.ini ./alembic.ini
+
+USER appuser
+EXPOSE 8000
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
 FROM base AS development
 RUN uv sync --frozen --all-groups
 
@@ -31,16 +44,3 @@ CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "800
 
 FROM development AS test
 CMD ["uv", "run", "pytest"]
-
-FROM base AS runtime
-RUN uv sync --frozen --no-dev
-
-COPY app ./app
-COPY migrations ./migrations
-COPY scripts ./scripts
-COPY retrieval-schema.sql ./retrieval-schema.sql
-COPY alembic.ini ./alembic.ini
-
-USER appuser
-EXPOSE 8000
-CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
