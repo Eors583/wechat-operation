@@ -35,6 +35,7 @@ data/
 output/
 artifacts/
 backups/
+runtime/
 .codex-run-logs/
 *.log
 celerybeat-schedule

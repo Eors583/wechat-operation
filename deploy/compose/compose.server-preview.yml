@@ -11,6 +11,8 @@ x-backend: &backend
   environment:
     PYTHONPATH: /app
     UV_NO_SYNC: "1"
+  volumes:
+    - ../../runtime/backend-local:/app/.local
   depends_on:
     business-db:
       condition: service_healthy
