@@ -1,0 +1,261 @@
+@use 'sass:map';
+@use 'tokens/generated';
+@use 'tokens/semantic';
+@use 'themes/light';
+@use 'themes/dark';
+@use 'foundations/typography';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--app-bg-page);
+  color: var(--app-text-primary);
+}
+
+html.dark body {
+  background: var(--app-bg-page);
+}
+
+:root {
+  --el-color-primary: var(--app-action-primary);
+  --el-bg-color: var(--app-bg-surface);
+  --el-bg-color-page: var(--app-bg-page);
+  --el-fill-color-blank: var(--app-bg-surface);
+  --el-border-color: var(--app-border-default);
+  --el-border-color-light: var(--app-border-subtle);
+  --el-text-color-primary: var(--app-text-primary);
+  --el-text-color-regular: var(--app-text-secondary);
+}
+
+a {
+  color: inherit;
+}
+
+.el-container,
+.el-main {
+  min-width: 0;
+  background: var(--app-bg-page);
+}
+
+.el-card,
+.el-dialog,
+.el-popper {
+  background: var(--app-bg-surface);
+  color: var(--app-text-primary);
+}
+
+.el-input,
+.el-select,
+.el-textarea,
+.el-input__wrapper,
+.el-input__inner,
+.el-textarea__inner {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.el-textarea__inner {
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.admin-page {
+  width: 100%;
+  min-width: 0;
+  max-width: 1920px;
+  margin-inline: auto;
+  padding: 28px 32px 48px;
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 20px;
+  min-width: 0;
+}
+
+.surface-card {
+  min-width: 0;
+  border: 1px solid var(--app-border-default);
+  border-radius: 14px;
+  box-shadow: var(--app-shadow-soft);
+}
+
+.long-text {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.text-secondary {
+  color: var(--app-text-secondary);
+}
+
+.tone-success {
+  color: var(--app-action-success);
+}
+
+.tone-danger {
+  color: var(--app-action-danger);
+}
+
+.tone-warning {
+  color: var(--app-action-warning);
+}
+
+.caption-text {
+  font-size: map.get(generated.$app-font, 'sizeXs');
+  line-height: map.get(generated.$app-font, 'lineCompact');
+}
+
+.admin-list-surface {
+  overflow: hidden;
+  border: 1px solid var(--app-border-default);
+  border-radius: map.get(generated.$app-radius, 'md');
+}
+
+.admin-list-surface > .admin-item {
+  padding-inline: map.get(generated.$app-space, '3');
+}
+
+.admin-list-surface > .admin-item + .admin-item {
+  border-block-start: 1px solid var(--app-border-subtle);
+}
+
+.admin-space {
+  flex: 1 1 auto;
+}
+
+.admin-button__label {
+  margin-inline-start: 6px;
+}
+
+.admin-card-section {
+  min-width: 0;
+  padding: 18px 20px;
+}
+
+.admin-card-actions,
+.admin-toolbar,
+.admin-banner__content,
+.admin-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.admin-card-actions {
+  justify-content: flex-end;
+  padding: 12px 20px 18px;
+}
+
+.admin-toolbar-title,
+.admin-banner__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.admin-list,
+.admin-item-section,
+.admin-tab-panels,
+.admin-tab-panel {
+  min-width: 0;
+}
+
+.admin-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 0;
+}
+
+.admin-item-section {
+  display: grid;
+  gap: 4px;
+}
+
+.admin-item-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-tabs {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.admin-inner-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--app-bg-surface) 80%, transparent);
+}
+
+.admin-center-dialog > .el-dialog__header {
+  display: none;
+}
+
+.admin-center-dialog > .el-dialog__body {
+  min-width: 0;
+  min-height: 0;
+  max-height: calc(100dvh - 48px);
+  padding: 0;
+  overflow: hidden;
+}
+
+.admin-center-dialog > .el-dialog__body > .el-card {
+  width: 100%;
+  max-width: 100%;
+  border: 0;
+  box-shadow: none;
+}
+
+.admin-center-dialog > .el-dialog__body > .el-card > .el-card__body {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.admin-center-dialog .drawer-scroll,
+.admin-center-dialog .editor-scroll,
+.admin-center-dialog .editor-form {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+@media (max-width: 1023px) {
+  .admin-page {
+    padding: 20px 20px 36px;
+  }
+}
+
+@media (max-width: 599px) {
+  .admin-page {
+    padding: 16px 12px 28px;
+  }
+  .el-dialog {
+    width: calc(100vw - 24px);
+    max-width: 100%;
+    margin: 12px auto;
+  }
+}

@@ -1,0 +1,337 @@
+name: suite-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: suite-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-contract-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            apps/user-client/pnpm-lock.yaml
+            apps/admin-console/pnpm-lock.yaml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.8.17
+          enable-cache: true
+          cache-dependency-glob: services/platform-backend/uv.lock
+      - name: Verify suite repository layout
+        run: node scripts/check-submodules.mjs
+      - name: Install locked dependencies
+        run: |
+          pnpm --dir apps/user-client install --frozen-lockfile
+          pnpm --dir apps/admin-console install --frozen-lockfile
+          uv sync --project services/platform-backend --frozen --all-groups
+      - name: Verify API, migrations, tests, static analysis, and production builds
+        run: node scripts/verify.mjs
+      - name: Export immutable release manifest
+        run: node scripts/release-manifest.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-contract-build-evidence
+          path: |
+            contracts/generated/platform.openapi.json
+            apps/user-client/dist
+            apps/admin-console/dist
+            release-manifest.json
+          if-no-files-found: error
+
+  browser-e2e:
+    needs: source-contract-and-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [user-client, admin-console]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/${{ matrix.app }}/pnpm-lock.yaml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+          run_install: false
+      - name: Install locked frontend dependencies
+        run: pnpm --dir apps/${{ matrix.app }} install --frozen-lockfile
+      - name: Install Chromium
+        run: pnpm --dir apps/${{ matrix.app }} exec playwright install --with-deps chromium
+      - name: Run responsive browser tests
+        run: pnpm --dir apps/${{ matrix.app }} test:e2e
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.app }}-playwright-evidence
+          path: |
+            apps/${{ matrix.app }}/playwright-report
+            apps/${{ matrix.app }}/test-results
+          if-no-files-found: ignore
+
+  real-backend-e2e:
+    needs: source-contract-and-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [user-client, admin-console]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/${{ matrix.app }}/pnpm-lock.yaml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.8.17
+          enable-cache: true
+          cache-dependency-glob: services/platform-backend/uv.lock
+      - name: Install locked frontend and backend dependencies
+        run: |
+          pnpm --dir apps/${{ matrix.app }} install --frozen-lockfile
+          uv sync --project services/platform-backend --frozen --all-groups
+      - name: Install Chromium
+        run: pnpm --dir apps/${{ matrix.app }} exec playwright install --with-deps chromium
+      - name: Run protected journeys against the migrated backend
+        run: pnpm --dir apps/${{ matrix.app }} test:e2e:integration
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.app }}-real-backend-playwright-evidence
+          path: |
+            apps/${{ matrix.app }}/playwright-report-integration
+            apps/${{ matrix.app }}/test-results/playwright-integration
+          if-no-files-found: ignore
+
+  electron-release-build:
+    needs: source-contract-and-build
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      VITE_API_MODE: remote
+      VITE_API_BASE_URL_ELECTRON: https://api.ci.example.com/api/v1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/user-client/pnpm-lock.yaml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+          run_install: false
+      - run: pnpm --dir apps/user-client install --frozen-lockfile
+      - name: Build the Windows installer
+        run: pnpm --dir apps/user-client build:electron
+      - uses: actions/upload-artifact@v4
+        with:
+          name: electron-windows-unsigned-installer
+          path: apps/user-client/dist/electron/Packaged/*.exe
+          if-no-files-found: error
+
+  android-release-build:
+    needs: source-contract-and-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      VITE_API_MODE: remote
+      VITE_API_BASE_URL_NATIVE: https://api.ci.example.com/api/v1
+      WECHAT_AI_API_BASE_URL: https://api.ci.example.com/api/v1
+      VITE_OAUTH_REDIRECT_URI_NATIVE: https://app.ci.example.com/official-accounts/callback
+      WECHAT_AI_OAUTH_HOST: app.ci.example.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/user-client/pnpm-lock.yaml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+      - run: pnpm --dir apps/user-client install --frozen-lockfile
+      - name: Build the Android release APK
+        run: pnpm --dir apps/user-client build:capacitor:android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-unsigned-release-apk
+          path: apps/user-client/src-capacitor/android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+  ios-simulator-release-build:
+    needs: source-contract-and-build
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      VITE_API_MODE: remote
+      VITE_API_BASE_URL_NATIVE: https://api.ci.example.com/api/v1
+      WECHAT_AI_API_BASE_URL: https://api.ci.example.com/api/v1
+      VITE_OAUTH_REDIRECT_URI_NATIVE: https://app.ci.example.com/official-accounts/callback
+      WECHAT_AI_OAUTH_HOST: app.ci.example.com
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/user-client/pnpm-lock.yaml
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+          run_install: false
+      - run: pnpm --dir apps/user-client install --frozen-lockfile
+      - name: Synchronize the iOS project and web assets
+        run: pnpm --dir apps/user-client build:capacitor:ios
+      - name: Compile a release simulator application without signing
+        run: |
+          xcodebuild \
+            -project apps/user-client/src-capacitor/ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath native-artifacts/ios \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-simulator-app
+          path: native-artifacts/ios/Build/Products/Release-iphonesimulator/App.app
+          if-no-files-found: error
+
+  compose-integration:
+    needs: source-contract-and-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Create isolated test environment
+        run: cp .env.example .env
+      - name: Validate all Compose definitions
+        run: |
+          docker compose --env-file .env.example -f deploy/compose/compose.dev.yml config --quiet
+          docker compose --env-file .env.example -f deploy/compose/compose.test.yml config --quiet
+          docker compose --env-file .env.example -f deploy/compose/compose.demo.yml config --quiet
+      - name: Run PostgreSQL-backed migrations and integration tests
+        run: docker compose --env-file .env.example -f deploy/compose/compose.test.yml up --build --abort-on-container-exit --exit-code-from suite-tests
+      - name: Capture service logs
+        if: failure()
+        run: docker compose --env-file .env.example -f deploy/compose/compose.test.yml logs --no-color > compose-test.log
+      - name: Stop integration stack
+        if: always()
+        run: docker compose --env-file .env.example -f deploy/compose/compose.test.yml down --volumes --remove-orphans
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: compose-integration-logs
+          path: compose-test.log
+          if-no-files-found: ignore
+
+  dependency-and-image-security:
+    needs: source-contract-and-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Scan locked frontend production dependencies
+        run: |
+          pnpm --dir apps/user-client audit --prod --audit-level high
+          pnpm --dir apps/admin-console audit --prod --audit-level high
+      - name: Build all production runtime images
+        run: |
+          docker build --target production --tag wechat-ai-user-client:${{ github.sha }} apps/user-client
+          docker build --target production --tag wechat-ai-admin-console:${{ github.sha }} apps/admin-console
+          docker build --target runtime --tag wechat-ai-platform-backend:${{ github.sha }} services/platform-backend
+      - name: Scan the user runtime image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: wechat-ai-user-client:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+      - name: Scan the admin runtime image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: wechat-ai-admin-console:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          skip-setup-trivy: true
+      - name: Scan the backend runtime image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: wechat-ai-platform-backend:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          skip-setup-trivy: true

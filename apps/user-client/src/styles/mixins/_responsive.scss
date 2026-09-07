@@ -1,0 +1,19 @@
+@use '../tokens/breakpoints' as bp;
+
+@mixin mobile {
+  @media (max-width: bp.$xs-max) {
+    @content;
+  }
+}
+
+@mixin tablet {
+  @media (min-width: bp.$sm-min) and (max-width: bp.$sm-max) {
+    @content;
+  }
+}
+
+@mixin desktop {
+  @media (min-width: bp.$md-min) {
+    @content;
+  }
+}

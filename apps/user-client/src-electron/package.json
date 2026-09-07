@@ -1,0 +1,12 @@
+{
+  "name": "quasar-electron-app",
+  "version": "0.1.0",
+  "description": "微信公众号 AI 运营助手桌面端运行时",
+  "author": "微信公众号 AI 运营助手项目组",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "^26.15.3"
+  }
+}

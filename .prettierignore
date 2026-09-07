@@ -1,0 +1,13 @@
+node_modules
+dist
+.quasar
+coverage
+playwright-report
+playwright-report-integration
+test-results
+src-capacitor/android
+src-capacitor/ios
+src-capacitor/www
+apps/*/src/api/generated
+contracts/generated
+*.lock

@@ -1,0 +1,9 @@
+node_modules/
+.quasar/
+dist/
+.env
+playwright-report/
+test-results/
+coverage/
+src-capacitor/www/
+src-electron/icons/

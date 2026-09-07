@@ -1,0 +1,25 @@
+:root {
+  --app-bg-page: #fbfcfb;
+  --app-bg-surface: #fff;
+  --app-bg-subtle: #f6f8f7;
+  --app-bg-elevated: #fff;
+  --app-text-primary: #111827;
+  --app-text-secondary: #667085;
+  --app-text-muted: #98a2b3;
+  --app-border-default: #e2e7e4;
+  --app-border-strong: #cfd7d3;
+  --app-action-primary: #047a3a;
+  --app-action-primary-hover: #036832;
+  --app-action-soft: #eaf8f0;
+  --app-danger: #d94848;
+  --app-warning: #df7918;
+  --app-info: #2677ff;
+  --app-shadow-sm: 0 1px 2px rgba(18, 43, 31, 0.04);
+  --app-shadow-md: 0 18px 48px rgba(18, 43, 31, 0.14);
+  --app-overlay: rgba(12, 22, 17, 0.5);
+  --app-focus: rgba(4, 122, 58, 0.28);
+  --app-content-max: 1760px;
+  --app-sidebar-size: 272px;
+  --app-header-size: 64px;
+  color-scheme: light;
+}

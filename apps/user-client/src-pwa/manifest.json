@@ -1,0 +1,19 @@
+{
+  "name": "微信公众号 AI 运营助手",
+  "short_name": "AI 运营助手",
+  "description": "创作、排版并管理微信公众号内容",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f6f8f7",
+  "theme_color": "#08a657",
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

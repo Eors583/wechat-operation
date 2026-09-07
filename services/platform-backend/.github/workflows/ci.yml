@@ -1,0 +1,106 @@
+name: platform-backend-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-contract-and-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      business-db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: wechat_ai_test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test-only-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U test -d wechat_ai_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      retrieval-db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: wechat_ai_retrieval_test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test-only-password
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U test -d wechat_ai_retrieval_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      rabbitmq:
+        image: rabbitmq:3.13-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: test
+          RABBITMQ_DEFAULT_PASS: test-only-password
+          RABBITMQ_DEFAULT_VHOST: wechat_ai_test
+        ports: ["5672:5672"]
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://test:test-only-password@127.0.0.1:5432/wechat_ai_test
+      RETRIEVAL_DATABASE_URL: postgresql+asyncpg://test:test-only-password@127.0.0.1:5433/wechat_ai_retrieval_test
+      CELERY_BROKER_URL: amqp://test:test-only-password@127.0.0.1:5672/wechat_ai_test
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/1
+      TOKEN_SECRET: child-ci-test-secret-at-least-32-characters
+      COOKIE_SECURE: "false"
+      AUTO_CREATE_SCHEMA: "false"
+      MOCK_EXTERNAL_SERVICES: "true"
+      INLINE_MOCK_WORKERS: "true"
+      WECHAT_PROVIDER_MODE: mock
+      ALLOWED_ORIGINS: http://localhost:9000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: 0.8.17
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --frozen --all-groups
+      - run: uv run ruff check .
+      - run: uv run mypy app scripts/retrieval_benchmark.py
+      - run: uv run alembic upgrade head
+      - run: uv run python scripts/migrate_retrieval.py
+      - run: uv run pytest
+      - run: uv run python scripts/export_openapi.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-openapi-contract
+          path: openapi.json
+          if-no-files-found: error
+
+  runtime-image-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the non-root production image
+        run: docker build --target runtime --tag wechat-ai-platform-backend:${{ github.sha }} .
+      - name: Reject fixed high or critical runtime vulnerabilities
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: wechat-ai-platform-backend:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL

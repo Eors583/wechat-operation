@@ -1,0 +1,65 @@
+name: wechat-ai-demo
+
+services:
+  gateway:
+    image: nginx:1.27-alpine
+    ports:
+      - "9000:80"
+    volumes:
+      - ../gateway/nginx.demo.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on: [user-web, admin-web, backend-api]
+    restart: unless-stopped
+
+  user-web:
+    image: ${REGISTRY:-local}/wechat-ai-user:${APP_VERSION:-latest}
+    restart: unless-stopped
+
+  admin-web:
+    image: ${REGISTRY:-local}/wechat-ai-admin:${APP_VERSION:-latest}
+    restart: unless-stopped
+
+  backend-api:
+    image: ${REGISTRY:-local}/wechat-ai-backend:${APP_VERSION:-latest}
+    env_file: &runtime-env
+      - path: ../../.env.example
+        required: true
+      - path: ../../.env
+        required: false
+    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+
+  worker-ai:
+    image: ${REGISTRY:-local}/wechat-ai-backend:${APP_VERSION:-latest}
+    env_file: *runtime-env
+    command: uv run celery -A app.celery_app:celery worker --loglevel=INFO --queues=ai
+    restart: unless-stopped
+
+  worker-parser:
+    image: ${REGISTRY:-local}/wechat-ai-backend:${APP_VERSION:-latest}
+    env_file: *runtime-env
+    command: uv run celery -A app.celery_app:celery worker --loglevel=INFO --queues=files
+    restart: unless-stopped
+
+  worker-embedding:
+    image: ${REGISTRY:-local}/wechat-ai-backend:${APP_VERSION:-latest}
+    env_file: *runtime-env
+    command: uv run celery -A app.celery_app:celery worker --loglevel=INFO --queues=embedding
+    restart: unless-stopped
+
+  worker-wechat:
+    image: ${REGISTRY:-local}/wechat-ai-backend:${APP_VERSION:-latest}
+    env_file: *runtime-env
+    command: uv run celery -A app.celery_app:celery worker --loglevel=INFO --queues=wechat
+    restart: unless-stopped
+
+  worker-sync:
+    image: ${REGISTRY:-local}/wechat-ai-backend:${APP_VERSION:-latest}
+    env_file: *runtime-env
+    command: uv run celery -A app.celery_app:celery worker --loglevel=INFO --queues=sync,maintenance
+    restart: unless-stopped
+
+  scheduler:
+    image: ${REGISTRY:-local}/wechat-ai-backend:${APP_VERSION:-latest}
+    env_file: *runtime-env
+    command: uv run celery -A app.celery_app:celery beat --loglevel=INFO
+    restart: unless-stopped

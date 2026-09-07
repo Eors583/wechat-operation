@@ -1,0 +1,67 @@
+[project]
+name = "wechat-ai-platform-backend"
+version = "0.1.0"
+description = "Shared API and workers for the WeChat AI operations assistant"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "aiosqlite>=0.20.0,<1",
+  "alembic>=1.14.0,<2",
+  "argon2-cffi>=23.1.0,<26",
+  "asyncpg>=0.30.0,<1",
+  "boto3>=1.40.0,<2",
+  "celery[redis]>=5.6.0,<5.7",
+  "cryptography>=44.0.0,<47",
+  "email-validator>=2.2.0,<3",
+  "fastapi>=0.116.0,<1",
+  "httpx>=0.28.0,<1",
+  "markdownify>=1.2,<2",
+  "pydantic>=2.10.0,<3",
+  "python-docx>=1.2,<2",
+  "python-multipart>=0.0.20,<1",
+  "reportlab>=4.4,<5",
+  "uvicorn[standard]>=0.34.0,<1",
+]
+
+[dependency-groups]
+dev = [
+  "mypy>=1.14.0,<2",
+  "pytest>=8.3.0,<9",
+  "pytest-asyncio>=0.25.0,<1",
+  "ruff>=0.9.0,<1",
+]
+
+[project.scripts]
+wechat-admin = "app.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008"]
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
+check_untyped_defs = true
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+exclude = ["migrations/versions"]
+
+[[tool.mypy.overrides]]
+module = ["boto3", "boto3.*", "botocore", "botocore.*", "celery", "celery.*", "reportlab", "reportlab.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

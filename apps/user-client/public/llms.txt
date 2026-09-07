@@ -1,0 +1,9 @@
+# 微信公众号 AI 运营助手
+
+This is a local application for drafting, editing, previewing, and managing WeChat official-account articles.
+
+- App entry: /
+- Create article: /create
+- Article tasks: /tasks
+- Article library: /articles
+- Official account management: /official-accounts

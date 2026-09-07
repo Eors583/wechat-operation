@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["breakpoint", "space", "radius", "font", "motion", "zIndex", "theme"],
+  "properties": {
+    "breakpoint": { "type": "object", "additionalProperties": { "type": "string" } },
+    "space": { "type": "object", "additionalProperties": { "type": "string" } },
+    "radius": { "type": "object", "additionalProperties": { "type": "string" } },
+    "font": { "type": "object", "additionalProperties": { "type": "string" } },
+    "motion": { "type": "object", "additionalProperties": { "type": "string" } },
+    "zIndex": { "type": "object", "additionalProperties": { "type": "integer" } },
+    "theme": {
+      "type": "object",
+      "required": ["light", "dark"],
+      "properties": {
+        "light": { "type": "object", "additionalProperties": { "type": "string" } },
+        "dark": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    }
+  },
+  "additionalProperties": false
+}
+

@@ -1,0 +1,12 @@
+{
+	"appId": "com.wechat.ai.operations",
+	"appName": "微信公众号 AI 运营助手",
+	"webDir": "www",
+	"server": {
+		"androidScheme": "https"
+	},
+	"packageClassList": [
+		"AppPlugin",
+		"CAPBrowserPlugin"
+	]
+}

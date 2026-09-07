@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "微信公众号 AI 运营助手检索评测问题",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["owner_id", "document_ids", "query"],
+  "properties": {
+    "owner_id": { "type": "string", "minLength": 1 },
+    "project_id": { "type": ["string", "null"] },
+    "document_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "query": { "type": "string", "minLength": 1 },
+    "expected_chunk_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "expected_document_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "anyOf": [
+    { "required": ["expected_chunk_ids"], "properties": { "expected_chunk_ids": { "minItems": 1 } } },
+    { "required": ["expected_document_ids"], "properties": { "expected_document_ids": { "minItems": 1 } } }
+  ]
+}

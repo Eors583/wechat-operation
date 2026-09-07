@@ -1,0 +1,22 @@
+body.body--dark {
+  --app-bg-page: #0f1512;
+  --app-bg-surface: #171f1b;
+  --app-bg-subtle: #202a25;
+  --app-bg-elevated: #1b2520;
+  --app-text-primary: #f2f7f4;
+  --app-text-secondary: #bdc9c2;
+  --app-text-muted: #8f9e96;
+  --app-border-default: #33413a;
+  --app-border-strong: #45564d;
+  --app-action-primary: #57d791;
+  --app-action-primary-hover: #7ae1a9;
+  --app-action-soft: #18392a;
+  --app-danger: #ff7373;
+  --app-warning: #ffad56;
+  --app-info: #69a1ff;
+  --app-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --app-shadow-md: 0 16px 44px rgba(0, 0, 0, 0.45);
+  --app-overlay: rgba(0, 0, 0, 0.68);
+  --app-focus: rgba(56, 201, 124, 0.32);
+  color-scheme: dark;
+}

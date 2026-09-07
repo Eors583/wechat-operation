@@ -1,0 +1,103 @@
+// Generated from design/tokens.json. Do not edit by hand.
+$app-breakpoints: (
+  "xsMax": "599px",
+  "smMin": "600px",
+  "smMax": "1023px",
+  "mdMin": "1024px",
+  "mdMax": "1439px",
+  "lgMin": "1440px",
+  "lgMax": "1919px",
+  "xlMin": "1920px"
+);
+
+$app-space: (
+  "0": "0",
+  "1": "4px",
+  "2": "8px",
+  "3": "12px",
+  "4": "16px",
+  "5": "20px",
+  "6": "24px",
+  "8": "32px",
+  "10": "40px",
+  "12": "48px",
+  "16": "64px"
+);
+
+$app-radius: (
+  "sm": "6px",
+  "md": "10px",
+  "lg": "16px",
+  "xl": "24px",
+  "round": "999px"
+);
+
+$app-font: (
+  "family": "Inter, PingFang SC, Microsoft YaHei, system-ui, sans-serif",
+  "sizeXs": "12px",
+  "sizeSm": "14px",
+  "sizeMd": "16px",
+  "sizeLg": "18px",
+  "sizeXl": "24px",
+  "sizeDisplay": "36px",
+  "lineCompact": "1.3",
+  "lineNormal": "1.6"
+);
+
+$app-motion: (
+  "fast": "120ms",
+  "normal": "200ms",
+  "slow": "320ms",
+  "ease": "cubic-bezier(0.2, 0, 0, 1)"
+);
+
+$app-z-index: (
+  "base": 0,
+  "sticky": 10,
+  "header": 20,
+  "drawer": 30,
+  "dialog": 100,
+  "toast": 120
+);
+
+:root, .body--light {
+  --app-bg-canvas: #f6f8f7;
+  --app-bg-surface: #fff;
+  --app-bg-subtle: #f0f6f2;
+  --app-text-primary: #172033;
+  --app-text-secondary: #5f6878;
+  --app-text-muted: #8a93a3;
+  --app-border-default: #dfe5e2;
+  --app-border-strong: #c8d1cc;
+  --app-action-primary: #08a83d;
+  --app-action-primary-hover: #078c35;
+  --app-action-primary-text: #fff;
+  --app-success: #129a46;
+  --app-warning: #d88918;
+  --app-danger: #d94444;
+  --app-info: #2678e3;
+  --app-focus: #2f80ed;
+  --app-overlay: rgba(16, 24, 40, 0.56);
+  --app-shadow: 0 12px 40px rgba(26, 45, 34, 0.12);
+}
+
+.body--dark {
+  --app-bg-canvas: #111714;
+  --app-bg-surface: #18211d;
+  --app-bg-subtle: #202c26;
+  --app-text-primary: #f3f7f5;
+  --app-text-secondary: #c0cac4;
+  --app-text-muted: #8e9c94;
+  --app-border-default: #334139;
+  --app-border-strong: #45564c;
+  --app-action-primary: #32c765;
+  --app-action-primary-hover: #51d47a;
+  --app-action-primary-text: #07150d;
+  --app-success: #49cf77;
+  --app-warning: #efad4c;
+  --app-danger: #f06a6a;
+  --app-info: #70a9f4;
+  --app-focus: #82b5ff;
+  --app-overlay: rgba(0, 0, 0, 0.7);
+  --app-shadow: 0 12px 40px rgba(0, 0, 0, 0.38);
+}

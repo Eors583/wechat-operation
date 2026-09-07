@@ -1,0 +1,11 @@
+.env
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.tmp-doc-review
+__pycache__
+*.pyc
+*.db
+*.sqlite3
+.coverage

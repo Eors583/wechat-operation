@@ -1,0 +1,5 @@
+// Safe non-routable defaults. The production prebuild creates the optional local
+// override from the same environment values used by the renderer.
+WECHAT_AI_API_BASE_URL = https:/$()/api.example.invalid/api/v1
+WECHAT_AI_OAUTH_HOST = app.example.invalid
+#include? "WechatAI.local.xcconfig"

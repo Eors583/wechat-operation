@@ -1,0 +1,51 @@
+.tiptap-body {
+  .tableWrapper {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+  }
+  table {
+    width: 100%;
+    min-width: 30rem;
+    table-layout: fixed;
+    border-collapse: collapse;
+    margin-block: 1rem;
+  }
+  td,
+  th {
+    position: relative;
+    min-width: 0;
+    padding: 0.5rem;
+    border: 1px solid var(--app-border-default);
+    vertical-align: top;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+  @each $tag, $module in (th: table-header, td: table-cell) {
+    #{$tag} {
+      color: var(--article-#{$module}-color, var(--app-text-primary));
+      background: var(--article-#{$module}-background, var(--app-bg-surface));
+      font-size: var(--article-#{$module}-font-size, 15px);
+      font-weight: var(--article-#{$module}-font-weight, 400);
+      text-align: var(--article-#{$module}-text-align, left);
+      line-height: var(--article-#{$module}-line-height, 1.6);
+      padding: var(--article-#{$module}-padding, 8px);
+      border: var(--article-#{$module}-border, 1px solid var(--app-border-default));
+    }
+  }
+  td p,
+  th p {
+    margin: 0 !important;
+    color: inherit !important;
+    background: transparent !important;
+    font-size: inherit !important;
+    font-weight: inherit !important;
+    text-align: inherit !important;
+    line-height: inherit !important;
+    text-indent: 0 !important;
+    padding: 0 !important;
+  }
+  .selectedCell {
+    background: var(--app-bg-subtle);
+  }
+}

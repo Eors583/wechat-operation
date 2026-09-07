@@ -1,0 +1,18 @@
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --app-action-primary: #7d9dff;
+  --app-action-primary-soft: #26365f;
+  --app-action-danger: #ff7979;
+  --app-action-warning: #ffc65d;
+  --app-action-success: #55d69e;
+  --app-bg-page: #0f1522;
+  --app-bg-surface: #182132;
+  --app-bg-subtle: #202b3f;
+  --app-bg-sidebar: #0a1020;
+  --app-text-primary: #eff2fb;
+  --app-text-secondary: #aab4ca;
+  --app-text-on-dark: #f5f7ff;
+  --app-border-default: #344059;
+  --app-focus-ring: rgb(125 157 255 / 40%);
+  --app-shadow-soft: 0 10px 32px rgb(0 0 0 / 24%);
+}

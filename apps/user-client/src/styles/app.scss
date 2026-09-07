@@ -1,0 +1,146 @@
+@use 'tokens/semantic';
+@use 'themes/light';
+@use 'themes/dark';
+@use 'foundations/typography';
+@use 'foundations/tables';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#q-app {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  margin: 0;
+}
+
+html,
+body {
+  max-width: 100%;
+  overflow-x: clip;
+}
+
+body {
+  color: var(--app-text-primary);
+  background: var(--app-bg-page);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+img,
+video,
+canvas,
+svg {
+  max-inline-size: 100%;
+  block-size: auto;
+}
+
+a {
+  color: var(--app-action-primary);
+}
+
+.q-page-container,
+.q-page,
+.q-layout,
+.q-card,
+.q-dialog__inner > div,
+.q-tab-panels,
+.q-panel,
+.q-field,
+.q-field__inner,
+.q-field__control,
+.q-field__control-container,
+.q-field__native {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.q-field--auto-height textarea.q-field__native,
+textarea.q-field__native {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+
+.app-page {
+  width: min(100%, var(--app-content-max));
+  min-width: 0;
+  margin-inline: auto;
+  padding: clamp(20px, 2.5vw, 40px);
+}
+
+.surface-card {
+  min-width: 0;
+  color: var(--app-text-primary);
+  background: var(--app-bg-surface);
+  border: 1px solid var(--app-border-default);
+  border-radius: 10px;
+  box-shadow: var(--app-shadow-sm);
+}
+
+.q-field--outlined .q-field__control,
+.q-btn {
+  border-radius: 8px;
+}
+
+.q-table thead tr,
+.q-table tbody td {
+  height: 56px;
+}
+
+.q-table tbody tr:hover {
+  background: color-mix(in srgb, var(--app-action-soft) 42%, transparent);
+}
+
+@media (max-width: 1023px) {
+  .app-page {
+    padding: 24px;
+  }
+}
+
+@media (max-width: 599px) {
+  .app-page {
+    padding: 18px 14px max(24px, env(safe-area-inset-bottom));
+  }
+}
+
+.text-secondary {
+  color: var(--app-text-secondary);
+}
+
+.text-muted {
+  color: var(--app-text-muted);
+}
+
+.wrap-anywhere {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.safe-bottom {
+  padding-bottom: max(16px, env(safe-area-inset-bottom));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

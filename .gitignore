@@ -1,0 +1,53 @@
+# Local configuration and secrets
+.env
+.env.server
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Tooling and caches
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+node_modules/
+.pnpm-store/
+.quasar/
+dist/
+coverage/
+playwright-report/
+playwright-report-*/
+test-results/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+.local/
+__pycache__/
+*.py[cod]
+
+# Local runtime data
+tmp/
+data/
+output/
+artifacts/
+backups/
+.codex-run-logs/
+*.log
+celerybeat-schedule
+*.db
+*.db-wal
+*.db-shm
+release-manifest.json
+
+# Platform build output
+src-capacitor/android/
+src-capacitor/ios/
+src-electron/dist/
+
+# Generated copies inside tracked native projects
+apps/user-client/src-capacitor/ios/App/App/public/
+services/platform-backend/openapi.json
