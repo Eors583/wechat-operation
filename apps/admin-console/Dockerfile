@@ -1,4 +1,6 @@
 FROM node:22.22-alpine AS base
+ARG NPM_CONFIG_REGISTRY=https://registry.npmjs.org
+ENV npm_config_registry="${NPM_CONFIG_REGISTRY}"
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@11.19.0 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./

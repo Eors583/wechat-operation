@@ -1,8 +1,12 @@
 FROM python:3.12-slim AS base
 
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG UV_DEFAULT_INDEX=https://pypi.org/simple
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     UV_PROJECT_ENVIRONMENT="/opt/venv" \
+    UV_DEFAULT_INDEX="${UV_DEFAULT_INDEX}" \
     PATH="/opt/venv/bin:$PATH"
 
 RUN useradd --create-home --uid 10001 appuser

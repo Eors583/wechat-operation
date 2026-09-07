@@ -40,6 +40,8 @@ services:
     build:
       context: ../../apps/user-client
       target: production
+      args:
+        NPM_CONFIG_REGISTRY: https://registry.npmmirror.com
     mem_limit: 64m
     restart: unless-stopped
 
@@ -48,6 +50,8 @@ services:
     build:
       context: ../../apps/admin-console
       target: production
+      args:
+        NPM_CONFIG_REGISTRY: https://registry.npmmirror.com
     mem_limit: 64m
     restart: unless-stopped
 
@@ -56,6 +60,9 @@ services:
     build:
       context: ../../services/platform-backend
       target: runtime
+      args:
+        PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple
+        UV_DEFAULT_INDEX: https://mirrors.aliyun.com/pypi/simple
     command: >-
       /bin/sh -ec "uv run alembic upgrade head &&
       uv run python scripts/migrate_retrieval.py &&
