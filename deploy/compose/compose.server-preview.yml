@@ -2,9 +2,6 @@ name: wechat-ai-preview
 
 x-backend: &backend
   image: wechat-ai-backend:${APP_VERSION:-preview}
-  build:
-    context: ../../services/platform-backend
-    target: runtime
   env_file:
     - path: ../../.env.server
       required: true
@@ -56,6 +53,9 @@ services:
 
   backend-api:
     <<: *backend
+    build:
+      context: ../../services/platform-backend
+      target: runtime
     command: >-
       /bin/sh -ec "uv run alembic upgrade head &&
       uv run python scripts/migrate_retrieval.py &&
