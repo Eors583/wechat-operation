@@ -14,17 +14,8 @@ const backendEnvironment = {
   TOKEN_SECRET: 'integration-test-token-secret-32-characters-minimum',
   COOKIE_SECURE: 'false',
   AUTO_CREATE_SCHEMA: 'false',
-  MOCK_EXTERNAL_SERVICES: 'true',
-  INLINE_MOCK_WORKERS: 'true',
-  MODEL_PROVIDER_MODE: 'mock',
-  EMBEDDING_PROVIDER_MODE: 'mock',
-  RERANK_PROVIDER_MODE: 'mock',
-  CONTENT_SAFETY_PROVIDER_MODE: 'mock',
-  VERIFICATION_PROVIDER_MODE: 'mock',
-  STORAGE_PROVIDER_MODE: 'mock',
-  DOCUMENT_PROVIDER_MODE: 'mock',
   LAYOUT_PROVIDER_MODE: 'wechat_public',
-  WECHAT_PROVIDER_MODE: 'mock',
+  WECHAT_PROVIDER_MODE: 'direct',
   ALLOWED_ORIGINS: 'http://127.0.0.1:4174',
 }
 

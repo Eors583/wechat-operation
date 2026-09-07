@@ -369,7 +369,7 @@ async def upload_moonshot_file(
                                 "官方返回的文件正文过长，请拆分文件；不会静默截断。",
                             )
                     extracted = extracted_buffer.decode("utf-8").strip()
-                if not extracted or "SIMULATED MOCK CONTENT" in extracted:
+                if not extracted:
                     raise ApiError(
                         422,
                         "MODEL_FILE_CONTENT_EMPTY",
@@ -431,7 +431,7 @@ async def prepare_model_files(
     if any(identifier not in by_id for identifier in document_ids):
         raise ApiError(404, "DOCUMENT_NOT_FOUND", "参考文件不存在或无权访问。")
     for _, asset in records:
-        if asset.scan_status not in {"clean", "mocked_clean"}:
+        if asset.scan_status != "clean":
             raise ApiError(409, "FILE_NOT_SAFE", "文件尚未完成安全检查，不能发送给模型。")
         if not 0 < asset.size_bytes <= MAX_FILE_BYTES:
             raise ApiError(413, "MODEL_FILE_SIZE_EXCEEDED", "单文件最大仅支持100MB。")

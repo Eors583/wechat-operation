@@ -157,7 +157,6 @@ async def process_article_revision(
         )
     revision.replacement_text = replacement
     revision.provider_request_id = result.provider_request_id
-    revision.simulated = result.simulated
     revision.status = "completed"
     revision.quota_reserved = 0
     revision.completed_at = utcnow()

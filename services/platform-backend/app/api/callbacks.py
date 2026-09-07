@@ -100,7 +100,7 @@ async def normalized_wechat_operation_callback(
             .with_for_update()
         )
         if operation:
-            terminal = {"succeeded", "failed", "mocked", "cancelled"}
+            terminal = {"succeeded", "failed", "cancelled"}
             if operation.status not in terminal:
                 operation.status = (
                     "submitting" if payload.status == "processing" else payload.status

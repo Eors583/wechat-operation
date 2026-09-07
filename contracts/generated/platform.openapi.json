@@ -4644,6 +4644,149 @@
         }
       }
     },
+    "/api/v1/documents/{document_id}/content": {
+      "get": {
+        "tags": [
+          "user"
+        ],
+        "summary": "Get Document Content",
+        "operationId": "get_document_content_api_v1_documents__document_id__content_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Document Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/octet-stream": {}
+            }
+          },
+          "400": {
+            "description": "Unified API error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unified API error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Unified API error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unified API error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Unified API error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Unified API error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Unified API error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unified API error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Unified API error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unified API error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Unified API error response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/documents/{document_id}/reparse": {
       "post": {
         "tags": [
@@ -25079,14 +25222,12 @@
               "wechat_draft_reconciling",
               "wechat_draft_unknown",
               "wechat_draft_failed",
-              "wechat_draft_mocked",
               "wechat_draft_cancelled",
               "publish_queued",
               "publish_submitting",
               "publish_reconciling",
               "publish_unknown",
               "publish_failed",
-              "publish_mocked",
               "publish_cancelled"
             ],
             "title": "Status",
@@ -25300,10 +25441,6 @@
             ],
             "title": "Provider Request Id"
           },
-          "simulated": {
-            "type": "boolean",
-            "title": "Simulated"
-          },
           "quota_reserved": {
             "type": "integer",
             "title": "Quota Reserved"
@@ -25378,7 +25515,6 @@
           "prompt_version_id",
           "replacement_text",
           "provider_request_id",
-          "simulated",
           "quota_reserved",
           "idempotency_key",
           "error_code",
@@ -25517,7 +25653,6 @@
               "queued",
               "processing",
               "clean",
-              "mocked_clean",
               "failed",
               "blocked_external"
             ],
@@ -28439,14 +28574,12 @@
               "wechat_draft_reconciling",
               "wechat_draft_unknown",
               "wechat_draft_failed",
-              "wechat_draft_mocked",
               "wechat_draft_cancelled",
               "publish_queued",
               "publish_submitting",
               "publish_reconciling",
               "publish_unknown",
               "publish_failed",
-              "publish_mocked",
               "publish_cancelled"
             ],
             "title": "Display Status"
@@ -30578,10 +30711,6 @@
             "type": "boolean",
             "title": "Passed"
           },
-          "simulated": {
-            "type": "boolean",
-            "title": "Simulated"
-          },
           "secret_available": {
             "type": "boolean",
             "title": "Secret Available"
@@ -30595,7 +30724,6 @@
         "type": "object",
         "required": [
           "passed",
-          "simulated",
           "secret_available",
           "message"
         ],
@@ -31094,10 +31222,6 @@
             "type": "boolean",
             "title": "Passed"
           },
-          "simulated": {
-            "type": "boolean",
-            "title": "Simulated"
-          },
           "message": {
             "type": "string",
             "title": "Message"
@@ -31147,7 +31271,6 @@
         "type": "object",
         "required": [
           "passed",
-          "simulated",
           "message",
           "checked_deployments"
         ],
@@ -33060,14 +33183,6 @@
             "exclusiveMinimum": 0.0,
             "title": "Part Size Bytes",
             "description": "Maximum bytes for each upload part. All parts except the final part use this size."
-          },
-          "provider_mode": {
-            "type": "string",
-            "enum": [
-              "mock",
-              "configured"
-            ],
-            "title": "Provider Mode"
           }
         },
         "additionalProperties": false,
@@ -33076,8 +33191,7 @@
           "upload",
           "asset",
           "part_urls",
-          "part_size_bytes",
-          "provider_mode"
+          "part_size_bytes"
         ],
         "title": "UploadCreateResponse"
       },
@@ -33366,10 +33480,6 @@
             "type": "boolean",
             "title": "Passed"
           },
-          "simulated": {
-            "type": "boolean",
-            "title": "Simulated"
-          },
           "message": {
             "type": "string",
             "title": "Message"
@@ -33412,7 +33522,6 @@
         "type": "object",
         "required": [
           "passed",
-          "simulated",
           "message"
         ],
         "title": "ValidationTestResponse"
@@ -33450,25 +33559,6 @@
           "delivery_status": {
             "type": "string",
             "title": "Delivery Status"
-          },
-          "provider_mode": {
-            "type": "string",
-            "enum": [
-              "mock",
-              "configured"
-            ],
-            "title": "Provider Mode"
-          },
-          "debug_code": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Debug Code"
           }
         },
         "additionalProperties": false,
@@ -33476,8 +33566,7 @@
         "required": [
           "challenge_id",
           "expires_at",
-          "delivery_status",
-          "provider_mode"
+          "delivery_status"
         ],
         "title": "VerificationCodeResponse"
       },
@@ -33620,10 +33709,6 @@
             "type": "boolean",
             "title": "Passed"
           },
-          "simulated": {
-            "type": "boolean",
-            "title": "Simulated"
-          },
           "secrets_available": {
             "type": "boolean",
             "title": "Secrets Available"
@@ -33637,7 +33722,6 @@
         "type": "object",
         "required": [
           "passed",
-          "simulated",
           "secrets_available",
           "message"
         ],
@@ -33690,7 +33774,6 @@
               "reconciling",
               "unknown",
               "failed",
-              "mocked",
               "succeeded",
               "cancelled"
             ],

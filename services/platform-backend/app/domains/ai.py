@@ -105,7 +105,9 @@ def article_output_contract() -> str:
         "‘本文将’、‘本资料围绕’、‘以下是一篇’、‘根据用户要求’、‘如需调整’等写作过程、"
         "资料说明或面向用户的交付话术。正文以连贯自然段为主，每一节应展开判断、原因、"
         "解释、例子或衔接；除非用户明确要求清单、步骤或逐条列举，不得用连续项目符号、"
-        "提纲或论点堆砌代替正文。节点结构、属性和文本标记必须遵循以下白名单："
+        "提纲或论点堆砌代替正文。除非用户本轮明确要求，article 正文不得包含作者、撰文、"
+        "编辑、来源、公众号名称或投稿信息等署名元数据；参考资料和旧文章中的署名不得复制"
+        "进新正文。节点结构、属性和文本标记必须遵循以下白名单："
         + json.dumps(
             {
                 "doc_children": sorted(TIPTAP_DOCUMENT_BLOCKS),
@@ -260,10 +262,47 @@ ARTICLE_META_PATTERNS = (
     re.compile(r"如需(?:调整|修改|补充|进一步)"),
     re.compile(r"作为(?:一个)?AI", re.IGNORECASE),
 )
+ARTICLE_BYLINE_PATTERN = re.compile(r"^\s*(?:作者|撰文|编辑|来源|公众号|出品)\s*[|｜:：]\s*\S+\s*$")
+ARTICLE_BYLINE_REMOVAL_REQUEST = re.compile(
+    r"(?:不要|不应|不得|删除|移除|去掉|取消).{0,16}(?:作者|署名|撰文|来源)"
+    r"|(?:作者|署名|撰文|来源).{0,16}(?:不要|不应|不得|删除|移除|去掉|取消)"
+)
+ARTICLE_BYLINE_KEEP_REQUEST = re.compile(
+    r"(?:保留|添加|加上|写上|显示|注明).{0,16}(?:作者|署名|撰文|来源)"
+    r"|(?:作者|署名|撰文|来源).{0,16}(?:放在|写在|置于).{0,12}(?:正文|标题下|开头)"
+)
 EXPLICIT_LIST_REQUEST = re.compile(
     r"清单|列表|要点|逐条|\d+\s*条|步骤|操作指南|检查表|FAQ|问答",
     re.IGNORECASE,
 )
+
+
+def strip_unrequested_article_byline(
+    document: dict[str, Any], context: dict[str, Any]
+) -> dict[str, Any]:
+    """Remove model-added bylines from the article prefix without failing the run."""
+
+    request = str(context.get("untrusted_user_input") or "")
+    keep_byline = bool(ARTICLE_BYLINE_KEEP_REQUEST.search(request)) and not bool(
+        ARTICLE_BYLINE_REMOVAL_REQUEST.search(request)
+    )
+    if keep_byline:
+        return document
+
+    blocks = document.get("content")
+    if not isinstance(blocks, list):
+        return document
+    filtered = [
+        block
+        for index, block in enumerate(blocks)
+        if not (
+            index < 4
+            and isinstance(block, dict)
+            and block.get("type") == "paragraph"
+            and ARTICLE_BYLINE_PATTERN.fullmatch(extract_plain_text(block).strip())
+        )
+    ]
+    return document if len(filtered) == len(blocks) else {**document, "content": filtered}
 
 
 def validate_publish_ready_article(
@@ -885,7 +924,6 @@ async def _persist_web_reference(
             extracted_text=page.text,
             parser_version="safe-web-html-v1",
             page_count=None,
-            simulated=False,
             sections=(
                 DocumentSectionResult(
                     section_type="web_page",
@@ -1038,13 +1076,6 @@ async def freeze_ai_pipeline(
     for purpose in purposes:
         try:
             route = await active_route_snapshot(session, purpose=purpose, settings=settings)
-            # Development can combine real user-selectable deployments with mocked
-            # unrelated integrations. A mock placeholder is not executable there;
-            # use the explicitly selected deployment until an auxiliary route is published.
-            if route.get("provider_mode") == "mock" and model_deployment_id:
-                route = await freeze_deployment_snapshot(
-                    session, deployment_id=model_deployment_id, purpose=purpose
-                )
             routes[purpose] = route
         except ApiError as exc:
             if not model_deployment_id or exc.code != "MODEL_ROUTE_UNAVAILABLE":
@@ -2036,7 +2067,6 @@ async def process_ai_run(
             input_tokens=0,
             output_tokens=0,
             provider_request_id="internal-clarification",
-            simulated=False,
         )
     else:
         directives.append(
@@ -2200,6 +2230,7 @@ async def process_ai_run(
             validate_article_completeness(canonical_output, model_context)
             validate_publish_ready_article(canonical_output, model_context)
             result = revised
+        canonical_output = strip_unrequested_article_byline(canonical_output, model_context)
         result = ModelResult(
             text="\n\n".join(
                 part for part in (article_message, extract_plain_text(canonical_output)) if part
@@ -2208,7 +2239,6 @@ async def process_ai_run(
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             provider_request_id=result.provider_request_id,
-            simulated=result.simulated,
         )
     allowed, reason = await safety.check_text(result.text)
     if not allowed:
@@ -2220,14 +2250,6 @@ async def process_ai_run(
         )
     if not is_preference_only(user_input):
         await emit("text.delta", {"text": result.text})
-    if result.simulated:
-        await emit(
-            "warning",
-            {
-                "code": "MOCK_MODEL_RESULT",
-                "message": "当前内容由本地 Mock 生成，未调用真实模型。",
-            },
-        )
     await ensure_not_cancelled()
     live_events = False
     frozen_article = run.context_snapshot.get("current_article")
@@ -2422,7 +2444,6 @@ async def process_ai_run(
             payload={
                 "article_id": article.id,
                 "version_no": version.version_no,
-                "simulated": result.simulated,
             },
         )
     else:
@@ -2430,13 +2451,13 @@ async def process_ai_run(
             session,
             run_id=run.id,
             event_type="response.ready",
-            payload={"response_kind": run.run_type, "simulated": result.simulated},
+            payload={"response_kind": run.run_type},
         )
     await append_run_event(
         session,
         run_id=run.id,
         event_type="run.completed",
-        payload={"run_id": run.id, "simulated": result.simulated},
+        payload={"run_id": run.id},
     )
     job = await session.scalar(
         select(JobRecord).where(

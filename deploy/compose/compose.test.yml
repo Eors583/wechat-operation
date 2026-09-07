@@ -61,9 +61,7 @@ services:
       MODEL_SECRET_MASTER_KEY: test-model-secret-that-is-long-enough
       COOKIE_SECURE: "false"
       AUTO_CREATE_SCHEMA: "false"
-      MOCK_EXTERNAL_SERVICES: "true"
-      INLINE_MOCK_WORKERS: "true"
-      WECHAT_PROVIDER_MODE: mock
+      WECHAT_PROVIDER_MODE: direct
       ALLOWED_ORIGINS: http://localhost:9000
     command: /bin/sh -ec "uv run alembic upgrade head && uv run python scripts/migrate_retrieval.py && uv run pytest"
     depends_on:

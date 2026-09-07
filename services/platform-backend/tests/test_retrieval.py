@@ -13,7 +13,6 @@ class StaticEmbeddingProvider:
             vectors=[[float(index), 0.5] for index, _ in enumerate(texts, start=1)],
             model="embedding-test",
             provider_request_id="embedding-request",
-            simulated=False,
         )
 
 
@@ -23,7 +22,7 @@ class StaticRerankProvider:
         scores = [float(len(documents) - index) for index in range(len(documents))]
         if len(scores) >= 2:
             scores[0], scores[1] = scores[1], scores[0]
-        return RerankResult(scores, "rerank-request", False)
+        return RerankResult(scores, "rerank-request")
 
 
 class MemoryRetrievalBackend:

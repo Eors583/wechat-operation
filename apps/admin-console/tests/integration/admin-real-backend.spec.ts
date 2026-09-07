@@ -140,6 +140,8 @@ test('logs in with a real administrator session and reads protected operations d
   await page.goto('/skills')
   await page.getByRole('button', { name: '新建官方技能' }).click()
   await expectCenteredDialog(page, '.admin-center-dialog')
+  await expect(page.getByLabel('分类')).toHaveValue('文章创作')
+  await expect(page.getByRole('combobox', { name: '适用场景' })).toBeVisible()
   await testInfo.attach('centered-skill-dialog', {
     body: await page.screenshot(),
     contentType: 'image/png',
@@ -165,9 +167,7 @@ test('logs in with a real administrator session and reads protected operations d
   await expect(page.getByText(modelName, { exact: true })).toBeVisible()
   await page.getByRole('button', { name: `删除模型 ${modelName}` }).click()
   await expectCenteredDialog(page, '.confirm-dialog')
-  await expect(
-    page.getByText(/相关路由将自动移除该模型；主模型有备用时会自动切换/),
-  ).toBeVisible()
+  await expect(page.getByText(/相关路由将自动移除该模型；主模型有备用时会自动切换/)).toBeVisible()
   await testInfo.attach('delete-model-confirm-dialog', {
     body: await page.screenshot(),
     contentType: 'image/png',

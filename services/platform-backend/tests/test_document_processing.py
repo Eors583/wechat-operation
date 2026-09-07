@@ -6,7 +6,8 @@ import zipfile
 
 import pytest
 
-from app.providers import MockDocumentProcessingProvider, MockStorageProvider, ProviderUnavailable
+from app.providers import ProviderUnavailable
+from tests.fakes import InMemoryStorageProvider, LocalDocumentProcessingProvider
 
 
 def _pptx(*slides: str) -> bytes:
@@ -46,9 +47,9 @@ def _pptx(*slides: str) -> bytes:
     return buffer.getvalue()
 
 
-async def test_mock_document_processor_extracts_pptx_by_slide() -> None:
+async def test_local_document_processor_extracts_pptx_by_slide() -> None:
     content = _pptx("市场洞察", "战略解码")
-    storage = MockStorageProvider()
+    storage = InMemoryStorageProvider()
     await storage.put_bytes(
         object_key="owner/reference.pptx",
         content=content,
@@ -56,7 +57,7 @@ async def test_mock_document_processor_extracts_pptx_by_slide() -> None:
         sha256=hashlib.sha256(content).hexdigest(),
     )
 
-    result = await MockDocumentProcessingProvider(storage).process(
+    result = await LocalDocumentProcessingProvider(storage).process(
         object_key="owner/reference.pptx",
         filename="战略规划.pptx",
         mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -74,9 +75,9 @@ async def test_mock_document_processor_extracts_pptx_by_slide() -> None:
     assert "第 2 页\n战略解码" in result.extracted_text
 
 
-async def test_mock_document_processor_rejects_pptx_without_text() -> None:
+async def test_local_document_processor_rejects_pptx_without_text() -> None:
     content = _pptx("")
-    storage = MockStorageProvider()
+    storage = InMemoryStorageProvider()
     await storage.put_bytes(
         object_key="owner/empty.pptx",
         content=content,
@@ -85,7 +86,7 @@ async def test_mock_document_processor_rejects_pptx_without_text() -> None:
     )
 
     with pytest.raises(ProviderUnavailable, match="没有可提取的文字"):
-        await MockDocumentProcessingProvider(storage).process(
+        await LocalDocumentProcessingProvider(storage).process(
             object_key="owner/empty.pptx",
             filename="empty.pptx",
             mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",

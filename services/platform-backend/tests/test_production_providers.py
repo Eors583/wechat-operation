@@ -468,7 +468,6 @@ async def test_responses_adapter_parses_output_text_and_tiptap_json() -> None:
     assert result.input_tokens == 11
     assert result.output_tokens == 7
     assert result.provider_request_id == "resp_123"
-    assert result.simulated is False
 
 
 async def test_responses_adapter_never_wraps_plain_explanation_as_article() -> None:

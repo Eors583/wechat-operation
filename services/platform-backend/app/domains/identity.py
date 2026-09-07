@@ -59,7 +59,7 @@ async def create_verification_challenge(
     purpose: str,
     provider: VerificationProvider,
     settings: Settings,
-) -> tuple[VerificationChallenge, str | None, str]:
+) -> tuple[VerificationChallenge, str]:
     code = f"{secrets.randbelow(1_000_000):06d}"
     challenge_id = new_uuid()
     challenge = VerificationChallenge(
@@ -71,8 +71,7 @@ async def create_verification_challenge(
     )
     session.add(challenge)
     delivery_status = await provider.send(challenge.destination, code)
-    debug_code = code if settings.environment in {"development", "test"} else None
-    return challenge, debug_code, delivery_status
+    return challenge, delivery_status
 
 
 async def verify_challenge(session: AsyncSession, *, challenge_id: str, code: str) -> str:

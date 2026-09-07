@@ -10,7 +10,8 @@ from app.domains.ai import (
 )
 from app.errors import ApiError
 from app.models import AIRun, Article, ArticleVersion, Task, User
-from app.providers import EnvironmentSecretProvider, MockContentSafetyProvider, ModelResult
+from app.providers import EnvironmentSecretProvider, ModelResult
+from tests.fakes import AllowAllContentSafetyProvider
 
 
 def document(text: str) -> dict:
@@ -117,7 +118,6 @@ async def test_pipeline_never_saves_intro_after_one_completion_attempt(app: Fast
                 input_tokens=1,
                 output_tokens=1,
                 provider_request_id="test",
-                simulated=False,
             )
 
     async with app.state.database.session_maker() as session:
@@ -149,7 +149,7 @@ async def test_pipeline_never_saves_intro_after_one_completion_attempt(app: Fast
                 session,
                 run_id=run.id,
                 model=ShortModel(),
-                safety=MockContentSafetyProvider(),
+                safety=AllowAllContentSafetyProvider(),
                 secrets=EnvironmentSecretProvider(),
             )
         assert error.value.code == "AI_ARTICLE_INCOMPLETE"
@@ -184,7 +184,6 @@ async def test_pipeline_never_saves_unpublishable_rewrite(app: FastAPI) -> None:
                 input_tokens=1,
                 output_tokens=1,
                 provider_request_id="test",
-                simulated=False,
             )
 
     async with app.state.database.session_maker() as session:
@@ -216,7 +215,7 @@ async def test_pipeline_never_saves_unpublishable_rewrite(app: FastAPI) -> None:
                 session,
                 run_id=run.id,
                 model=InvalidRewriteModel(),
-                safety=MockContentSafetyProvider(),
+                safety=AllowAllContentSafetyProvider(),
                 secrets=EnvironmentSecretProvider(),
             )
 
@@ -241,7 +240,6 @@ async def test_pipeline_saves_article_without_model_content_check(app: FastAPI) 
                 input_tokens=1,
                 output_tokens=1,
                 provider_request_id="article",
-                simulated=False,
             )
 
     async with app.state.database.session_maker() as session:
@@ -268,7 +266,7 @@ async def test_pipeline_saves_article_without_model_content_check(app: FastAPI) 
             session,
             run_id=run.id,
             model=ArticleModel(),
-            safety=MockContentSafetyProvider(),
+            safety=AllowAllContentSafetyProvider(),
             secrets=EnvironmentSecretProvider(),
         )
 
@@ -285,13 +283,13 @@ async def test_pipeline_extracts_native_file_before_selected_text_model(app: Fas
             calls.append(purpose)
             if purpose == "file_extraction":
                 assert context["untrusted_model_files"][0]["filename"] == "reference.pptx"
-                return ModelResult("原文件事实" * 300, {}, 1, 1, "extract", False)
+                return ModelResult("原文件事实" * 300, {}, 1, 1, "extract")
             if purpose == "article_planning":
                 assert context["untrusted_model_files"] == []
                 assert context["untrusted_extracted_files"][0]["text"].startswith("原文件事实")
-                return ModelResult("完整提纲", {}, 1, 1, "plan", False)
+                return ModelResult("完整提纲", {}, 1, 1, "plan")
             article = document("完整正文内容与事实论证" * 200)
-            return ModelResult("完整正文", article, 1, 1, "article", False)
+            return ModelResult("完整正文", article, 1, 1, "article")
 
     async with app.state.database.session_maker() as session:
         session.add(User(id="extract-owner", display_name="Test", password_hash="test"))
@@ -330,7 +328,7 @@ async def test_pipeline_extracts_native_file_before_selected_text_model(app: Fas
             session,
             run_id=run.id,
             model=StagedModel(),
-            safety=MockContentSafetyProvider(),
+            safety=AllowAllContentSafetyProvider(),
             secrets=EnvironmentSecretProvider(),
         )
 

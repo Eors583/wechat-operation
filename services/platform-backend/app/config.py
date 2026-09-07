@@ -37,22 +37,20 @@ class Settings:
     admin_session_ttl_seconds: int = 28_800
     cookie_secure: bool = False
     auto_create_schema: bool = False
-    mock_external_services: bool = True
-    inline_mock_workers: bool = False
     celery_broker_url: str = "amqp://guest:guest@localhost:5672//"
     celery_result_backend: str = "redis://localhost:6379/1"
-    model_provider_mode: str = "mock"
+    model_provider_mode: str = "openai_compatible"
     model_api_style: str = "responses"
     model_api_base: str = ""
     model_api_key_ref: str = ""
     model_name: str = ""
     model_timeout_seconds: float = 120.0
-    embedding_provider_mode: str = "mock"
+    embedding_provider_mode: str = "openai_compatible"
     embedding_api_base: str = ""
     embedding_api_key_ref: str = ""
     embedding_model: str = ""
     embedding_dimension: int = 1024
-    rerank_provider_mode: str = "mock"
+    rerank_provider_mode: str = "http"
     rerank_api_base: str = ""
     rerank_api_key_ref: str = ""
     rerank_model: str = ""
@@ -60,27 +58,27 @@ class Settings:
     chunk_overlap_characters: int = 120
     chunking_version: str = "zh-char-v1"
     external_knowledge_sync_interval_seconds: int = 21_600
-    content_safety_provider_mode: str = "mock"
+    content_safety_provider_mode: str = "openai"
     content_safety_api_base: str = ""
     content_safety_api_key_ref: str = ""
     content_safety_model: str = "omni-moderation-latest"
-    verification_provider_mode: str = "mock"
+    verification_provider_mode: str = "http"
     verification_service_url: str = ""
     verification_secret_ref: str = ""
-    storage_provider_mode: str = "mock"
+    storage_provider_mode: str = "s3"
     object_storage_endpoint: str = ""
     object_storage_bucket: str = ""
     object_storage_region: str = "us-east-1"
     object_storage_access_key_ref: str = ""
     object_storage_secret_key_ref: str = ""
     object_storage_presign_seconds: int = 3600
-    document_provider_mode: str = "mock"
+    document_provider_mode: str = "http"
     document_service_url: str = ""
     document_service_secret_ref: str = ""
     layout_provider_mode: str = "wechat_public"
     layout_service_url: str = ""
     layout_service_secret_ref: str = ""
-    wechat_provider_mode: str = "mock"
+    wechat_provider_mode: str = "direct"
     wechat_gateway_url: str = ""
     wechat_gateway_secret_ref: str = ""
     wechat_component_app_id: str = ""
@@ -134,22 +132,20 @@ class Settings:
             admin_session_ttl_seconds=_int("ADMIN_SESSION_TTL_SECONDS", 28_800),
             cookie_secure=_bool("COOKIE_SECURE", False),
             auto_create_schema=_bool("AUTO_CREATE_SCHEMA", False),
-            mock_external_services=_bool("MOCK_EXTERNAL_SERVICES", True),
-            inline_mock_workers=_bool("INLINE_MOCK_WORKERS", False),
             celery_broker_url=os.getenv("CELERY_BROKER_URL", "amqp://guest:guest@localhost:5672//"),
             celery_result_backend=os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1"),
-            model_provider_mode=os.getenv("MODEL_PROVIDER_MODE", "mock"),
+            model_provider_mode=os.getenv("MODEL_PROVIDER_MODE", "openai_compatible"),
             model_api_style=os.getenv("MODEL_API_STYLE", "responses"),
             model_api_base=os.getenv("MODEL_API_BASE", ""),
             model_api_key_ref=os.getenv("MODEL_API_KEY_REF", ""),
             model_name=os.getenv("MODEL_NAME", ""),
             model_timeout_seconds=_float("MODEL_TIMEOUT_SECONDS", 120.0),
-            embedding_provider_mode=os.getenv("EMBEDDING_PROVIDER_MODE", "mock"),
+            embedding_provider_mode=os.getenv("EMBEDDING_PROVIDER_MODE", "openai_compatible"),
             embedding_api_base=os.getenv("EMBEDDING_API_BASE", ""),
             embedding_api_key_ref=os.getenv("EMBEDDING_API_KEY_REF", ""),
             embedding_model=os.getenv("EMBEDDING_MODEL", ""),
             embedding_dimension=_int("EMBEDDING_DIMENSION", 1024),
-            rerank_provider_mode=os.getenv("RERANK_PROVIDER_MODE", "mock"),
+            rerank_provider_mode=os.getenv("RERANK_PROVIDER_MODE", "http"),
             rerank_api_base=os.getenv("RERANK_API_BASE", ""),
             rerank_api_key_ref=os.getenv("RERANK_API_KEY_REF", ""),
             rerank_model=os.getenv("RERANK_MODEL", ""),
@@ -159,14 +155,14 @@ class Settings:
             external_knowledge_sync_interval_seconds=_int(
                 "EXTERNAL_KNOWLEDGE_SYNC_INTERVAL_SECONDS", 21_600
             ),
-            content_safety_provider_mode=os.getenv("CONTENT_SAFETY_PROVIDER_MODE", "mock"),
+            content_safety_provider_mode=os.getenv("CONTENT_SAFETY_PROVIDER_MODE", "openai"),
             content_safety_api_base=os.getenv("CONTENT_SAFETY_API_BASE", ""),
             content_safety_api_key_ref=os.getenv("CONTENT_SAFETY_API_KEY_REF", ""),
             content_safety_model=os.getenv("CONTENT_SAFETY_MODEL", "omni-moderation-latest"),
-            verification_provider_mode=os.getenv("VERIFICATION_PROVIDER_MODE", "mock"),
+            verification_provider_mode=os.getenv("VERIFICATION_PROVIDER_MODE", "http"),
             verification_service_url=os.getenv("VERIFICATION_SERVICE_URL", ""),
             verification_secret_ref=os.getenv("VERIFICATION_SECRET_REF", ""),
-            storage_provider_mode=os.getenv("STORAGE_PROVIDER_MODE", "mock"),
+            storage_provider_mode=os.getenv("STORAGE_PROVIDER_MODE", "s3"),
             object_storage_endpoint=os.getenv(
                 "OBJECT_STORAGE_ENDPOINT", os.getenv("S3_ENDPOINT", "")
             ),
@@ -183,13 +179,13 @@ class Settings:
                 "OBJECT_STORAGE_SECRET_KEY_REF", "env:S3_SECRET_KEY"
             ),
             object_storage_presign_seconds=_int("OBJECT_STORAGE_PRESIGN_SECONDS", 3600),
-            document_provider_mode=os.getenv("DOCUMENT_PROVIDER_MODE", "mock"),
+            document_provider_mode=os.getenv("DOCUMENT_PROVIDER_MODE", "http"),
             document_service_url=os.getenv("DOCUMENT_SERVICE_URL", ""),
             document_service_secret_ref=os.getenv("DOCUMENT_SERVICE_SECRET_REF", ""),
             layout_provider_mode=os.getenv("LAYOUT_PROVIDER_MODE", "wechat_public"),
             layout_service_url=os.getenv("LAYOUT_SERVICE_URL", ""),
             layout_service_secret_ref=os.getenv("LAYOUT_SERVICE_SECRET_REF", ""),
-            wechat_provider_mode=os.getenv("WECHAT_PROVIDER_MODE", "mock"),
+            wechat_provider_mode=os.getenv("WECHAT_PROVIDER_MODE", "direct"),
             wechat_gateway_url=os.getenv("WECHAT_GATEWAY_URL", ""),
             wechat_gateway_secret_ref=os.getenv("WECHAT_GATEWAY_SECRET_REF", ""),
             wechat_component_app_id=os.getenv("WECHAT_COMPONENT_APP_ID", ""),
@@ -225,6 +221,31 @@ class Settings:
         return settings
 
     def validate(self) -> None:
+        provider_modes = {
+            "MODEL_PROVIDER_MODE": (
+                self.model_provider_mode,
+                {"openai", "openai_compatible"},
+            ),
+            "EMBEDDING_PROVIDER_MODE": (
+                self.embedding_provider_mode,
+                {"openai", "openai_compatible"},
+            ),
+            "RERANK_PROVIDER_MODE": (
+                self.rerank_provider_mode,
+                {"http", "openai_compatible"},
+            ),
+            "CONTENT_SAFETY_PROVIDER_MODE": (
+                self.content_safety_provider_mode,
+                {"openai", "openai_compatible"},
+            ),
+            "VERIFICATION_PROVIDER_MODE": (self.verification_provider_mode, {"http"}),
+            "STORAGE_PROVIDER_MODE": (self.storage_provider_mode, {"s3"}),
+            "DOCUMENT_PROVIDER_MODE": (self.document_provider_mode, {"http"}),
+            "LAYOUT_PROVIDER_MODE": (self.layout_provider_mode, {"http", "wechat_public"}),
+        }
+        for name, (selected, supported) in provider_modes.items():
+            if selected not in supported:
+                raise RuntimeError(f"{name} must be one of: {', '.join(sorted(supported))}")
         if self.environment != "test":
             if not self.database_url.startswith("postgresql+asyncpg://"):
                 raise RuntimeError("DATABASE_URL must use PostgreSQL with asyncpg outside tests")
@@ -233,8 +254,8 @@ class Settings:
                 or self.retrieval_database_url == self.database_url
             ):
                 raise RuntimeError("RETRIEVAL_DATABASE_URL must use a separate PostgreSQL database")
-        if self.wechat_provider_mode not in {"mock", "direct", "http_gateway", "configured"}:
-            raise RuntimeError("WECHAT_PROVIDER_MODE must be mock, direct, or http_gateway")
+        if self.wechat_provider_mode not in {"direct", "http_gateway", "configured"}:
+            raise RuntimeError("WECHAT_PROVIDER_MODE must be direct or http_gateway")
         direct_wechat = {
             "WECHAT_COMPONENT_APP_ID": self.wechat_component_app_id,
             "WECHAT_COMPONENT_APP_SECRET": self.wechat_component_app_secret,
@@ -304,7 +325,13 @@ class Settings:
         if not 60 <= self.object_storage_presign_seconds <= 86_400:
             raise RuntimeError("OBJECT_STORAGE_PRESIGN_SECONDS must be between 60 and 86400")
         if self.environment == "production":
-            if self.wechat_provider_mode == "direct" and any(direct_wechat.values()):
+            if self.wechat_provider_mode == "direct":
+                missing_wechat = [name for name, value in direct_wechat.items() if not value]
+                if missing_wechat:
+                    raise RuntimeError(
+                        "Production direct WeChat configuration is incomplete: "
+                        + ", ".join(missing_wechat)
+                    )
                 if not self.wechat_authorization_callback_url.startswith("https://") or not (
                     self.wechat_ticket_callback_url.startswith("https://")
                 ):
@@ -322,19 +349,6 @@ class Settings:
                 raise RuntimeError("Production schema changes must run through Alembic")
             if not self.database_url.startswith("postgresql+asyncpg://"):
                 raise RuntimeError("Production DATABASE_URL must use PostgreSQL with asyncpg")
-            modes = {
-                "MODEL_PROVIDER_MODE": self.model_provider_mode,
-                "CONTENT_SAFETY_PROVIDER_MODE": self.content_safety_provider_mode,
-                "EMBEDDING_PROVIDER_MODE": self.embedding_provider_mode,
-                "RERANK_PROVIDER_MODE": self.rerank_provider_mode,
-                "VERIFICATION_PROVIDER_MODE": self.verification_provider_mode,
-                "STORAGE_PROVIDER_MODE": self.storage_provider_mode,
-                "DOCUMENT_PROVIDER_MODE": self.document_provider_mode,
-                "LAYOUT_PROVIDER_MODE": self.layout_provider_mode,
-                "WECHAT_PROVIDER_MODE": self.wechat_provider_mode,
-            }
-            if self.mock_external_services or any(mode == "mock" for mode in modes.values()):
-                raise RuntimeError("Mock providers must not run in the production environment")
             required = {
                 "MODEL_API_BASE": self.model_api_base,
                 "MODEL_API_KEY_REF": self.model_api_key_ref,

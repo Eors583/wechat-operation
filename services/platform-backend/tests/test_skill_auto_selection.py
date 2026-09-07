@@ -1,8 +1,48 @@
 from __future__ import annotations
 
+import pytest
 from httpx import AsyncClient
 
+from app.domains.ai import _skill_match_score
+from app.models import Skill, SkillVersion
+from scripts.seed_official_article_skills import OFFICIAL_ARTICLE_SKILLS, version_payload
+
 from .conftest import bearer, register_and_login
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_code"),
+    [
+        ("根据这个PPT帮我写一篇公众号文章", "source_to_article"),
+        ("写一篇关于战略执行底层逻辑的深度文章", "deep_opinion_article"),
+        ("参考这篇文章的风格，根据新资料仿写一篇", "reference_style_rewrite"),
+        ("帮我拆解并复盘这个企业管理案例", "case_study_article"),
+        ("根据最近的行业新闻写一篇热点评论", "hot_topic_commentary"),
+        ("写一篇从零开始的操作指南和避坑清单", "practical_guide_article"),
+    ],
+)
+def test_bundled_article_skill_scenarios_rank_the_expected_skill(
+    message: str, expected_code: str
+) -> None:
+    ranked: list[tuple[int, str]] = []
+    for definition in OFFICIAL_ARTICLE_SKILLS:
+        skill = Skill(
+            scope="official",
+            code=definition["code"],
+            name=definition["name"],
+            description=definition["description"],
+            category=definition["category"],
+        )
+        version = SkillVersion(
+            skill_id="test",
+            version_no=1,
+            checksum="test",
+            status="published",
+            **version_payload(definition),
+        )
+        ranked.append((_skill_match_score(message, skill, version), skill.code))
+
+    assert max(ranked)[1] == expected_code
 
 
 async def test_enabled_matching_skill_is_selected_and_version_is_frozen(

@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.config import Settings
 from app.main import create_app
+from tests.fakes import InMemoryStorageProvider, LocalDocumentProcessingProvider
 
 
 @pytest_asyncio.fixture
@@ -19,12 +20,13 @@ async def app(tmp_path: Path) -> AsyncIterator[FastAPI]:
         database_url=f"sqlite+aiosqlite:///{tmp_path / 'test.db'}",
         token_secret="test-token-secret-with-at-least-thirty-two-characters",
         auto_create_schema=True,
-        mock_external_services=True,
-        inline_mock_workers=True,
-        wechat_provider_mode="mock",
+        wechat_provider_mode="direct",
         allowed_origins=("http://localhost:9000", "capacitor://localhost"),
     )
     application = create_app(settings)
+    storage = InMemoryStorageProvider()
+    application.state.storage_provider = storage
+    application.state.document_processing_provider = LocalDocumentProcessingProvider(storage)
     async with application.router.lifespan_context(application):
         yield application
 

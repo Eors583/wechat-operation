@@ -228,7 +228,6 @@ async def sync_lexiang_source(
                 extracted_text=content,
                 parser_version="lexiang-html-v1",
                 page_count=None,
-                simulated=False,
                 sections=(
                     DocumentSectionResult(
                         section_type="lexiang_page",

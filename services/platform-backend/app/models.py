@@ -485,7 +485,6 @@ class ArticleRevision(Base, IdMixin, TimestampMixin):
     prompt_version_id: Mapped[str | None] = mapped_column(String(36))
     replacement_text: Mapped[str | None] = mapped_column(Text)
     provider_request_id: Mapped[str | None] = mapped_column(String(120))
-    simulated: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     quota_reserved: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(120), nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(80))

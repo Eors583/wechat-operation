@@ -266,7 +266,7 @@ def test_learned_body_bold_requires_bold_baseline_evidence() -> None:
     }
 
 
-def test_production_rejects_sqlite_and_mock_providers() -> None:
+def test_production_rejects_sqlite() -> None:
     with pytest.raises(RuntimeError):
         Settings(environment="production").validate()
 
@@ -279,7 +279,6 @@ def test_production_allows_public_wechat_layout_without_layout_secret() -> None:
         token_secret="a-production-token-secret-longer-than-32-characters",
         model_secret_master_key="a-different-model-secret-longer-than-32-chars",
         cookie_secure=True,
-        mock_external_services=False,
         model_provider_mode="openai_compatible",
         model_api_base="https://model.example/v1",
         model_api_key_ref="env:MODEL_API_KEY",
@@ -325,7 +324,6 @@ def test_production_allows_only_https_and_exact_ios_webview_origin() -> None:
         "model_secret_master_key": "a-different-model-secret-longer-than-32-chars",
         "cookie_secure": True,
         "auto_create_schema": False,
-        "mock_external_services": False,
         "model_provider_mode": "openai_compatible",
         "model_api_base": "https://model.example/v1",
         "model_api_key_ref": "env:MODEL_API_KEY",

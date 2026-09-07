@@ -45,7 +45,6 @@ class InvalidThenRepairedModel:
             input_tokens=10,
             output_tokens=10,
             provider_request_id=f"repair-{self.calls}",
-            simulated=False,
         )
 
 

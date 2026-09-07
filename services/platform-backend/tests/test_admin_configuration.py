@@ -155,8 +155,7 @@ async def test_skill_draft_is_updated_in_place_and_runs_model_test(
         )
         assert tested.status_code == 200, tested.text
         assert tested.json()["passed"] is True
-        assert tested.json()["simulated"] is True
-        assert tested.json()["provider_request_id"] == "mock-local"
+        assert tested.json()["provider_request_id"]
 
         published = await client.post(
             f"/admin-api/v1/skill-versions/{version_id}/publish", headers=headers
@@ -202,7 +201,7 @@ async def test_prompt_fixed_case_invokes_model_and_records_usage(
         assert tested.status_code == 200, tested.text
         body = tested.json()
         assert body["passed"] is True
-        assert body["provider_request_id"] == "mock-local"
+        assert body["provider_request_id"] == "test-local"
         assert body["input_tokens"] > 0
         assert body["output_tokens"] > 0
     finally:
@@ -793,7 +792,6 @@ async def test_layout_agent_route_can_be_configured_tested_and_published(
                 input_tokens=40,
                 output_tokens=20,
                 provider_request_id="layout-route-test",
-                simulated=False,
             )
 
     os.environ["PYTEST_LAYOUT_AGENT_KEY"] = "layout-agent-secret"

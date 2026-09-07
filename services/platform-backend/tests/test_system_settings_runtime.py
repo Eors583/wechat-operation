@@ -197,7 +197,6 @@ async def test_published_ai_and_feature_switches_are_enforced(
 async def test_ai_run_credit_cost_defaults_then_uses_exact_published_balance(
     app: FastAPI, client: AsyncClient
 ) -> None:
-    object.__setattr__(app.state.settings, "inline_mock_workers", False)
     default_login = await register_and_login(client, "runtime-default-credit-cost@example.com")
     default_auth = bearer(default_login["access_token"])
     default_created = await client.post(

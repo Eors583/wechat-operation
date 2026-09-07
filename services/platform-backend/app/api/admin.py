@@ -607,7 +607,6 @@ async def record_user_diagnostic(
     await session.commit()
     return {
         "passed": True,
-        "simulated": False,
         "message": "排障请求已记录；仅收集任务状态与错误码，未读取用户正文。",
     }
 
@@ -805,22 +804,18 @@ async def test_model_provider(
     try:
         secret = secrets.resolve(provider.secret_ref)
         secret_available = True
-        if provider.adapter == "mock":
-            message = "Mock 适配器不会被标记为生产可用。"
-        else:
-            message = await probe_model_provider(
-                api_base=provider.base_url,
-                api_key=secret,
-                adapter=provider.adapter,
-            )
-            passed = True
+        message = await probe_model_provider(
+            api_base=provider.base_url,
+            api_key=secret,
+            adapter=provider.adapter,
+        )
+        passed = True
     except ProviderUnavailable:
         message = "密钥不可用或供应商连接测试失败。"
     provider.status = "testing"
     provider.last_tested_at = utcnow()
     provider.last_test_result = {
         "passed": passed,
-        "simulated": provider.adapter == "mock",
         "secret_available": secret_available,
         "message": message,
     }
@@ -988,7 +983,7 @@ def _model_configuration_public(
     test_result = (
         {
             key: provider.last_test_result[key]
-            for key in ("passed", "simulated", "secret_available", "message")
+            for key in ("passed", "secret_available", "message")
             if key in provider.last_test_result
         }
         if has_current_test
@@ -1138,23 +1133,19 @@ async def test_deployment(
     try:
         secret = secrets.resolve(provider.secret_ref)
         secret_available = True
-        if provider.adapter == "mock":
-            message = "Mock 部署不会被标记为生产可用。"
-        else:
-            message = await probe_model_provider(
-                api_base=provider.base_url,
-                api_key=secret,
-                adapter=provider.adapter,
-                model_id=deployment.model_id,
-                model_type=deployment.model_type,
-            )
-            passed = True
+        message = await probe_model_provider(
+            api_base=provider.base_url,
+            api_key=secret,
+            adapter=provider.adapter,
+            model_id=deployment.model_id,
+            model_type=deployment.model_type,
+        )
+        passed = True
     except ProviderUnavailable:
         message = "密钥不可用，或模型能力/结构化输出连接测试失败。"
     deployment.status = "testing" if passed else "draft"
     result = {
         "passed": passed,
-        "simulated": provider.adapter == "mock",
         "secret_available": secret_available,
         "message": message,
     }
@@ -1299,7 +1290,6 @@ async def create_model_configuration(
         provider.last_tested_at = utcnow()
         provider.last_test_result = {
             "passed": True,
-            "simulated": False,
             "secret_available": True,
             "message": "保存前连接测试通过。",
             "configuration_id": deployment.id,
@@ -1509,7 +1499,6 @@ async def test_model_configuration(
         message = "密钥不可用，或模型能力/结构化输出连接测试失败。"
     result = {
         "passed": passed,
-        "simulated": False,
         "secret_available": secret_available,
         "message": message,
     }
@@ -1738,7 +1727,6 @@ async def _run_configuration_model_test(
     if structural_error:
         return {
             "passed": False,
-            "simulated": False,
             "message": structural_error,
             "provider_request_id": None,
             "input_tokens": None,
@@ -1750,7 +1738,6 @@ async def _run_configuration_model_test(
     except ProviderUnavailable:
         return {
             "passed": False,
-            "simulated": False,
             "message": "模型或内容安全服务不可用，固定案例未通过。",
             "provider_request_id": None,
             "input_tokens": None,
@@ -1759,7 +1746,6 @@ async def _run_configuration_model_test(
     passed = bool(generated.text.strip()) and safe
     return {
         "passed": passed,
-        "simulated": generated.simulated,
         "message": (
             "固定案例已通过模型生成、非空输出和内容安全检查。"
             if passed
@@ -2478,7 +2464,6 @@ async def test_wechat_platform_config(
         message = "验证未通过：请检查密钥，并确认微信已向票据回调地址推送 Ticket。"
     result = {
         "passed": passed,
-        "simulated": False,
         "secrets_available": secrets_available,
         "message": message,
     }
@@ -2627,7 +2612,7 @@ async def refresh_official_account(
                 **account.technical_metadata,
                 "last_refresh_state": "succeeded",
             }
-        elif result.status != "mocked":
+        else:
             account.status = "limited"
             account.technical_metadata = {
                 **account.technical_metadata,
@@ -2901,14 +2886,12 @@ async def test_external_knowledge_source(
         await provider.test_connection()
         result = {
             "passed": True,
-            "simulated": False,
             "message": "乐享 AppKey、Secret 和 access_token 获取测试通过。",
         }
         source.error_code = None
     except ProviderUnavailable:
         result = {
             "passed": False,
-            "simulated": False,
             "message": "乐享连接测试失败，请检查凭据、接口权限和授权范围。",
         }
         source.error_code = "LEXIANG_CONNECTION_FAILED"
@@ -3787,7 +3770,6 @@ async def test_model_route(
     route.status = "testing" if passed else "draft"
     result = {
         "passed": passed,
-        "simulated": False,
         "checked_deployments": deployment_ids,
         "message": message,
         "provider_request_id": provider_request_id,

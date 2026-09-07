@@ -2,7 +2,12 @@ import json
 
 import pytest
 
-from app.domains.ai import generated_article_content, generated_article_message
+from app.domains.ai import (
+    article_output_contract,
+    generated_article_content,
+    generated_article_message,
+    strip_unrequested_article_byline,
+)
 from app.errors import ApiError
 from app.production_providers import _structured_output
 
@@ -79,3 +84,30 @@ def test_plain_explanation_cannot_be_saved_as_an_article():
 
     with pytest.raises(ApiError, match="文章"):
         generated_article_content(structured)
+
+
+def test_unrequested_leading_byline_is_silently_removed():
+    byline = {"type": "paragraph", "content": [{"type": "text", "text": "作者｜蓝血创作组"}]}
+    document = {"type": "doc", "content": [DOC["content"][0], byline, DOC["content"][1]]}
+
+    cleaned = strip_unrequested_article_byline(
+        document,
+        {"untrusted_user_input": "根据这个PPT写一篇公众号文章"},
+    )
+
+    assert cleaned == DOC
+    assert document["content"][1] == byline
+    assert "署名元数据" in article_output_contract()
+
+
+def test_explicit_body_byline_request_is_preserved():
+    byline = {"type": "paragraph", "content": [{"type": "text", "text": "作者：张三"}]}
+    document = {"type": "doc", "content": [DOC["content"][0], byline, DOC["content"][1]]}
+
+    assert (
+        strip_unrequested_article_byline(
+            document,
+            {"untrusted_user_input": "请在标题下添加作者署名"},
+        )
+        == document
+    )

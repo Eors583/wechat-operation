@@ -122,7 +122,7 @@ async def register_upload(
     storage: StorageProvider,
     allowed_extensions: set[str] | None = None,
     platform_max_file_bytes: int | None = None,
-) -> tuple[Asset, UploadSession, list[str], bool]:
+) -> tuple[Asset, UploadSession, list[str]]:
     clean_name = filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
     if (
         not clean_name
@@ -198,7 +198,7 @@ async def register_upload(
     )
     session.add(upload)
     await session.flush()
-    return asset, upload, descriptor.part_urls, descriptor.simulated
+    return asset, upload, descriptor.part_urls
 
 
 async def complete_upload(
@@ -376,7 +376,7 @@ async def persist_document_processing_result(
     document.normalized_object_key = result.normalized_object_key
     document.error_code = None
     document.status = "indexing" if retrieval_required else "completed"
-    asset.scan_status = "mocked_clean" if result.simulated else "clean"
+    asset.scan_status = "clean"
     await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
     await session.execute(delete(DocumentSection).where(DocumentSection.document_id == document.id))
     parsed_sections = list(result.sections)
@@ -454,11 +454,7 @@ async def persist_document_processing_result(
     )
     if job:
         job.status = "processing" if retrieval_required else "completed"
-        job.stage = (
-            "embedding"
-            if retrieval_required
-            else ("completed_mock" if result.simulated else "completed")
-        )
+        job.stage = "embedding" if retrieval_required else "completed"
         job.progress = 80 if retrieval_required else 100
         job.error_code = None
         job.error_message = None

@@ -291,7 +291,6 @@ async def process_wechat_operation(
         raise ApiError(404, "WECHAT_OPERATION_NOT_FOUND", "公众号操作不存在。")
     if operation.status in {
         "succeeded",
-        "mocked",
         "cancelled",
         "unknown",
         "reconciling",
@@ -345,10 +344,7 @@ async def process_wechat_operation(
                 cover_ref=render.cover_asset_id,
             )
             operation.result = draft_result.details or {}
-            if draft_result.status == "mocked":
-                operation.status = "mocked"
-                media_id = None
-            elif draft_result.status == "failed":
+            if draft_result.status == "failed":
                 operation.status = "failed"
                 operation.error_code = "WECHAT_DRAFT_FAILED"
                 media_id = None
@@ -388,7 +384,7 @@ async def process_wechat_operation(
                 operation.error_code = None
             elif publish_result.status == "failed":
                 operation.error_code = "DRAFT_CREATED_PUBLISH_FAILED"
-            elif publish_result.status != "mocked":
+            else:
                 operation.status = "unknown"
                 operation.error_code = "WECHAT_PUBLISH_RESULT_UNKNOWN"
                 operation.result = {**operation.result, "unknown_stage": "publish"}
@@ -415,7 +411,7 @@ async def process_wechat_operation(
     if job:
         job.status = operation.status
         job.stage = operation.status
-        job.progress = 100 if operation.status in {"succeeded", "mocked"} else job.progress
+        job.progress = 100 if operation.status == "succeeded" else job.progress
         job.error_code = operation.error_code
     return operation
 
@@ -428,7 +424,7 @@ async def reconcile_wechat_operation(
     )
     if not operation:
         raise ApiError(404, "WECHAT_OPERATION_NOT_FOUND", "公众号操作不存在。")
-    if operation.status in {"succeeded", "failed", "mocked", "cancelled"}:
+    if operation.status in {"succeeded", "failed", "cancelled"}:
         await sync_article_operation_status(session, operation=operation)
         return operation
     if operation.status not in {"unknown", "reconciling", "submitting"}:
@@ -487,7 +483,7 @@ async def reconcile_wechat_operation(
         # this as failed makes an admin retry safe: it reuses media_id and only publishes.
         operation.status = "failed"
         operation.error_code = "DRAFT_RECONCILED_PUBLISH_PENDING"
-    elif result.status in {"succeeded", "mocked"}:
+    elif result.status == "succeeded":
         operation.status = result.status
         operation.error_code = None
     elif result.status == "failed":
@@ -500,8 +496,8 @@ async def reconcile_wechat_operation(
     if job:
         job.status = operation.status
         job.stage = (
-            "reconciled" if operation.status in {"succeeded", "mocked"} else operation.status
+            "reconciled" if operation.status == "succeeded" else operation.status
         )
-        job.progress = 100 if operation.status in {"succeeded", "mocked"} else job.progress
+        job.progress = 100 if operation.status == "succeeded" else job.progress
         job.error_code = operation.error_code
     return operation

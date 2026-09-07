@@ -40,7 +40,6 @@ async def test_wechat_public_layout_extracts_inline_article_styles() -> None:
     provider = WeChatPublicLayoutExtractionProvider(transport=httpx.MockTransport(handler))
     result = await provider.extract(source_url="https://mp.weixin.qq.com/s/demo")
 
-    assert result.simulated is False
     assert result.extractor_version == "wechat-public-dom-v1"
     assert result.source_snapshot["title"] == "品牌内容策略"
     assert result.source_snapshot["account_name"] == "蓝雪研究"
@@ -96,7 +95,6 @@ async def test_wechat_public_layout_keeps_article_specific_styles() -> None:
     first = await provider.extract(source_url="https://mp.weixin.qq.com/s/first")
     second = await provider.extract(source_url="https://mp.weixin.qq.com/s/second")
 
-    assert first.simulated is second.simulated is False
     assert first.source_snapshot["text_preview"] != second.source_snapshot["text_preview"]
     assert first.style_tokens["body"] != second.style_tokens["body"]
 

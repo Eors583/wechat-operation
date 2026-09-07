@@ -18,9 +18,8 @@ port 8000. If running the backend on the host, explicitly export the two Postgre
 from `.env.example` with credentials matching the root `.env`, and use the same token and
 model encryption secrets as Compose. Run `uv run alembic upgrade head` before the API
 starts. Do not start a second database for the admin console.
-`MOCK_EXTERNAL_SERVICES=true` keeps model, object storage, SMS, and WeChat
-operations explicit and non-production: mocked WeChat operations are recorded as `mocked`
-and never reported as externally successful.
+Missing external-provider configuration fails closed with a service-unavailable response;
+the application never manufactures a successful provider result.
 
 Web login keeps the rotating refresh token in `ua_session` and uses the script-readable
 `ua_csrf` double-submit cookie. Windows/iOS/Android login returns the rotating refresh token
@@ -34,13 +33,9 @@ own SQLAlchemy `AsyncSession`; sessions are never shared across concurrent tasks
   `POST /api/v1/uploads` requires `Idempotency-Key`; its response declares
   `part_size_bytes`. Each uploaded part must retain the response `ETag`, and completion sends
   the complete contiguous `{part_number, etag}` list. The storage adapter finalizes the
-  multipart upload before object size/hash verification. Mock upload URLs are usable local
-  HTTP PUT endpoints. With both mock and inline-worker flags
-  enabled, UTF-8 text/Markdown/CSV/HTML is read from those uploaded bytes as
-  `parser_version=mock-text-bytes-v1`, while PPTX text is extracted per slide as
-  `parser_version=local-pptx-xml-v1`; other formats return explicitly labelled
-  `mock-metadata-v1` content. Neither mode claims a real malware scan, OCR or ASR. A production
-  adapter must perform the actual scan, parse, OCR/ASR and index.
+  multipart upload before object size/hash verification. The configured document service
+  performs malware scanning, parsing, OCR/ASR and normalization before indexing; the API does
+  not contain a local simulation fallback.
   Parsed text is split with versioned settings (default 800 characters and 120-character
   overlap), then the dedicated embedding worker writes vectors only to the independent
   retrieval PostgreSQL database. Business rows retain ownership, source text and index state
@@ -73,7 +68,7 @@ own SQLAlchemy `AsyncSession`; sessions are never shared across concurrent tasks
 - A cover must be an owner-scoped image whose scan status is ready/clean. A newly uploaded
   image returns `COVER_ASSET_NOT_READY` until processing is complete.
 - WeChat draft/publish aggregation mirrors the operation fact. Only an explicit provider
-  `succeeded` result becomes `wechat_draft` or `published`; queued, unknown, failed and mock
+  `succeeded` result becomes `wechat_draft` or `published`; queued, unknown and failed
   outcomes retain their corresponding `wechat_draft_*` or `publish_*` states. A `submitting`
   checkpoint and any returned draft identifier are committed before the next external side
   effect; a crash or indeterminate response must be reconciled and is never blindly replayed.
@@ -129,13 +124,14 @@ under `/callbacks/v1`; credentials from one authentication domain are rejected b
 
 ## External integration boundary
 
-The repository ships Provider protocols, explicit local mocks, and production adapters for
+The repository ships Provider protocols and production adapters for
 OpenAI-compatible Responses/Chat Completions, OpenAI-compatible Moderations, S3-compatible
 multipart storage, and signed internal HTTP services for verification delivery, file
 scan/parser/OCR/ASR, controlled layout extraction, and the WeChat gateway. API and Celery
 workers use the same `build_providers` factory, so a task cannot silently select a different
-integration from the request process. Production startup rejects every mock mode, incomplete
-URL/secret-reference configuration, insecure cookies, SQLite, and non-HTTPS browser origins.
+integration from the request process. Production startup rejects unsupported provider modes,
+incomplete URL/secret-reference configuration, insecure cookies, SQLite, and non-HTTPS
+browser origins.
 
 Set `MODEL_PROVIDER_MODE=openai_compatible`, `MODEL_API_STYLE=responses` (or
 `chat_completions`), `CONTENT_SAFETY_PROVIDER_MODE=openai`, `STORAGE_PROVIDER_MODE=s3`,

@@ -26,6 +26,7 @@ def create_app(app_settings: Settings | None = None) -> FastAPI:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     config = app_settings or Settings.from_env()
+    config.validate()
     database = Database(config)
     secret_provider = EnvironmentSecretProvider(
         config.model_secret_master_key or config.token_secret

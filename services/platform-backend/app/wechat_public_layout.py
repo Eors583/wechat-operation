@@ -103,10 +103,8 @@ class WeChatPublicLayoutExtractionProvider:
                         for index, sample in enumerate(samples[:_MAX_LAYOUT_SAMPLES])
                     ],
                 },
-                "simulated": False,
             },
             extractor_version="wechat-public-dom-v1",
-            simulated=False,
         )
 
     async def fetch_reference(self, *, source_url: str) -> WebReferenceContent:

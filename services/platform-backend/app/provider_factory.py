@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from app.config import Settings
 from app.production_providers import (
@@ -22,20 +21,18 @@ from app.providers import (
     EmbeddingProvider,
     EnvironmentSecretProvider,
     LayoutExtractionProvider,
-    MockContentSafetyProvider,
-    MockDocumentProcessingProvider,
-    MockEmbeddingProvider,
-    MockModelProvider,
-    MockRerankProvider,
-    MockStorageProvider,
-    MockVerificationProvider,
-    MockWebReferenceProvider,
-    MockWechatProvider,
     ModelProvider,
     ProviderUnavailable,
     RerankProvider,
     SecretProvider,
     StorageProvider,
+    UnconfiguredContentSafetyProvider,
+    UnconfiguredDocumentProcessingProvider,
+    UnconfiguredEmbeddingProvider,
+    UnconfiguredModelProvider,
+    UnconfiguredRerankProvider,
+    UnconfiguredStorageProvider,
+    UnconfiguredVerificationProvider,
     UnconfiguredWechatProvider,
     VerificationProvider,
     WebReferenceProvider,
@@ -73,113 +70,117 @@ def build_providers(
     settings: Settings, secret_provider: SecretProvider | None = None
 ) -> ProviderBundle:
     secrets = secret_provider or EnvironmentSecretProvider()
-    if settings.mock_external_services:
-        mock_storage = MockStorageProvider(
-            persistence_dir=Path(".local/model-file-objects")
-            if settings.environment in {"development", "dev", "local"}
-            else None
-        )
-        return ProviderBundle(
-            model=MockModelProvider(),
-            embedding=MockEmbeddingProvider(settings.embedding_dimension),
-            rerank=MockRerankProvider(),
-            content_safety=MockContentSafetyProvider(),
-            verification=MockVerificationProvider(),
-            storage=mock_storage,
-            document_processing=MockDocumentProcessingProvider(mock_storage),
-            layout_extraction=WeChatPublicLayoutExtractionProvider(
-                timeout_seconds=settings.model_timeout_seconds,
-            ),
-            wechat=(
-                MockWechatProvider()
-                if settings.wechat_provider_mode in {"mock", "direct"}
-                else _build_wechat(settings, secrets)
-            ),
-            # Local development still needs real, read-only article ingestion even when
-            # expensive/external write providers are mocked. Tests stay deterministic.
-            web_reference=(
-                MockWebReferenceProvider()
-                if settings.environment == "test"
-                else SafeHttpWebReferenceProvider()
-            ),
-        )
-
     layout_extraction = _build_layout_extraction(settings, secrets)
     if settings.model_provider_mode not in {"openai_compatible", "openai"}:
         raise ProviderUnavailable("MODEL_PROVIDER_MODE must be openai_compatible or openai")
-    model = OpenAICompatibleModelProvider(
-        api_base=_required(settings.model_api_base, "MODEL_API_BASE"),
-        api_key=_secret(secrets, settings.model_api_key_ref, "MODEL_API_KEY_REF"),
-        model=_required(settings.model_name, "MODEL_NAME"),
-        api_style=settings.model_api_style,
-        timeout_seconds=settings.model_timeout_seconds,
-    )
+    try:
+        model: ModelProvider = OpenAICompatibleModelProvider(
+            api_base=_required(settings.model_api_base, "MODEL_API_BASE"),
+            api_key=_secret(secrets, settings.model_api_key_ref, "MODEL_API_KEY_REF"),
+            model=_required(settings.model_name, "MODEL_NAME"),
+            api_style=settings.model_api_style,
+            timeout_seconds=settings.model_timeout_seconds,
+        )
+    except ProviderUnavailable:
+        if settings.environment == "production":
+            raise
+        model = UnconfiguredModelProvider()
     if settings.embedding_provider_mode not in {"openai", "openai_compatible"}:
         raise ProviderUnavailable("EMBEDDING_PROVIDER_MODE must be openai or openai_compatible")
-    embedding = OpenAICompatibleEmbeddingProvider(
-        api_base=_required(settings.embedding_api_base, "EMBEDDING_API_BASE"),
-        api_key=_secret(secrets, settings.embedding_api_key_ref, "EMBEDDING_API_KEY_REF"),
-        model=_required(settings.embedding_model, "EMBEDDING_MODEL"),
-        dimension=settings.embedding_dimension,
-    )
+    try:
+        embedding: EmbeddingProvider = OpenAICompatibleEmbeddingProvider(
+            api_base=_required(settings.embedding_api_base, "EMBEDDING_API_BASE"),
+            api_key=_secret(secrets, settings.embedding_api_key_ref, "EMBEDDING_API_KEY_REF"),
+            model=_required(settings.embedding_model, "EMBEDDING_MODEL"),
+            dimension=settings.embedding_dimension,
+        )
+    except ProviderUnavailable:
+        if settings.environment == "production":
+            raise
+        embedding = UnconfiguredEmbeddingProvider()
     if settings.rerank_provider_mode not in {"http", "openai_compatible"}:
         raise ProviderUnavailable("RERANK_PROVIDER_MODE must be http or openai_compatible")
-    rerank = HttpRerankProvider(
-        api_base=_required(settings.rerank_api_base, "RERANK_API_BASE"),
-        api_key=_secret(secrets, settings.rerank_api_key_ref, "RERANK_API_KEY_REF"),
-        model=_required(settings.rerank_model, "RERANK_MODEL"),
-    )
+    try:
+        rerank: RerankProvider = HttpRerankProvider(
+            api_base=_required(settings.rerank_api_base, "RERANK_API_BASE"),
+            api_key=_secret(secrets, settings.rerank_api_key_ref, "RERANK_API_KEY_REF"),
+            model=_required(settings.rerank_model, "RERANK_MODEL"),
+        )
+    except ProviderUnavailable:
+        if settings.environment == "production":
+            raise
+        rerank = UnconfiguredRerankProvider()
     if settings.content_safety_provider_mode not in {"openai", "openai_compatible"}:
         raise ProviderUnavailable(
             "CONTENT_SAFETY_PROVIDER_MODE must be openai or openai_compatible"
         )
-    content_safety = OpenAIModerationProvider(
-        api_base=_required(settings.content_safety_api_base, "CONTENT_SAFETY_API_BASE"),
-        api_key=_secret(
-            secrets,
-            settings.content_safety_api_key_ref,
-            "CONTENT_SAFETY_API_KEY_REF",
-        ),
-        model=settings.content_safety_model,
-    )
+    try:
+        content_safety: ContentSafetyProvider = OpenAIModerationProvider(
+            api_base=_required(settings.content_safety_api_base, "CONTENT_SAFETY_API_BASE"),
+            api_key=_secret(
+                secrets,
+                settings.content_safety_api_key_ref,
+                "CONTENT_SAFETY_API_KEY_REF",
+            ),
+            model=settings.content_safety_model,
+        )
+    except ProviderUnavailable:
+        if settings.environment == "production":
+            raise
+        content_safety = UnconfiguredContentSafetyProvider()
     if settings.verification_provider_mode != "http":
         raise ProviderUnavailable("VERIFICATION_PROVIDER_MODE must be http")
-    verification = HttpVerificationProvider(
-        _signed_client(
-            settings.verification_service_url,
-            settings.verification_secret_ref,
-            "VERIFICATION",
-            secrets,
+    try:
+        verification: VerificationProvider = HttpVerificationProvider(
+            _signed_client(
+                settings.verification_service_url,
+                settings.verification_secret_ref,
+                "VERIFICATION",
+                secrets,
+            )
         )
-    )
+    except ProviderUnavailable:
+        if settings.environment == "production":
+            raise
+        verification = UnconfiguredVerificationProvider()
     if settings.storage_provider_mode != "s3":
         raise ProviderUnavailable("STORAGE_PROVIDER_MODE must be s3")
-    storage: StorageProvider = S3StorageProvider(
-        endpoint_url=_required(settings.object_storage_endpoint, "OBJECT_STORAGE_ENDPOINT"),
-        bucket=_required(settings.object_storage_bucket, "OBJECT_STORAGE_BUCKET"),
-        region=settings.object_storage_region,
-        access_key=_secret(
-            secrets,
-            settings.object_storage_access_key_ref,
-            "OBJECT_STORAGE_ACCESS_KEY_REF",
-        ),
-        secret_key=_secret(
-            secrets,
-            settings.object_storage_secret_key_ref,
-            "OBJECT_STORAGE_SECRET_KEY_REF",
-        ),
-        presign_seconds=settings.object_storage_presign_seconds,
-    )
+    try:
+        storage: StorageProvider = S3StorageProvider(
+            endpoint_url=_required(settings.object_storage_endpoint, "OBJECT_STORAGE_ENDPOINT"),
+            bucket=_required(settings.object_storage_bucket, "OBJECT_STORAGE_BUCKET"),
+            region=settings.object_storage_region,
+            access_key=_secret(
+                secrets,
+                settings.object_storage_access_key_ref,
+                "OBJECT_STORAGE_ACCESS_KEY_REF",
+            ),
+            secret_key=_secret(
+                secrets,
+                settings.object_storage_secret_key_ref,
+                "OBJECT_STORAGE_SECRET_KEY_REF",
+            ),
+            presign_seconds=settings.object_storage_presign_seconds,
+        )
+    except ProviderUnavailable:
+        if settings.environment == "production":
+            raise
+        storage = UnconfiguredStorageProvider()
     if settings.document_provider_mode != "http":
         raise ProviderUnavailable("DOCUMENT_PROVIDER_MODE must be http")
-    document = HttpDocumentProcessingProvider(
-        _signed_client(
-            settings.document_service_url,
-            settings.document_service_secret_ref,
-            "DOCUMENT",
-            secrets,
+    try:
+        document: DocumentProcessingProvider = HttpDocumentProcessingProvider(
+            _signed_client(
+                settings.document_service_url,
+                settings.document_service_secret_ref,
+                "DOCUMENT",
+                secrets,
+            )
         )
-    )
+    except ProviderUnavailable:
+        if settings.environment == "production":
+            raise
+        document = UnconfiguredDocumentProcessingProvider()
     return ProviderBundle(
         model=model,
         embedding=embedding,

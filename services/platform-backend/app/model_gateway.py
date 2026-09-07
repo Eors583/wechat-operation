@@ -100,8 +100,6 @@ async def active_route_snapshot(
         .limit(1)
     )
     if not route:
-        if settings.mock_external_services:
-            return {"purpose": purpose, "provider_mode": "mock"}
         raise ApiError(503, "MODEL_ROUTE_UNAVAILABLE", "AI 模型路由尚未配置。")
 
     return await freeze_route_snapshot(session, route=route, purpose=purpose)

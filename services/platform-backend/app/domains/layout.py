@@ -168,8 +168,6 @@ def validated_layout_agent_payload(result: ModelResult) -> dict[str, Any]:
 
 
 def validate_layout_agent_model_result(result: ModelResult) -> None:
-    if result.simulated:
-        raise ModelContractViolation("Layout agent returned simulated data")
     try:
         validated_layout_agent_payload(result)
     except ApiError as exc:
@@ -263,8 +261,6 @@ async def process_layout_extraction(
     if not template.source_url:
         raise ApiError(409, "LAYOUT_SOURCE_MISSING", "排版模板没有可提取的来源链接。")
     result = await provider.extract(source_url=template.source_url)
-    if result.simulated:
-        raise ProviderUnavailable("Layout extraction returned simulated data")
     baseline_tokens = validate_style_tokens(result.style_tokens)
     style_tokens = baseline_tokens
     model_assist: dict[str, Any] = {
@@ -272,80 +268,79 @@ async def process_layout_extraction(
         "route_version_id": route_snapshot.get("route_version_id"),
         "agent_version": LAYOUT_AGENT_VERSION,
         "status": "deterministic_fallback",
-        "reason": "model_route_is_mock",
+        "reason": "model_route_unavailable",
     }
-    if route_snapshot.get("provider_mode") != "mock":
-        try:
-            routed = await generate_with_frozen_route(
-                snapshot=route_snapshot,
-                fallback_model=model,
-                secrets=secrets,
-                purpose="layout_extraction",
-                prompt=LAYOUT_AGENT_PROMPT,
-                context={
-                    "untrusted_layout_observation": result.source_snapshot,
-                    "deterministic_baseline_style_tokens": baseline_tokens,
-                    "output_contract": {
-                        "allowed_modules": sorted(ALLOWED_MODULES),
-                        "allowed_properties": sorted(ALLOWED_PROPERTIES),
-                    },
+    try:
+        routed = await generate_with_frozen_route(
+            snapshot=route_snapshot,
+            fallback_model=model,
+            secrets=secrets,
+            purpose="layout_extraction",
+            prompt=LAYOUT_AGENT_PROMPT,
+            context={
+                "untrusted_layout_observation": result.source_snapshot,
+                "deterministic_baseline_style_tokens": baseline_tokens,
+                "output_contract": {
+                    "allowed_modules": sorted(ALLOWED_MODULES),
+                    "allowed_properties": sorted(ALLOWED_PROPERTIES),
                 },
-                default_timeout_seconds=settings.model_timeout_seconds,
-                session=session,
-                response_schema=LAYOUT_AGENT_RESPONSE_SCHEMA,
-                result_validator=validate_layout_agent_model_result,
-            )
-            structured = validated_layout_agent_payload(routed.result)
-            learned_tokens = structured["style_tokens"]
-            style_tokens = merge_learned_style_tokens(baseline_tokens, learned_tokens)
-            confidence = structured.get("confidence")
-            module_evidence = _validated_module_evidence(structured.get("module_evidence"))
-            model_assist = {
-                "purpose": "layout_extraction",
-                "route_version_id": route_snapshot.get("route_version_id"),
-                "agent_version": LAYOUT_AGENT_VERSION,
-                "status": "completed",
-                "provider_request_id": routed.result.provider_request_id,
-                "input_tokens": routed.result.input_tokens,
-                "output_tokens": routed.result.output_tokens,
-                "attempt_count": len(routed.attempts),
-                "attempts": [
-                    {
-                        "deployment_id": attempt.deployment_id,
-                        "status": attempt.status,
-                        "error_code": attempt.error_code,
-                        "error_message": attempt.error_message,
-                    }
-                    for attempt in routed.attempts
-                ],
-                "confidence": (
-                    round(float(confidence), 3)
-                    if isinstance(confidence, (int, float))
-                    and not isinstance(confidence, bool)
-                    and 0 <= confidence <= 1
-                    else None
-                ),
-                "module_evidence": module_evidence,
-            }
-        except (ApiError, ProviderUnavailable, TypeError, ValueError) as exc:
-            attempts = exc.attempts if isinstance(exc, ModelRouteExhausted) else ()
-            model_assist = {
-                "purpose": "layout_extraction",
-                "route_version_id": route_snapshot.get("route_version_id"),
-                "agent_version": LAYOUT_AGENT_VERSION,
-                "status": "deterministic_fallback",
-                "reason": type(exc).__name__,
-                "attempt_count": len(attempts),
-                "attempts": [
-                    {
-                        "deployment_id": attempt.deployment_id,
-                        "status": attempt.status,
-                        "error_code": attempt.error_code,
-                        "error_message": attempt.error_message,
-                    }
-                    for attempt in attempts
-                ],
-            }
+            },
+            default_timeout_seconds=settings.model_timeout_seconds,
+            session=session,
+            response_schema=LAYOUT_AGENT_RESPONSE_SCHEMA,
+            result_validator=validate_layout_agent_model_result,
+        )
+        structured = validated_layout_agent_payload(routed.result)
+        learned_tokens = structured["style_tokens"]
+        style_tokens = merge_learned_style_tokens(baseline_tokens, learned_tokens)
+        confidence = structured.get("confidence")
+        module_evidence = _validated_module_evidence(structured.get("module_evidence"))
+        model_assist = {
+            "purpose": "layout_extraction",
+            "route_version_id": route_snapshot.get("route_version_id"),
+            "agent_version": LAYOUT_AGENT_VERSION,
+            "status": "completed",
+            "provider_request_id": routed.result.provider_request_id,
+            "input_tokens": routed.result.input_tokens,
+            "output_tokens": routed.result.output_tokens,
+            "attempt_count": len(routed.attempts),
+            "attempts": [
+                {
+                    "deployment_id": attempt.deployment_id,
+                    "status": attempt.status,
+                    "error_code": attempt.error_code,
+                    "error_message": attempt.error_message,
+                }
+                for attempt in routed.attempts
+            ],
+            "confidence": (
+                round(float(confidence), 3)
+                if isinstance(confidence, (int, float))
+                and not isinstance(confidence, bool)
+                and 0 <= confidence <= 1
+                else None
+            ),
+            "module_evidence": module_evidence,
+        }
+    except (ApiError, ProviderUnavailable, TypeError, ValueError) as exc:
+        attempts = exc.attempts if isinstance(exc, ModelRouteExhausted) else ()
+        model_assist = {
+            "purpose": "layout_extraction",
+            "route_version_id": route_snapshot.get("route_version_id"),
+            "agent_version": LAYOUT_AGENT_VERSION,
+            "status": "deterministic_fallback",
+            "reason": type(exc).__name__,
+            "attempt_count": len(attempts),
+            "attempts": [
+                {
+                    "deployment_id": attempt.deployment_id,
+                    "status": attempt.status,
+                    "error_code": attempt.error_code,
+                    "error_message": attempt.error_message,
+                }
+                for attempt in attempts
+            ],
+        }
     source_snapshot = dict(result.source_snapshot)
     source_snapshot["model_assist"] = model_assist
     await add_template_version(

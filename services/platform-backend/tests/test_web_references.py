@@ -13,13 +13,12 @@ from app.domains.ai import classify_run_type, readable_model_result
 from app.models import AIRun, Asset, Document, DocumentSection, LibraryItem
 from app.provider_factory import build_providers
 from app.providers import (
-    MockStorageProvider,
-    MockWebReferenceProvider,
     ModelResult,
     ProviderUnavailable,
     WebReferenceContent,
 )
 from app.web_references import SafeHttpWebReferenceProvider, extract_message_links
+from tests.fakes import InMemoryStorageProvider
 
 from .conftest import bearer, register_and_login
 
@@ -28,12 +27,12 @@ async def _public_resolver(_hostname: str) -> list[str]:
     return ["93.184.216.34"]
 
 
-def test_mock_bundle_keeps_real_read_only_web_fetching_outside_tests() -> None:
-    development = build_providers(Settings(environment="development", mock_external_services=True))
-    testing = build_providers(Settings(environment="test", mock_external_services=True))
+def test_provider_bundle_keeps_real_read_only_web_fetching_in_all_environments() -> None:
+    development = build_providers(Settings(environment="development"))
+    testing = build_providers(Settings(environment="test"))
 
     assert isinstance(development.web_reference, SafeHttpWebReferenceProvider)
-    assert isinstance(testing.web_reference, MockWebReferenceProvider)
+    assert isinstance(testing.web_reference, SafeHttpWebReferenceProvider)
 
 
 async def test_safe_fetcher_extracts_text_and_ignores_executable_content() -> None:
@@ -127,10 +126,10 @@ def test_reference_rewrite_intent_and_readable_editor_output() -> None:
         "type": "doc",
         "content": [{"type": "paragraph", "content": [{"type": "text", "text": "真正的正文"}]}],
     }
-    result = ModelResult(json.dumps(doc), doc, 1, 1, "test", False)
+    result = ModelResult(json.dumps(doc), doc, 1, 1, "test")
     assert readable_model_result(result).text == "真正的正文"
     assert readable_model_result(result).structured == doc
-    markdown = ModelResult("**正常回复**", doc, 1, 1, "test", False)
+    markdown = ModelResult("**正常回复**", doc, 1, 1, "test")
     assert readable_model_result(markdown) == markdown
 
 
@@ -194,7 +193,7 @@ async def test_inline_article_body_reaches_model_before_rewrite(
                     }
                 ],
             }
-            return ModelResult(json.dumps(doc), doc, 10, 10, "recording-test", False)
+            return ModelResult(json.dumps(doc), doc, 10, 10, "recording-test")
 
     app.state.web_reference_provider = SafeHttpWebReferenceProvider(
         transport=httpx.MockTransport(handler), resolver=_public_resolver
@@ -383,7 +382,7 @@ async def test_task_fetches_and_persists_link_body_and_original_url(
         asset = await session.get(Asset, document.asset_id)
         assert asset is not None
         storage = app.state.storage_provider
-        assert isinstance(storage, MockStorageProvider)
+        assert isinstance(storage, InMemoryStorageProvider)
         stored_body = storage.object_bytes(asset.object_key)
         assert stored_body is not None
         assert "模拟网页正文" in stored_body.decode()

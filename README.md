@@ -34,7 +34,7 @@ docker compose -f deploy/compose/compose.dev.yml up --build
 
 启动后端、网关和两个独立前端后，运行 `node scripts/check-dev-api.mjs` 检查上述入口是否都能到达后端。该检查发送空登录参数，预期返回后端的 422 校验响应，不需要账号密码，也不会登录或修改账号。
 
-本地默认使用 Mock 模型、短信、OCR、ASR 和内容安全适配器；微信扫码授权已预留直连配置，凭据为空时不会调用微信。Mock 不代表生产服务成功，也不会绕过最终确认、权限、额度、幂等或审计规则。
+本地与生产环境使用同一套真实服务适配器。未填写模型、短信、对象存储、文档处理、内容安全或微信凭据时，相应操作会明确失败，不会生成替代结果。
 
 ## 本地开发微信第三方平台扫码授权
 
@@ -83,7 +83,7 @@ node scripts/verify.mjs
 docker compose -f deploy/compose/compose.test.yml up --build --abort-on-container-exit --exit-code-from suite-tests
 ```
 
-`verify.mjs` 依次执行两个前端的格式、类型、单元测试和生产构建，以及后端的 Ruff、mypy、pytest、迁移与 OpenAPI 导出。根级组合测试覆盖登录边界、数据隔离、文章库两条来源、Render 最终确认和微信 Mock 幂等流程。
+`verify.mjs` 依次执行两个前端的格式、类型、单元测试和生产构建，以及后端的 Ruff、mypy、pytest、迁移与 OpenAPI 导出。根级组合测试覆盖登录边界、数据隔离、文章库两条来源、Render 最终确认和微信幂等边界。
 
 ## 安全说明
 

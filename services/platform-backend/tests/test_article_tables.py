@@ -106,7 +106,7 @@ async def test_save_reload_and_history_keep_table(app, client):
     class Model:
         async def generate(self, *, purpose, prompt, context):
             text = json.dumps(table_document()) if purpose == "article_generation" else "PASS"
-            return ModelResult(text, _structured_output(text), 1, 1, "table-test", False)
+            return ModelResult(text, _structured_output(text), 1, 1, "table-test")
 
     app.state.model_provider = Model()
     login = await register_and_login(client, "table@example.com")

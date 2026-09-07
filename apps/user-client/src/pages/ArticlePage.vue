@@ -64,7 +64,6 @@ const historyDialog = ref(false)
 const revisionDialog = ref(false)
 const revisionInstruction = ref('')
 const revisionProposal = ref('')
-const revisionSimulated = ref(false)
 const revisionLoading = ref(false)
 const revisionSelection = ref<{ from: number; to: number; text: string } | null>(null)
 const finalDialog = ref(false)
@@ -547,7 +546,6 @@ const generateRevision = async () => {
       selectionTo: to,
     })
     revisionProposal.value = proposal.replacementText
-    revisionSimulated.value = proposal.simulated
     revisionSelection.value = { from, to, text }
   } catch (error) {
     $q.notify({
@@ -576,7 +574,6 @@ const resumePendingRevision = async () => {
     const proposal = await api.resumePendingArticleRevision(articleId.value)
     if (!proposal) return
     revisionProposal.value = proposal.replacementText
-    revisionSimulated.value = proposal.simulated
     $q.notify({ type: 'positive', message: '已找回上次的 AI 修改建议，未重复创建扣费任务。' })
   } catch (error) {
     $q.notify({
@@ -1327,7 +1324,6 @@ onBeforeUnmount(() => {
         <q-banner v-if="revisionProposal" rounded class="revision-dialog__proposal">
           <strong>AI 修改建议</strong>
           <p>{{ revisionProposal }}</p>
-          <small v-if="revisionSimulated">真实模型服务未配置，当前建议不可作为生成结果使用。</small>
         </q-banner>
       </div>
       <template #actions>

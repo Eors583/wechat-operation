@@ -397,7 +397,6 @@ export interface ArticleRevisionInput {
 export interface ArticleRevisionProposal {
   id: string
   replacementText: string
-  simulated: boolean
 }
 
 export interface PendingArticleRevision extends ArticleRevisionInput {
@@ -511,6 +510,7 @@ export interface UserApi {
     limit?: number,
   ): Promise<LibraryPage>
   getLibraryItem(id: string): Promise<LibraryItem>
+  downloadDocument(id: string): Promise<Blob>
   updateLibraryItemTitle(id: string, title: string): Promise<LibraryItem>
   deleteLibraryItem(id: string): Promise<void>
   reparseDocument(id: string): Promise<void>

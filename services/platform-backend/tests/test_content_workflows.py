@@ -29,13 +29,13 @@ from app.models import (
 )
 from app.providers import (
     LayoutExtractionResult,
-    MockModelProvider,
     ModelResult,
     ProviderResultUnknown,
     ProviderUnavailable,
     WechatResult,
 )
 from app.worker_tasks import _process_ai
+from tests.fakes import UnavailableModelProvider
 
 from .conftest import bearer, register_and_login
 
@@ -140,7 +140,6 @@ class RealLayoutExtractionProvider:
                 "text_sample": "从真实抓取链路返回的样式样本。",
             },
             extractor_version="wechat-public-dom-test",
-            simulated=False,
         )
 
 
@@ -150,7 +149,7 @@ class FailingLayoutExtractionProvider:
         raise ProviderUnavailable("没有读取到微信公众号正文，请确认文章链接仍然有效。")
 
 
-class LearningLayoutModel(MockModelProvider):
+class LearningLayoutModel(UnavailableModelProvider):
     async def generate(self, *, purpose: str, prompt: str, context: dict[str, Any]) -> ModelResult:
         assert purpose == "layout_extraction"
         assert "只返回一个 JSON 对象" in prompt
@@ -169,7 +168,6 @@ class LearningLayoutModel(MockModelProvider):
             input_tokens=120,
             output_tokens=48,
             provider_request_id="layout-agent-request",
-            simulated=False,
         )
 
 
@@ -227,7 +225,7 @@ class AuthorizationProvider:
 
     async def authorization_url(self, *, state: str, redirect_uri: str) -> str:
         self.state = state
-        return f"https://open.weixin.qq.com/mock-authorize?state={state}"
+        return f"https://open.weixin.qq.com/test-authorize?state={state}"
 
     async def create_or_update_draft(
         self, *, account_ref: str, html: str, title: str, cover_ref: str | None
@@ -241,7 +239,7 @@ class AuthorizationProvider:
         raise AssertionError("reconciliation is not part of this test")
 
 
-class BlockingArticleModel(MockModelProvider):
+class BlockingArticleModel(UnavailableModelProvider):
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
@@ -558,7 +556,6 @@ async def test_article_versions_conflict_and_render_invalidation(client: AsyncCl
     assert proposal.status_code == 200, proposal.text
     assert proposal.json()["status"] == "completed"
     assert proposal.json()["replacement_text"]
-    assert proposal.json()["simulated"] is True
     unchanged = await client.get(f"/api/v1/articles/{article_id}", headers=auth)
     assert unchanged.json()["article"]["current_version_no"] == 1
     repeated_proposal = await client.post(
@@ -763,7 +760,7 @@ async def test_upload_completion_creates_processing_library_item(client: AsyncCl
     owner = await register_and_login(client, "files@example.com")
     stranger = await register_and_login(client, "stranger@example.com")
     owner_auth = bearer(owner["access_token"])
-    file_content = "# 参考资料\n这是真正上传到本地 Mock 存储的正文。".encode()
+    file_content = "# 参考资料\n这是真正上传到本地测试存储的正文。".encode()
     digest = hashlib.sha256(file_content).hexdigest()
     upload = await client.post(
         "/api/v1/uploads",
@@ -777,7 +774,6 @@ async def test_upload_completion_creates_processing_library_item(client: AsyncCl
     )
     assert upload.status_code == 201, upload.text
     assert upload.json()["asset"]["filename"] == "reference.md"
-    assert upload.json()["provider_mode"] == "mock"
     assert upload.json()["part_size_bytes"] == 8 * 1024 * 1024
     replayed_upload = await client.post(
         "/api/v1/uploads",
@@ -842,9 +838,9 @@ async def test_upload_completion_creates_processing_library_item(client: AsyncCl
     )
     assert completed.status_code == 200, completed.text
     assert completed.json()["document"]["status"] == "completed"
-    assert completed.json()["document"]["parser_version"] == "mock-text-bytes-v1"
-    assert "真正上传到本地 Mock 存储" in completed.json()["document"]["extracted_text"]
-    assert completed.json()["asset"]["scan_status"] == "mocked_clean"
+    assert completed.json()["document"]["parser_version"] == "test-text-v1"
+    assert "真正上传到本地测试存储" in completed.json()["document"]["extracted_text"]
+    assert completed.json()["asset"]["scan_status"] == "clean"
     assert completed.json()["library_item"]["display_status"] == "ready"
 
     parsed_detail = await client.get(
@@ -921,7 +917,7 @@ async def test_upload_completion_creates_processing_library_item(client: AsyncCl
     snapshot = task.json()["ai_run"]["context_snapshot"]
     assert snapshot["untrusted_documents"][0]["document_id"] == document_id
     assert snapshot["untrusted_documents"][0]["excerpts"][0]["chunk_id"]
-    assert "真正上传到本地 Mock 存储" in snapshot["untrusted_documents"][0]["excerpts"][0]["text"]
+    assert "真正上传到本地测试存储" in snapshot["untrusted_documents"][0]["excerpts"][0]["text"]
     assert snapshot["untrusted_links"] == ["https://example.com/reference"]
 
     article = await client.post(
@@ -940,7 +936,7 @@ async def test_upload_completion_creates_processing_library_item(client: AsyncCl
     assert wrong_type.status_code == 422
     assert wrong_type.json()["code"] == "COVER_ASSET_TYPE_INVALID"
 
-    image_content = b"\x89PNG\r\n\x1a\nmock-cover"
+    image_content = b"\x89PNG\r\n\x1a\ntest-cover"
     image_digest = hashlib.sha256(image_content).hexdigest()
     image_upload = await client.post(
         "/api/v1/uploads",
@@ -976,7 +972,7 @@ async def test_upload_completion_creates_processing_library_item(client: AsyncCl
             "save_to_library": False,
         },
     )
-    assert completed_image.json()["asset"]["scan_status"] == "mocked_clean"
+    assert completed_image.json()["asset"]["scan_status"] == "clean"
     ready_cover = await client.post(
         "/api/v1/article-renders",
         headers=owner_auth,
@@ -1021,7 +1017,7 @@ async def test_layout_extraction_creates_version_only_from_real_provider_result(
         "route_version_id": None,
         "agent_version": "layout-agent-v1",
         "status": "deterministic_fallback",
-        "reason": "model_route_is_mock",
+        "reason": "model_route_is_test_only",
     }
 
 
@@ -1264,7 +1260,7 @@ async def test_created_run_keeps_legacy_intent_route_for_rolling_workers(
         }
 
 
-async def test_final_confirmation_and_mock_wechat_never_claims_success(
+async def test_final_confirmation_and_unconfigured_wechat_never_claims_success(
     app: FastAPI, client: AsyncClient
 ) -> None:
     login = await register_and_login(client, "wechat@example.com")
@@ -1277,7 +1273,7 @@ async def test_final_confirmation_and_mock_wechat_never_claims_success(
             name="Pytest 公众号",
             status="connected",
             capability_flags=["draft", "publish"],
-            token_secret_ref="env:UNUSED_IN_MOCK",
+            token_secret_ref="env:UNUSED_IN_TEST",
         )
         session.add(account)
         await session.commit()
@@ -1336,17 +1332,16 @@ async def test_final_confirmation_and_mock_wechat_never_claims_success(
 
     operation = await client.get(f"/api/v1/wechat-operations/{queued.json()['id']}", headers=auth)
     assert operation.status_code == 200
-    assert operation.json()["status"] == "mocked"
+    assert operation.json()["status"] == "queued"
     assert operation.json()["media_id"] is None
     assert operation.json()["publish_id"] is None
-    assert operation.json()["result"]["external_action_performed"] is False
 
     library = await client.get("/api/v1/library-items", headers=auth)
     assert len(library.json()["items"]) == 1
     assert library.json()["items"][0]["item_type"] == "article"
-    assert library.json()["items"][0]["display_status"] == "publish_mocked"
-    mocked_article = await client.get(f"/api/v1/articles/{article_id}", headers=auth)
-    assert mocked_article.json()["article"]["status"] == "publish_mocked"
+    assert library.json()["items"][0]["display_status"] == "publish_queued"
+    queued_article = await client.get(f"/api/v1/articles/{article_id}", headers=auth)
+    assert queued_article.json()["article"]["status"] == "publish_queued"
 
     fail_once = FailPublishOnceProvider()
     app.state.wechat_provider = fail_once

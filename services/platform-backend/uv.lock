@@ -1956,7 +1956,6 @@ name = "wechat-ai-platform-backend"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "aiosqlite" },
     { name = "alembic" },
     { name = "argon2-cffi" },
     { name = "asyncpg" },
@@ -1976,6 +1975,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "aiosqlite" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -1984,7 +1984,6 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiosqlite", specifier = ">=0.20.0,<1" },
     { name = "alembic", specifier = ">=1.14.0,<2" },
     { name = "argon2-cffi", specifier = ">=23.1.0,<26" },
     { name = "asyncpg", specifier = ">=0.30.0,<1" },
@@ -2004,6 +2003,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "aiosqlite", specifier = ">=0.20.0,<1" },
     { name = "mypy", specifier = ">=1.14.0,<2" },
     { name = "pytest", specifier = ">=8.3.0,<9" },
     { name = "pytest-asyncio", specifier = ">=0.25.0,<1" },

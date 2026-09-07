@@ -1497,6 +1497,23 @@ export interface paths {
         readonly patch?: never;
         readonly trace?: never;
     };
+    readonly "/api/v1/documents/{document_id}/content": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /** Get Document Content */
+        readonly get: operations["get_document_content_api_v1_documents__document_id__content_get"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/documents/{document_id}/reparse": {
         readonly parameters: {
             readonly query?: never;
@@ -2518,7 +2535,7 @@ export interface components {
              * @description Article aggregate state. 'publishing' is read-only legacy compatibility; new operations write the explicit publish_* states.
              * @enum {string}
              */
-            readonly status: "editing" | "local_draft" | "wechat_draft" | "published" | "publishing" | "wechat_draft_queued" | "wechat_draft_submitting" | "wechat_draft_reconciling" | "wechat_draft_unknown" | "wechat_draft_failed" | "wechat_draft_mocked" | "wechat_draft_cancelled" | "publish_queued" | "publish_submitting" | "publish_reconciling" | "publish_unknown" | "publish_failed" | "publish_mocked" | "publish_cancelled";
+            readonly status: "editing" | "local_draft" | "wechat_draft" | "published" | "publishing" | "wechat_draft_queued" | "wechat_draft_submitting" | "wechat_draft_reconciling" | "wechat_draft_unknown" | "wechat_draft_failed" | "wechat_draft_cancelled" | "publish_queued" | "publish_submitting" | "publish_reconciling" | "publish_unknown" | "publish_failed" | "publish_cancelled";
             /** Summary */
             readonly summary: string | null;
             /** Title */
@@ -2586,8 +2603,6 @@ export interface components {
             readonly selection_from: number | null;
             /** Selection To */
             readonly selection_to: number | null;
-            /** Simulated */
-            readonly simulated: boolean;
             /**
              * Status
              * @enum {string}
@@ -2656,7 +2671,7 @@ export interface components {
              * Scan Status
              * @enum {string}
              */
-            readonly scan_status: "pending" | "queued" | "processing" | "clean" | "mocked_clean" | "failed" | "blocked_external";
+            readonly scan_status: "pending" | "queued" | "processing" | "clean" | "failed" | "blocked_external";
             /** Sha256 */
             readonly sha256: string;
             /** Size Bytes */
@@ -3528,7 +3543,7 @@ export interface components {
              * Display Status
              * @enum {string}
              */
-            readonly display_status: "processing" | "ready" | "failed" | "local_draft" | "wechat_draft" | "published" | "publishing" | "wechat_draft_queued" | "wechat_draft_submitting" | "wechat_draft_reconciling" | "wechat_draft_unknown" | "wechat_draft_failed" | "wechat_draft_mocked" | "wechat_draft_cancelled" | "publish_queued" | "publish_submitting" | "publish_reconciling" | "publish_unknown" | "publish_failed" | "publish_mocked" | "publish_cancelled";
+            readonly display_status: "processing" | "ready" | "failed" | "local_draft" | "wechat_draft" | "published" | "publishing" | "wechat_draft_queued" | "wechat_draft_submitting" | "wechat_draft_reconciling" | "wechat_draft_unknown" | "wechat_draft_failed" | "wechat_draft_cancelled" | "publish_queued" | "publish_submitting" | "publish_reconciling" | "publish_unknown" | "publish_failed" | "publish_cancelled";
             /** Id */
             readonly id: string;
             /** Item Type */
@@ -4259,8 +4274,6 @@ export interface components {
             readonly passed: boolean;
             /** Secret Available */
             readonly secret_available: boolean;
-            /** Simulated */
-            readonly simulated: boolean;
         };
         /** PublicSettingsResponse */
         readonly PublicSettingsResponse: {
@@ -4457,8 +4470,6 @@ export interface components {
             readonly passed: boolean;
             /** Provider Request Id */
             readonly provider_request_id?: string | null;
-            /** Simulated */
-            readonly simulated: boolean;
         };
         /** RunCreationResponse */
         readonly RunCreationResponse: {
@@ -4966,11 +4977,6 @@ export interface components {
             readonly part_size_bytes: number;
             /** Part Urls */
             readonly part_urls: readonly string[];
-            /**
-             * Provider Mode
-             * @enum {string}
-             */
-            readonly provider_mode: "mock" | "configured";
             readonly upload: components["schemas"]["UploadSessionResource"];
         };
         /** UploadPartCompletion */
@@ -5094,8 +5100,6 @@ export interface components {
             readonly passed: boolean;
             /** Provider Request Id */
             readonly provider_request_id?: string | null;
-            /** Simulated */
-            readonly simulated: boolean;
         };
         /** VerificationCheck */
         readonly VerificationCheck: {
@@ -5108,8 +5112,6 @@ export interface components {
         readonly VerificationCodeResponse: {
             /** Challenge Id */
             readonly challenge_id: string;
-            /** Debug Code */
-            readonly debug_code?: string | null;
             /** Delivery Status */
             readonly delivery_status: string;
             /**
@@ -5117,11 +5119,6 @@ export interface components {
              * Format: date-time
              */
             readonly expires_at: string;
-            /**
-             * Provider Mode
-             * @enum {string}
-             */
-            readonly provider_mode: "mock" | "configured";
         };
         /** VerificationRequest */
         readonly VerificationRequest: {
@@ -5178,8 +5175,6 @@ export interface components {
             readonly passed: boolean;
             /** Secrets Available */
             readonly secrets_available: boolean;
-            /** Simulated */
-            readonly simulated: boolean;
         };
         /** WechatOperationRequest */
         readonly WechatOperationRequest: {
@@ -5222,7 +5217,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            readonly status: "queued" | "submitting" | "reconciling" | "unknown" | "failed" | "mocked" | "succeeded" | "cancelled";
+            readonly status: "queued" | "submitting" | "reconciling" | "unknown" | "failed" | "succeeded" | "cancelled";
             /**
              * Updated At
              * Format: date-time
@@ -17576,6 +17571,127 @@ export interface operations {
                 };
                 content: {
                     readonly "application/json": components["schemas"]["DocumentDetailResponse"];
+                };
+            };
+            /** @description Unified API error response. */
+            readonly 400: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unified API error response. */
+            readonly 401: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unified API error response. */
+            readonly 403: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unified API error response. */
+            readonly 404: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unified API error response. */
+            readonly 409: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unified API error response. */
+            readonly 410: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unified API error response. */
+            readonly 413: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unified API error response. */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unified API error response. */
+            readonly 429: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unified API error response. */
+            readonly 500: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unified API error response. */
+            readonly 503: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    readonly get_document_content_api_v1_documents__document_id__content_get: {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path: {
+                readonly document_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Successful Response */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "application/octet-stream": unknown;
                 };
             };
             /** @description Unified API error response. */

@@ -306,14 +306,12 @@ ArticleStatus = Literal[
     "wechat_draft_reconciling",
     "wechat_draft_unknown",
     "wechat_draft_failed",
-    "wechat_draft_mocked",
     "wechat_draft_cancelled",
     "publish_queued",
     "publish_submitting",
     "publish_reconciling",
     "publish_unknown",
     "publish_failed",
-    "publish_mocked",
     "publish_cancelled",
 ]
 LibraryDisplayStatus = Literal[
@@ -329,18 +327,16 @@ LibraryDisplayStatus = Literal[
     "wechat_draft_reconciling",
     "wechat_draft_unknown",
     "wechat_draft_failed",
-    "wechat_draft_mocked",
     "wechat_draft_cancelled",
     "publish_queued",
     "publish_submitting",
     "publish_reconciling",
     "publish_unknown",
     "publish_failed",
-    "publish_mocked",
     "publish_cancelled",
 ]
 WechatOperationStatus = Literal[
-    "queued", "submitting", "reconciling", "unknown", "failed", "mocked", "succeeded", "cancelled"
+    "queued", "submitting", "reconciling", "unknown", "failed", "succeeded", "cancelled"
 ]
 AIRunStatus = Literal[
     "accepted",
@@ -360,9 +356,7 @@ ArticleRevisionStatus = Literal["accepted", "generating", "completed", "failed",
 DocumentStatus = Literal[
     "queued", "processing", "indexing", "completed", "failed", "blocked_external", "deleted"
 ]
-AssetScanStatus = Literal[
-    "pending", "queued", "processing", "clean", "mocked_clean", "failed", "blocked_external"
-]
+AssetScanStatus = Literal["pending", "queued", "processing", "clean", "failed", "blocked_external"]
 LayoutExtractionStatus = Literal["manual", "queued", "completed", "failed"]
 
 
@@ -472,8 +466,6 @@ class VerificationCodeResponse(ContractModel):
     challenge_id: str
     expires_at: datetime
     delivery_status: str
-    provider_mode: Literal["mock", "configured"]
-    debug_code: str | None = None
 
 
 class VerificationTokenResponse(ContractModel):
@@ -578,7 +570,6 @@ class UploadCreateResponse(ContractModel):
             "Maximum bytes for each upload part. All parts except the final part use this size."
         ),
     )
-    provider_mode: Literal["mock", "configured"]
 
 
 class UploadCompleteResponse(ContractModel):
@@ -801,14 +792,12 @@ class ModelConfigurationResponse(ContractModel):
 
 class ProviderTestResponse(ContractModel):
     passed: bool
-    simulated: bool
     secret_available: bool
     message: str
 
 
 class ValidationTestResponse(ContractModel):
     passed: bool
-    simulated: bool
     message: str
     provider_request_id: str | None = None
     input_tokens: int | None = None
@@ -878,7 +867,6 @@ class WechatConfigResponse(ContractModel):
 
 class WechatConfigTestResponse(ContractModel):
     passed: bool
-    simulated: bool
     secrets_available: bool
     message: str
 

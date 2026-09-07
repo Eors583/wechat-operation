@@ -6,7 +6,7 @@ import json
 from datetime import UTC, timedelta
 from decimal import Decimal
 from typing import Annotated, Any, Literal
-from urllib.parse import urlencode, urljoin, urlparse
+from urllib.parse import quote, urlencode, urljoin, urlparse
 
 from fastapi import APIRouter, Cookie, Depends, Header, Query, Request, Response
 from fastapi.responses import StreamingResponse
@@ -36,10 +36,6 @@ from app.domains.account_deletion import schedule_account_deletion
 from app.domains.ai import (
     cancel_ai_run,
     create_ai_run,
-    fail_ai_run,
-    persist_live_run_event,
-    process_ai_run,
-    process_ai_run_memory,
 )
 from app.domains.article import (
     create_article,
@@ -61,7 +57,6 @@ from app.domains.files import (
     PART_SIZE,
     complete_upload,
     owned_document,
-    process_document,
     register_upload,
     request_reparse,
 )
@@ -82,17 +77,17 @@ from app.domains.layout import (
     process_layout_extraction,
     validate_source_url,
 )
-from app.domains.revision import create_article_revision, process_article_revision
+from app.domains.revision import create_article_revision
 from app.domains.wechat import (
     confirm_render,
     create_wechat_operation,
     current_wechat_operation,
     owned_official_account,
     owned_render,
-    process_wechat_operation,
 )
 from app.domains.workspace import delete_project_keep_contents, owned_project, owned_task
 from app.errors import ApiError
+from app.model_files import MAX_FILE_BYTES
 from app.model_gateway import active_route_snapshot
 from app.models import (
     AIRun,
@@ -100,10 +95,8 @@ from app.models import (
     ArticleRevision,
     ArticleVersion,
     Asset,
-    Document,
     DocumentChunk,
     DocumentSection,
-    JobRecord,
     LayoutTemplate,
     LayoutTemplateVersion,
     LibraryItem,
@@ -130,7 +123,6 @@ from app.providers import (
     ContentSafetyProvider,
     DocumentProcessingProvider,
     LayoutExtractionProvider,
-    MockStorageProvider,
     ModelProvider,
     ProviderUnavailable,
     SecretProvider,
@@ -248,7 +240,7 @@ async def send_verification_code(
     client = request.client.host if request.client else "unknown"
     await limiter.check(f"verification:{client}:{payload.destination}", 5, 600)
     try:
-        challenge, debug_code, delivery = await create_verification_challenge(
+        challenge, delivery = await create_verification_challenge(
             session,
             destination=payload.destination,
             purpose=payload.purpose,
@@ -267,10 +259,7 @@ async def send_verification_code(
         "challenge_id": challenge.id,
         "expires_at": challenge.expires_at.isoformat(),
         "delivery_status": delivery,
-        "provider_mode": "mock" if delivery == "mocked" else "configured",
     }
-    if debug_code:
-        result["debug_code"] = debug_code
     return result
 
 
@@ -808,53 +797,7 @@ async def create_task(
     body = _run_response(task, created.message, created.run)
     complete_idempotency(attempt, body, 202)
     await session.commit()
-    if config.inline_mock_workers:
-        await _process_ai_inline(request, created.run.id, model, safety, secrets)
     return body
-
-
-async def _process_ai_inline(
-    request: Request,
-    run_id: str,
-    model: ModelProvider,
-    safety: ContentSafetyProvider,
-    secrets: SecretProvider,
-) -> None:
-    database: Database = request.app.state.database
-
-    async def live_event(event_type: str, payload: dict[str, Any]) -> None:
-        await persist_live_run_event(
-            database.session_maker,
-            run_id=run_id,
-            event_type=event_type,
-            payload=payload,
-        )
-
-    async with database.session_maker() as worker_session:
-        try:
-            await process_ai_run(
-                worker_session,
-                run_id=run_id,
-                model=model,
-                safety=safety,
-                secrets=secrets,
-                live_event_sink=live_event,
-            )
-        except Exception as exc:
-            await worker_session.rollback()
-            await fail_ai_run(worker_session, run_id=run_id, error=exc)
-        await worker_session.commit()
-        try:
-            await process_ai_run_memory(
-                worker_session,
-                run_id=run_id,
-                model=model,
-                secrets=secrets,
-            )
-            await worker_session.commit()
-        except Exception:
-            # Inline workers exist for local development/tests. Memory enrichment is non-blocking.
-            await worker_session.rollback()
 
 
 @router.get("/tasks", response_model=contract.TaskPageResponse)
@@ -1051,8 +994,6 @@ async def send_message(
     body = _run_response(task, created.message, created.run)
     complete_idempotency(attempt, body, 202)
     await session.commit()
-    if config.inline_mock_workers and config.mock_external_services:
-        await _process_ai_inline(request, created.run.id, model, safety, secrets)
     return body
 
 
@@ -1196,39 +1137,6 @@ class UploadComplete(BaseModel):
     save_to_library: bool = True
 
 
-@router.put(
-    "/mock-storage/{upload_token}/parts/{part_number}",
-    status_code=204,
-    include_in_schema=False,
-)
-async def put_mock_upload_part(
-    upload_token: str,
-    part_number: int,
-    request: Request,
-    storage: StorageProvider = Depends(storage_provider),
-) -> Response:
-    if not isinstance(storage, MockStorageProvider):
-        raise ApiError(404, "MOCK_UPLOAD_NOT_FOUND", "模拟上传地址不存在。")
-    chunks: list[bytes] = []
-    size = 0
-    async for chunk in request.stream():
-        size += len(chunk)
-        if size > PART_SIZE:
-            raise ApiError(413, "UPLOAD_PART_TOO_LARGE", "上传分片超过大小限制。")
-        chunks.append(chunk)
-    try:
-        etag = storage.put_part(
-            token=upload_token,
-            part_number=part_number,
-            content=b"".join(chunks),
-        )
-    except KeyError as exc:
-        raise ApiError(404, "MOCK_UPLOAD_NOT_FOUND", "模拟上传地址不存在。") from exc
-    except ValueError as exc:
-        raise ApiError(422, "UPLOAD_PART_INVALID", "上传分片编号无效。") from exc
-    return Response(status_code=204, headers={"ETag": etag})
-
-
 @router.post("/uploads", status_code=201, response_model=contract.UploadCreateResponse)
 async def create_upload(
     payload: UploadCreate,
@@ -1268,7 +1176,7 @@ async def create_upload(
     }
     max_file_mb = file_settings.get("max_file_mb", 200)
     try:
-        asset, upload, part_urls, simulated = await register_upload(
+        asset, upload, part_urls = await register_upload(
             session,
             owner_id=user.id,
             filename=payload.filename,
@@ -1291,74 +1199,15 @@ async def create_upload(
             "文件存储服务暂不可用，请稍后重试。",
             retryable=True,
         ) from exc
-    if simulated:
-        origin = str(request.base_url).rstrip("/")
-        part_urls = [f"{origin}{url}" if url.startswith("/") else url for url in part_urls]
     body = {
         "upload": model_dict(upload),
         "asset": model_dict(asset),
         "part_urls": part_urls,
         "part_size_bytes": PART_SIZE,
-        "provider_mode": "mock" if simulated else "configured",
     }
     complete_idempotency(attempt, body, 201)
     await session.commit()
     return body
-
-
-async def _process_document_inline(
-    session: AsyncSession,
-    *,
-    owner_id: str,
-    document_id: str,
-    processor: DocumentProcessingProvider,
-    config: Settings,
-    retrieval: RetrievalService,
-) -> Document:
-    document = await process_document(
-        session,
-        owner_id=owner_id,
-        document_id=document_id,
-        processor=processor,
-        chunk_target_characters=config.chunk_target_characters,
-        chunk_overlap_characters=config.chunk_overlap_characters,
-        chunking_version=config.chunking_version,
-        retrieval_required=retrieval.enabled,
-    )
-    if not retrieval.enabled:
-        return document
-    await session.flush()
-    chunks = list(
-        (
-            await session.scalars(
-                select(DocumentChunk)
-                .where(DocumentChunk.document_id == document.id)
-                .order_by(DocumentChunk.chunk_no)
-            )
-        ).all()
-    )
-    embedding_model = await retrieval.index_document(document=document, chunks=chunks)
-    for chunk in chunks:
-        chunk.indexing_status = "indexed"
-        chunk.embedding_model = embedding_model
-    document.status = "completed"
-    library_item = await session.scalar(
-        select(LibraryItem).where(
-            LibraryItem.item_type == "document", LibraryItem.source_id == document.id
-        )
-    )
-    if library_item:
-        library_item.display_status = "ready"
-    job = await session.scalar(
-        select(JobRecord).where(
-            JobRecord.resource_type == "document", JobRecord.resource_id == document.id
-        )
-    )
-    if job:
-        job.status = "completed"
-        job.stage = "indexed"
-        job.progress = 100
-    return document
 
 
 @router.post("/uploads/{upload_id}/complete", response_model=contract.UploadCompleteResponse)
@@ -1404,15 +1253,6 @@ async def finish_upload(
             "文件存储服务暂不可用，请稍后重试。",
             retryable=True,
         ) from exc
-    if config.inline_mock_workers and config.mock_external_services:
-        document = await _process_document_inline(
-            session,
-            owner_id=user.id,
-            document_id=document.id,
-            processor=processor,
-            config=config,
-            retrieval=retrieval,
-        )
     await session.flush()
     body = {
         "asset": model_dict(asset),
@@ -1462,6 +1302,33 @@ async def get_document(
     }
 
 
+@router.get(
+    "/documents/{document_id}/content",
+    response_class=Response,
+    responses={200: {"content": {"application/octet-stream": {}}}},
+)
+async def get_document_content(
+    document_id: str,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+    storage: StorageProvider = Depends(storage_provider),
+) -> Response:
+    document = await owned_document(session, owner_id=user.id, document_id=document_id)
+    asset = await session.get(Asset, document.asset_id)
+    if not asset or asset.deleted_at:
+        raise ApiError(404, "DOCUMENT_ASSET_MISSING", "原文件不存在或已被删除。")
+    content = await storage.read_bytes(object_key=asset.object_key, max_bytes=MAX_FILE_BYTES)
+    return Response(
+        content=content,
+        media_type=asset.mime_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(asset.filename)}",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @router.post(
     "/documents/{document_id}/reparse",
     status_code=202,
@@ -1476,15 +1343,6 @@ async def reparse_document(
     retrieval: RetrievalService = Depends(retrieval_service),
 ) -> dict[str, Any]:
     document = await request_reparse(session, owner_id=user.id, document_id=document_id)
-    if config.inline_mock_workers and config.mock_external_services:
-        document = await _process_document_inline(
-            session,
-            owner_id=user.id,
-            document_id=document.id,
-            processor=processor,
-            config=config,
-            retrieval=retrieval,
-        )
     await session.commit()
     return model_dict(document)
 
@@ -1605,17 +1463,6 @@ async def create_article_revision_endpoint(
     body = model_dict(revision)
     complete_idempotency(attempt, body, 202)
     await session.commit()
-    if config.inline_mock_workers and config.mock_external_services:
-        database: Database = request.app.state.database
-        async with database.session_maker() as worker_session:
-            await process_article_revision(
-                worker_session,
-                revision_id=revision.id,
-                model=model,
-                safety=safety,
-                secrets=secrets,
-            )
-            await worker_session.commit()
     return body
 
 
@@ -2742,8 +2589,6 @@ async def create_article_render(
         if not cover.mime_type.startswith("image/"):
             raise ApiError(422, "COVER_ASSET_TYPE_INVALID", "封面必须是图片文件。")
         ready_states = {"clean", "completed", "ready"}
-        if config.mock_external_services:
-            ready_states.add("mocked_clean")
         if cover.scan_status not in ready_states:
             raise ApiError(
                 409,
@@ -3076,13 +2921,6 @@ async def _create_wechat_endpoint(
     body = model_dict(operation)
     complete_idempotency(attempt, body, 202)
     await session.commit()
-    if config.inline_mock_workers and config.mock_external_services:
-        database: Database = request.app.state.database
-        async with database.session_maker() as worker_session:
-            await process_wechat_operation(
-                worker_session, operation_id=operation.id, provider=provider
-            )
-            await worker_session.commit()
     return body
 
 

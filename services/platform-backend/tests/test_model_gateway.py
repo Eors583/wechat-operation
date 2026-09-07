@@ -94,7 +94,7 @@ async def test_published_route_freezes_execution_config_and_uses_ordered_fallbac
         snapshot = await active_route_snapshot(
             session,
             purpose="article_generation",
-            settings=Settings(mock_external_services=True),
+            settings=Settings(),
         )
         assert [item["deployment_id"] for item in snapshot["execution_configs"]] == [
             primary.id,
@@ -132,7 +132,6 @@ async def test_published_route_freezes_execution_config_and_uses_ordered_fallbac
                     input_tokens=10,
                     output_tokens=5,
                     provider_request_id="fallback-request",
-                    simulated=False,
                 )
 
         monkeypatch.setattr("app.model_gateway.OpenAICompatibleModelProvider", FakeOpenAIModel)
@@ -187,7 +186,6 @@ async def test_transient_failure_gets_one_bounded_retry_before_fallback(
                 input_tokens=1,
                 output_tokens=1,
                 provider_request_id="retry-success",
-                simulated=False,
             )
 
     monkeypatch.setattr("app.model_gateway.OpenAICompatibleModelProvider", FlakyModel)
@@ -356,7 +354,7 @@ async def test_user_selected_snapshot_retries_same_model_but_never_uses_fallback
             calls.append(self.model)
             if self.model == "selected-model":
                 raise ProviderTransientError("selected model failed")
-            return ModelResult("不应返回", {}, 1, 1, "fallback", False)
+            return ModelResult("不应返回", {}, 1, 1, "fallback")
 
     monkeypatch.setattr("app.model_gateway.OpenAICompatibleModelProvider", FailingSelectedModel)
     base_config = {
@@ -459,7 +457,6 @@ async def test_selected_route_falls_back_without_repeating_slow_primary(
                 input_tokens=1,
                 output_tokens=1,
                 provider_request_id="fallback-ok",
-                simulated=False,
             )
 
     monkeypatch.setattr("app.model_gateway.OpenAICompatibleModelProvider", FailoverModel)
@@ -542,7 +539,7 @@ async def test_contract_failure_uses_next_deployment(monkeypatch: Any) -> None:
 
         async def generate(self, **_: Any) -> ModelResult:
             text = "invalid" if self.model == "primary" else "valid"
-            return ModelResult(text, {}, 1, 1, self.model, False)
+            return ModelResult(text, {}, 1, 1, self.model)
 
     def require_valid(result: ModelResult) -> None:
         if result.text != "valid":
@@ -600,7 +597,7 @@ async def test_frozen_embedding_route_uses_ordered_fallback(monkeypatch: Any) ->
             calls.append(self.model)
             if self.model == "embedding-primary":
                 raise ProviderAuthenticationError("credential rejected")
-            return EmbeddingResult([[0.1, 0.2]], self.model, "embedding-ok", False)
+            return EmbeddingResult([[0.1, 0.2]], self.model, "embedding-ok")
 
     monkeypatch.setattr("app.model_gateway.OpenAICompatibleEmbeddingProvider", FakeEmbedding)
     snapshot = {
@@ -641,7 +638,7 @@ async def test_frozen_rerank_route_retries_transient_failure_once(monkeypatch: A
             calls += 1
             if calls == 1:
                 raise ProviderTransientError("temporary")
-            return RerankResult([0.9], "rerank-ok", False)
+            return RerankResult([0.9], "rerank-ok")
 
     monkeypatch.setattr("app.model_gateway.HttpRerankProvider", FakeRerank)
     provider = FrozenRerankRouteProvider(

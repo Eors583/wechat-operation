@@ -14,8 +14,6 @@ const backendEnvironment = {
   TOKEN_SECRET: 'integration-test-token-secret-32-characters-minimum',
   COOKIE_SECURE: 'false',
   AUTO_CREATE_SCHEMA: 'false',
-  MOCK_EXTERNAL_SERVICES: 'true',
-  INLINE_MOCK_WORKERS: 'true',
   ALLOWED_ORIGINS: 'http://127.0.0.1:4175',
   E2E_MODEL_KEY: 'e2e-model-secret',
 }

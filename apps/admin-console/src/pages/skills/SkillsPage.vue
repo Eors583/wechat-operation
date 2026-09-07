@@ -1,216 +1,241 @@
 <script setup lang="ts">
-import { useAdminNotifier } from '@/composables/useAdminNotifier'
-import { computed, onMounted, reactive, ref } from 'vue'
-import type { ConfigStatus, OfficialSkill } from '@/api/contracts'
-import { adminRepository } from '@/api/repository'
-import StatusBadge from '@/components/base/StatusBadge.vue'
-import ConfirmActionDialog from '@/components/composite/ConfirmActionDialog.vue'
-import PageHeader from '@/components/composite/PageHeader.vue'
-import { cloneData } from '@/utils/clone'
+import { useAdminNotifier } from "@/composables/useAdminNotifier";
+import { computed, onMounted, reactive, ref } from "vue";
+import type { ConfigStatus, OfficialSkill } from "@/api/contracts";
+import { adminRepository } from "@/api/repository";
+import StatusBadge from "@/components/base/StatusBadge.vue";
+import ConfirmActionDialog from "@/components/composite/ConfirmActionDialog.vue";
+import PageHeader from "@/components/composite/PageHeader.vue";
+import { cloneData } from "@/utils/clone";
 
-const notifier = useAdminNotifier()
-const skills = ref<OfficialSkill[]>([])
-const query = ref('')
-const statusFilter = ref<ConfigStatus | 'all'>('all')
-const editorOpen = ref(false)
-const editorTab = ref<'content' | 'test'>('content')
-const testing = ref(false)
-const testInput = ref('请把这份行业趋势资料改写成面向企业管理者的公众号文章，保留所有可验证数据。')
-const testOutput = ref('')
-const publishConfirm = ref(false)
-const disableConfirm = ref(false)
+const notifier = useAdminNotifier();
+const skills = ref<OfficialSkill[]>([]);
+const query = ref("");
+const statusFilter = ref<ConfigStatus | "all">("all");
+const editorOpen = ref(false);
+const editorTab = ref<"content" | "test">("content");
+const testing = ref(false);
+const testInput = ref(
+  "请把这份行业趋势资料改写成面向企业管理者的公众号文章，保留所有可验证数据。",
+);
+const testOutput = ref("");
+const publishConfirm = ref(false);
+const disableConfirm = ref(false);
 
 const form = reactive<OfficialSkill>({
-  id: '',
-  code: '',
-  name: '',
-  description: '',
+  id: "",
+  code: "",
+  name: "",
+  description: "",
+  category: "文章创作",
   scenarios: [],
-  instructions: '',
+  instructions: "",
   version: 1,
   sort_order: 1,
-  status: 'draft',
+  status: "draft",
   enabled_users: 0,
-  updated_at: '',
-})
+  updated_at: "",
+});
 
 onMounted(async () => {
   try {
-    skills.value = await adminRepository.skills()
+    skills.value = await adminRepository.skills();
   } catch (error) {
     notifier.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '官方技能加载失败。',
-    })
+      type: "negative",
+      message: error instanceof Error ? error.message : "官方技能加载失败。",
+    });
   }
-})
+});
 
 const filteredSkills = computed(() =>
   skills.value
-    .filter((item) => statusFilter.value === 'all' || item.status === statusFilter.value)
+    .filter(
+      (item) =>
+        statusFilter.value === "all" || item.status === statusFilter.value,
+    )
     .filter(
       (item) =>
         !query.value.trim() ||
-        `${item.name}${item.code}${item.description}${item.scenarios.join('')}`
+        `${item.name}${item.code}${item.category}${item.description}${item.scenarios.join("")}`
           .toLowerCase()
           .includes(query.value.trim().toLowerCase()),
     )
     .sort((a, b) => a.sort_order - b.sort_order),
-)
+);
 
 function now(): string {
-  return new Date().toISOString()
+  return new Date().toISOString();
 }
 
 function openCreate(): void {
   Object.assign(form, {
     id: crypto.randomUUID(),
-    code: '',
-    name: '',
-    description: '',
+    code: "",
+    name: "",
+    description: "",
+    category: "文章创作",
     scenarios: [],
-    instructions: '',
+    instructions: "",
     version: 1,
     sort_order: skills.value.length + 1,
-    status: 'draft',
+    status: "draft",
     enabled_users: 0,
     updated_at: now(),
-  })
-  editorTab.value = 'content'
-  testOutput.value = ''
-  editorOpen.value = true
+  });
+  editorTab.value = "content";
+  testOutput.value = "";
+  editorOpen.value = true;
 }
 
 function openEditor(item: OfficialSkill): void {
-  const next = cloneData(item)
-  if (['published', 'disabled'].includes(item.status)) {
-    next.version_id = undefined
-    next.version += 1
-    next.status = 'draft'
-    next.updated_at = now()
+  const next = cloneData(item);
+  if (["published", "disabled"].includes(item.status)) {
+    next.version_id = undefined;
+    next.version += 1;
+    next.status = "draft";
+    next.updated_at = now();
   }
-  Object.assign(form, next)
-  editorTab.value = 'content'
-  testOutput.value = ''
-  editorOpen.value = true
+  Object.assign(form, next);
+  editorTab.value = "content";
+  testOutput.value = "";
+  editorOpen.value = true;
 }
 
 async function saveDraft(): Promise<void> {
   if (!form.name.trim() || !form.code.trim() || !form.instructions.trim()) {
-    notifier.notify({ type: 'warning', message: '请填写名称、唯一代码和写作要求。' })
-    return
+    notifier.notify({
+      type: "warning",
+      message: "请填写名称、唯一代码和写作要求。",
+    });
+    return;
   }
   try {
-    const exists = skills.value.some((skill) => skill.id === form.id)
-    await adminRepository.saveSkill(form, exists)
-    skills.value = await adminRepository.skills()
-    const saved = skills.value.find((skill) => skill.code === form.code)
-    if (saved) Object.assign(form, cloneData(saved))
-    notifier.notify({ type: 'positive', message: '技能草稿已保存，用户端仍不可见。' })
+    const exists = skills.value.some((skill) => skill.id === form.id);
+    await adminRepository.saveSkill(form, exists);
+    skills.value = await adminRepository.skills();
+    const saved = skills.value.find((skill) => skill.code === form.code);
+    if (saved) Object.assign(form, cloneData(saved));
+    notifier.notify({
+      type: "positive",
+      message: "技能草稿已保存，用户端仍不可见。",
+    });
   } catch (error) {
     notifier.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '技能草稿保存失败。',
-    })
+      type: "negative",
+      message: error instanceof Error ? error.message : "技能草稿保存失败。",
+    });
   }
 }
 
 async function runTest(): Promise<void> {
-  if (!testInput.value.trim()) return
-  await saveDraft()
-  if (!form.version_id) return
-  testing.value = true
+  if (!testInput.value.trim()) return;
+  await saveDraft();
+  if (!form.version_id) return;
+  testing.value = true;
   try {
-    const result = await adminRepository.testSkill(form.version_id, testInput.value)
-    skills.value = await adminRepository.skills()
-    const tested = skills.value.find((skill) => skill.id === form.id)
-    if (tested) Object.assign(form, cloneData(tested))
-    testOutput.value = result.message
-    notifier.notify({ type: result.passed ? 'positive' : 'warning', message: result.message })
+    const result = await adminRepository.testSkill(
+      form.version_id,
+      testInput.value,
+    );
+    skills.value = await adminRepository.skills();
+    const tested = skills.value.find((skill) => skill.id === form.id);
+    if (tested) Object.assign(form, cloneData(tested));
+    testOutput.value = result.message;
+    notifier.notify({
+      type: result.passed ? "positive" : "warning",
+      message: result.message,
+    });
   } catch (error) {
     notifier.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '技能测试失败。',
-    })
+      type: "negative",
+      message: error instanceof Error ? error.message : "技能测试失败。",
+    });
   } finally {
-    testing.value = false
+    testing.value = false;
   }
 }
 
 async function publish(): Promise<void> {
-  if (form.status !== 'testing') return
-  if (!form.version_id) return
+  if (form.status !== "testing") return;
+  if (!form.version_id) return;
   try {
-    await adminRepository.publishSkill(form.version_id)
-    skills.value = await adminRepository.skills()
-    editorOpen.value = false
+    await adminRepository.publishSkill(form.version_id);
+    skills.value = await adminRepository.skills();
+    editorOpen.value = false;
     notifier.notify({
-      type: 'positive',
+      type: "positive",
       message: `${form.name} v${form.version} 已发布，用户端官方技能库现在可见。`,
-    })
+    });
   } catch (error) {
     notifier.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '技能发布失败。',
-    })
+      type: "negative",
+      message: error instanceof Error ? error.message : "技能发布失败。",
+    });
   }
 }
 
 function requestDisable(item: OfficialSkill): void {
-  Object.assign(form, cloneData(item))
-  disableConfirm.value = true
+  Object.assign(form, cloneData(item));
+  disableConfirm.value = true;
 }
 
 async function disable(): Promise<void> {
-  const item = skills.value.find((skill) => skill.id === form.id)
-  if (!item) return
+  const item = skills.value.find((skill) => skill.id === form.id);
+  if (!item) return;
   try {
-    await adminRepository.disableSkill(item.id)
-    skills.value = await adminRepository.skills()
-    notifier.notify({ type: 'positive', message: '技能已停用；历史任务和文章不受影响。' })
+    await adminRepository.disableSkill(item.id);
+    skills.value = await adminRepository.skills();
+    notifier.notify({
+      type: "positive",
+      message: "技能已停用；历史任务和文章不受影响。",
+    });
   } catch (error) {
     notifier.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '技能停用失败。',
-    })
+      type: "negative",
+      message: error instanceof Error ? error.message : "技能停用失败。",
+    });
   }
 }
 
 async function restore(item: OfficialSkill): Promise<void> {
   try {
-    await adminRepository.restoreSkill(item.id)
-    skills.value = await adminRepository.skills()
-    notifier.notify({ type: 'positive', message: '技能已恢复，用户可以再次启用和选择。' })
+    await adminRepository.restoreSkill(item.id);
+    skills.value = await adminRepository.skills();
+    notifier.notify({
+      type: "positive",
+      message: "技能已恢复，用户可以再次启用和选择。",
+    });
   } catch (error) {
     notifier.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '技能恢复失败。',
-    })
+      type: "negative",
+      message: error instanceof Error ? error.message : "技能恢复失败。",
+    });
   }
 }
 
 async function move(item: OfficialSkill, offset: number): Promise<void> {
-  const ordered = [...skills.value].sort((a, b) => a.sort_order - b.sort_order)
-  const index = ordered.findIndex((skill) => skill.id === item.id)
-  const target = index + offset
-  if (index < 0 || target < 0 || target >= ordered.length) return
-  const targetItem = ordered[target]
-  if (!targetItem) return
-  const old = item.sort_order
-  item.sort_order = targetItem.sort_order
-  targetItem.sort_order = old
+  const ordered = [...skills.value].sort((a, b) => a.sort_order - b.sort_order);
+  const index = ordered.findIndex((skill) => skill.id === item.id);
+  const target = index + offset;
+  if (index < 0 || target < 0 || target >= ordered.length) return;
+  const targetItem = ordered[target];
+  if (!targetItem) return;
+  const old = item.sort_order;
+  item.sort_order = targetItem.sort_order;
+  targetItem.sort_order = old;
   try {
     await Promise.all([
       adminRepository.reorderSkill(item.id, item.sort_order),
       adminRepository.reorderSkill(targetItem.id, targetItem.sort_order),
-    ])
-    skills.value = await adminRepository.skills()
-    notifier.notify({ message: '用户端技能排序已更新。' })
+    ]);
+    skills.value = await adminRepository.skills();
+    notifier.notify({ message: "用户端技能排序已更新。" });
   } catch (error) {
     notifier.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '技能排序更新失败。',
-    })
+      type: "negative",
+      message: error instanceof Error ? error.message : "技能排序更新失败。",
+    });
   }
 }
 </script>
@@ -233,7 +258,8 @@ async function move(item: OfficialSkill, offset: number): Promise<void> {
     </PageHeader>
 
     <admin-banner rounded class="skill-policy"
-      ><template #avatar><app-icon name="auto_awesome" color="primary" /></template
+      ><template #avatar
+        ><app-icon name="auto_awesome" color="primary" /></template
       >技能只能提供版本化写作指令、输入输出 Schema
       和允许工具策略，不能直接提交公众号草稿或正式发布。</admin-banner
     >
@@ -316,7 +342,9 @@ async function move(item: OfficialSkill, offset: number): Promise<void> {
           <div class="skill-meta">
             <span>v{{ skill.version }}</span
             ><span>排序 {{ skill.sort_order }}</span
-            ><span>{{ skill.enabled_users.toLocaleString() }} 位用户已启用</span>
+            ><span
+              >{{ skill.enabled_users.toLocaleString() }} 位用户已启用</span
+            >
           </div></admin-card-section
         >
         <el-divider /><admin-card-actions class="skill-actions"
@@ -324,7 +352,11 @@ async function move(item: OfficialSkill, offset: number): Promise<void> {
             flat
             no-caps
             icon="edit"
-            :label="['published', 'disabled'].includes(skill.status) ? '创建新版本' : '编辑'"
+            :label="
+              ['published', 'disabled'].includes(skill.status)
+                ? '创建新版本'
+                : '编辑'
+            "
             @click="openEditor(skill)"
           /><admin-button
             v-if="skill.status === 'published'"
@@ -349,17 +381,24 @@ async function move(item: OfficialSkill, offset: number): Promise<void> {
       </el-card>
     </section>
     <el-card v-else flat bordered class="surface-card empty-state"
-      ><app-icon name="search_off" size="44px" /><strong>没有符合条件的技能</strong
+      ><app-icon name="search_off" size="44px" /><strong
+        >没有符合条件的技能</strong
       ><span>清除筛选条件或创建一个新技能。</span></el-card
     >
 
-    <admin-dialog v-model="editorOpen" width="min(760px, calc(100vw - 48px))" persistent>
+    <admin-dialog
+      v-model="editorOpen"
+      width="min(760px, calc(100vw - 48px))"
+      persistent
+    >
       <el-card class="skill-editor">
         <admin-toolbar
           ><div class="min-width-zero">
-            <admin-toolbar-title>{{ form.name || '新建官方技能' }}</admin-toolbar-title>
+            <admin-toolbar-title>{{
+              form.name || "新建官方技能"
+            }}</admin-toolbar-title>
             <div class="editor-subtitle">
-              {{ form.code || '尚未设置代码' }} · v{{ form.version }}
+              {{ form.code || "尚未设置代码" }} · v{{ form.version }}
             </div>
           </div>
           <admin-button
@@ -377,7 +416,10 @@ async function move(item: OfficialSkill, offset: number): Promise<void> {
           no-caps
           active-color="primary"
           indicator-color="primary"
-          ><admin-tab name="content" icon="edit_note" label="技能内容" /><admin-tab
+          ><admin-tab
+            name="content"
+            icon="edit_note"
+            label="技能内容" /><admin-tab
             name="test"
             icon="science"
             label="测试" /></admin-tabs
@@ -386,15 +428,25 @@ async function move(item: OfficialSkill, offset: number): Promise<void> {
           <admin-tab-panels v-model="editorTab">
             <admin-tab-panel name="content" class="editor-form"
               ><div class="status-line">
-                <StatusBadge :status="form.status" /><span>草稿状态下用户不可见</span>
+                <StatusBadge :status="form.status" /><span
+                  >草稿状态下用户不可见</span
+                >
               </div>
-              <admin-input v-model.trim="form.name" outlined label="技能名称" /><admin-input
+              <admin-input
+                v-model.trim="form.name"
+                outlined
+                label="技能名称" /><admin-input
                 v-model.trim="form.code"
                 outlined
                 label="唯一代码"
                 :disable="
-                  skills.some((item) => item.code === form.code && item.id !== form.id)
+                  skills.some(
+                    (item) => item.code === form.code && item.id !== form.id,
+                  )
                 " /><admin-input
+                v-model.trim="form.category"
+                outlined
+                label="分类" /><admin-input
                 v-model="form.description"
                 outlined
                 type="textarea"
@@ -431,13 +483,19 @@ async function move(item: OfficialSkill, offset: number): Promise<void> {
                 :loading="testing"
                 @click="runTest"
               /><el-card v-if="testOutput" flat bordered class="test-output"
-                ><admin-card-section>{{ testOutput }}</admin-card-section></el-card
+                ><admin-card-section>{{
+                  testOutput
+                }}</admin-card-section></el-card
               ></admin-tab-panel
             >
           </admin-tab-panels>
         </div>
         <el-divider /><admin-card-actions class="editor-actions"
-          ><admin-button flat icon="save" label="保存草稿" @click="saveDraft" /><admin-button
+          ><admin-button
+            flat
+            icon="save"
+            label="保存草稿"
+            @click="saveDraft" /><admin-button
             flat
             icon="science"
             label="测试"
@@ -475,7 +533,8 @@ async function move(item: OfficialSkill, offset: number): Promise<void> {
 <style scoped lang="scss">
 .skill-policy {
   margin-bottom: 18px;
-  border: 1px solid color-mix(in srgb, var(--app-action-primary) 25%, var(--app-border-default));
+  border: 1px solid
+    color-mix(in srgb, var(--app-action-primary) 25%, var(--app-border-default));
   background: var(--app-action-primary-soft);
   overflow-wrap: anywhere;
 }

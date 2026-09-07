@@ -10,13 +10,14 @@ from sqlalchemy import func, select
 from app.domains.ai import classify_run_type
 from app.domains.preference_learning import extract_feedback, learn_preferences, parse_memory
 from app.models import AIRunEvent, ArticleVersion, Message, Project, Task, UserPreference
-from app.providers import MockModelProvider, ModelResult, ProviderUnavailable
+from app.providers import ModelResult, ProviderUnavailable
 from tests.conftest import bearer, register_and_login
+from tests.fakes import UnavailableModelProvider
 
 
 @pytest.fixture(autouse=True)
 def configured_test_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The app's unconfigured mock intentionally fails; tests explicitly supply a provider.
+    # The app's unconfigured provider intentionally fails; tests explicitly supply one.
     async def generate(self, *, purpose, prompt, context):
         text = "PASS"
         structured = {
@@ -49,10 +50,9 @@ def configured_test_model(monkeypatch: pytest.MonkeyPatch) -> None:
             input_tokens=1,
             output_tokens=1,
             provider_request_id="preference-test",
-            simulated=False,
         )
 
-    monkeypatch.setattr(MockModelProvider, "generate", generate)
+    monkeypatch.setattr(UnavailableModelProvider, "generate", generate)
 
 
 FINAL_ARTICLE = {
@@ -357,7 +357,7 @@ async def test_explicit_feedback_survives_model_failure(
     async def fail(self, **kwargs):
         raise ProviderUnavailable("test unavailable")
 
-    monkeypatch.setattr(MockModelProvider, "generate", fail)
+    monkeypatch.setattr(UnavailableModelProvider, "generate", fail)
     login = await register_and_login(client, "failed-feedback@example.com")
     auth = bearer(login["access_token"])
     response = await client.post(
@@ -419,7 +419,7 @@ async def test_screenshot_request_saves_preference_without_creating_article_vers
             .select_from(ArticleVersion)
             .where(ArticleVersion.article_id == article_id)
         )
-    original = MockModelProvider.generate
+    original = UnavailableModelProvider.generate
     purposes = []
 
     async def capture(self, **kwargs):
@@ -433,11 +433,10 @@ async def test_screenshot_request_saves_preference_without_creating_article_vers
                 input_tokens=1,
                 output_tokens=1,
                 provider_request_id="test-intent",
-                simulated=False,
             )
         return result
 
-    monkeypatch.setattr(MockModelProvider, "generate", capture)
+    monkeypatch.setattr(UnavailableModelProvider, "generate", capture)
     response = await client.post(
         f"/api/v1/tasks/{task_id}/messages",
         headers={**bearer(token), "Idempotency-Key": "preference-only-message"},

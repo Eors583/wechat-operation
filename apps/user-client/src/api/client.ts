@@ -1086,14 +1086,12 @@ const mapArticleStatus = (value: unknown): ArticleStatus => {
     'wechat_draft_reconciling',
     'wechat_draft_unknown',
     'wechat_draft_failed',
-    'wechat_draft_mocked',
     'wechat_draft_cancelled',
     'publish_queued',
     'publish_submitting',
     'publish_reconciling',
     'publish_unknown',
     'publish_failed',
-    'publish_mocked',
     'publish_cancelled',
   ]
   return statuses.includes(value as ArticleStatus) ? (value as ArticleStatus) : 'editing'
@@ -1983,7 +1981,7 @@ const settleArticleRevision = async (pending: PendingArticleRevision) => {
       if (!replacementText)
         throw new ApiError('AI 没有返回可应用的修改建议。', 502, 'ARTICLE_REVISION_EMPTY')
       writePendingArticleRevision(null, pending.articleId)
-      return { id: revisionId, replacementText, simulated: revision.simulated }
+      return { id: revisionId, replacementText }
     }
     if (status === 'failed' || status === 'cancelled') {
       writePendingArticleRevision(null, pending.articleId)
@@ -2091,15 +2089,6 @@ const settleWechatOperation = async (
         '微信返回结果未知。为避免重复发布，已保留原操作并禁止新建提交；请查询原操作状态或凭操作编号对账。',
         409,
         'WECHAT_RESULT_UNKNOWN',
-        { operationId, result: operation.result },
-      )
-    }
-    if (status === 'mocked') {
-      writePendingArticleOutcome(null, pending.articleId)
-      throw new ApiError(
-        '公众号真实服务未配置，操作没有完成。',
-        503,
-        'WECHAT_PROVIDER_UNCONFIGURED',
         { operationId, result: operation.result },
       )
     }
@@ -2973,6 +2962,15 @@ export const remoteApi: UserApi = {
         }),
       ),
     ),
+  async downloadDocument(id) {
+    const response = await authenticatedFetch(
+      new Request(`${baseUrl}/documents/${encodeURIComponent(id)}/content`, {
+        headers: { Accept: 'application/octet-stream' },
+      }),
+    )
+    if (!response.ok) throw await responseError(response)
+    return response.blob()
+  },
   updateLibraryItemTitle: async (id, title) =>
     mapLibraryItem(
       await openApiData(

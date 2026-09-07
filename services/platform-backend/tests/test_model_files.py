@@ -31,7 +31,8 @@ from app.models import (
     User,
 )
 from app.production_providers import ManusModelProvider, OpenAICompatibleModelProvider
-from app.providers import EnvironmentSecretProvider, MockStorageProvider, ProviderUnavailable
+from app.providers import EnvironmentSecretProvider, ProviderUnavailable
+from tests.fakes import InMemoryStorageProvider
 
 
 async def test_manus_original_file_is_attached_to_task(
@@ -404,18 +405,18 @@ async def test_empty_official_extraction_fails_without_writing_article() -> None
 
 async def test_development_original_files_survive_restart_and_delete(tmp_path: Path) -> None:
     content = b"original file"
-    storage = MockStorageProvider(persistence_dir=tmp_path)
+    storage = InMemoryStorageProvider(persistence_dir=tmp_path)
     await storage.put_bytes(
         object_key="owner/file",
         content=content,
         mime_type="text/plain",
         sha256=hashlib.sha256(content).hexdigest(),
     )
-    restarted = MockStorageProvider(persistence_dir=tmp_path)
+    restarted = InMemoryStorageProvider(persistence_dir=tmp_path)
     assert await restarted.read_bytes(object_key="owner/file", max_bytes=100) == content
     await restarted.delete_object(object_key="owner/file")
     assert storage.object_bytes("not-there") is None
-    assert MockStorageProvider(persistence_dir=tmp_path).object_bytes("owner/file") is None
+    assert InMemoryStorageProvider(persistence_dir=tmp_path).object_bytes("owner/file") is None
 
 
 async def test_followup_reuses_official_content_and_checks_owner(
@@ -482,7 +483,7 @@ async def test_followup_reuses_official_content_and_checks_owner(
             task_id="task",
             document_ids=ids,
             config=config,
-            storage=MockStorageProvider(),
+            storage=InMemoryStorageProvider(),
             secrets=EnvironmentSecretProvider(),
             max_characters=1000,
         )
@@ -496,7 +497,7 @@ async def test_followup_reuses_official_content_and_checks_owner(
                 task_id="task",
                 document_ids=ids,
                 config=config,
-                storage=MockStorageProvider(),
+                storage=InMemoryStorageProvider(),
                 secrets=EnvironmentSecretProvider(),
                 max_characters=1000,
             )
@@ -507,7 +508,7 @@ async def test_followup_reuses_official_content_and_checks_owner(
             task_id="task",
             document_ids=ids,
             config=config,
-            storage=MockStorageProvider(),
+            storage=InMemoryStorageProvider(),
             secrets=EnvironmentSecretProvider(),
             max_characters=1,
         )
@@ -519,7 +520,7 @@ async def test_followup_reuses_official_content_and_checks_owner(
         asset.size_bytes = len(original)
         asset.sha256 = hashlib.sha256(original).hexdigest()
         await session.flush()
-        storage = MockStorageProvider()
+        storage = InMemoryStorageProvider()
         await storage.put_bytes(
             object_key="object",
             content=original,
@@ -584,7 +585,7 @@ async def test_image_document_routes_to_moonshot_image_purpose(
         session.add(Document(id="doc", owner_id="owner", asset_id="asset", title="封面"))
         await session.flush()
 
-        storage = MockStorageProvider()
+        storage = InMemoryStorageProvider()
         await storage.put_bytes(
             object_key="object",
             content=raw,
@@ -670,7 +671,7 @@ async def test_svg_document_uses_file_extract_instead_of_visual_image_purpose(
         session.add(Document(id="doc", owner_id="owner", asset_id="asset", title="vector"))
         await session.flush()
 
-        storage = MockStorageProvider()
+        storage = InMemoryStorageProvider()
         await storage.put_bytes(
             object_key="object",
             content=raw,

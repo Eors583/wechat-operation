@@ -460,7 +460,6 @@ class OpenAICompatibleModelProvider:
             provider_request_id=str(
                 body.get("id") or response.headers.get("x-request-id") or "unknown"
             ),
-            simulated=False,
         )
 
     @staticmethod
@@ -637,7 +636,6 @@ class ManusModelProvider:
                             input_tokens=0,
                             output_tokens=0,
                             provider_request_id=task_id,
-                            simulated=False,
                         )
                     await asyncio.sleep(self._poll_interval)
         except httpx.HTTPStatusError as exc:
@@ -733,7 +731,7 @@ class OpenAICompatibleEmbeddingProvider:
 
     async def embed(self, texts: list[str]) -> EmbeddingResult:
         if not texts:
-            return EmbeddingResult([], self._model, "empty", False)
+            return EmbeddingResult([], self._model, "empty")
         try:
             async with httpx.AsyncClient(timeout=60, transport=self._transport) as client:
                 response = await client.post(
@@ -774,7 +772,6 @@ class OpenAICompatibleEmbeddingProvider:
             provider_request_id=str(
                 body.get("id") or response.headers.get("x-request-id") or "unknown"
             ),
-            simulated=False,
         )
 
 
@@ -794,7 +791,7 @@ class HttpRerankProvider:
 
     async def rerank(self, *, query: str, documents: list[str]) -> RerankResult:
         if not documents:
-            return RerankResult([], "empty", False)
+            return RerankResult([], "empty")
         try:
             async with httpx.AsyncClient(timeout=60, transport=self._transport) as client:
                 response = await client.post(
@@ -835,7 +832,6 @@ class HttpRerankProvider:
             provider_request_id=str(
                 body.get("id") or response.headers.get("x-request-id") or "unknown"
             ),
-            simulated=False,
         )
 
 
@@ -1090,7 +1086,6 @@ class HttpDocumentProcessingProvider:
             extracted_text=extracted_text,
             parser_version=parser_version,
             page_count=page_count if isinstance(page_count, int) else None,
-            simulated=False,
             sections=tuple(sections),
             normalized_object_key=(
                 normalized_object_key if isinstance(normalized_object_key, str) else None
@@ -1117,7 +1112,6 @@ class HttpLayoutExtractionProvider:
             style_tokens=cast(dict[str, Any], style_tokens),
             source_snapshot=cast(dict[str, Any], source_snapshot),
             extractor_version=extractor_version,
-            simulated=False,
         )
 
 
@@ -1292,7 +1286,6 @@ class S3StorageProvider:
         return UploadDescriptor(
             provider_upload_id=upload_id,
             part_urls=[str(url) for url in urls],
-            simulated=False,
         )
 
     async def complete_multipart_upload(
