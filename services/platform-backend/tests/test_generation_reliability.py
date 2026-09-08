@@ -38,7 +38,7 @@ async def test_kimi_stage_output_controls(purpose: str) -> None:
 
 @pytest.mark.parametrize(
     ("purpose", "expected_limit"),
-    [("article_planning", 1024), ("content_check", 256), ("memory_summary", 512)],
+    [("article_planning", 3072), ("content_check", 256), ("memory_summary", 512)],
 )
 async def test_qwen_fast_stages_disable_thinking_and_bound_output(
     purpose: str, expected_limit: int

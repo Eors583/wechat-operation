@@ -278,7 +278,7 @@ class OpenAICompatibleModelProvider:
         headers = {"Authorization": f"Bearer {self._api_key}"}
         default_output_limit = {
             "intent_detection": 128,
-            "article_planning": 1_024,
+            "article_planning": 3_072,
             "article_generation": 16_384,
             "article_revision": 16_384,
             "fast_task": 4_096,
