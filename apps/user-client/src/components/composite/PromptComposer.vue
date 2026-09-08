@@ -5,7 +5,6 @@ import { api } from '@/api/client'
 import type { Attachment, LibraryItem, ModelOption, Skill } from '@/api/types'
 import { platform } from '@/platform'
 import { linkAttachmentLabel, safeHttpUrl } from '@/utils/safeUrl'
-import { parseWechatArticleCapture, WECHAT_CAPTURE_BOOKMARKLET } from '@/utils/wechatCapture'
 import AppButton from '@/components/base/AppButton.vue'
 import AppDialog from '@/components/base/AppDialog.vue'
 
@@ -77,7 +76,6 @@ const $q = useQuasar()
 const text = ref('')
 const attachments = ref<Attachment[]>([])
 const linkEditorOpen = ref(false)
-const wechatCaptureDialog = ref(false)
 const link = ref('')
 const normalizedLink = computed(() => safeHttpUrl(link.value, { rejectSensitiveQuery: true }))
 const skillMenuOpen = ref(false)
@@ -210,40 +208,6 @@ const addLink = () => {
 const cancelLink = () => {
   link.value = ''
   linkEditorOpen.value = false
-}
-
-const captureFilename = (title: string) =>
-  `${
-    title
-      .replace(/[\\/:*?"<>|]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 80) || '微信公众号文章'
-  }.txt`
-
-const onPaste = (event: ClipboardEvent) => {
-  const capture = parseWechatArticleCapture(event.clipboardData?.getData('text/plain') ?? '')
-  if (!capture) return
-  event.preventDefault()
-  if (props.disabled) return
-  if (!availableAttachmentSlots()) return notifyAttachmentLimit()
-  addFiles([
-    new File([capture.text], captureFilename(capture.title), {
-      type: 'text/plain',
-      lastModified: Date.now(),
-    }),
-  ])
-  if (!text.value.trim()) text.value = `请依据《${capture.title}》的正文进行改写。`
-  $q.notify({ type: 'positive', message: '公众号正文已在本地采集，并添加为待解析附件。' })
-}
-
-const copyCaptureBookmarklet = async () => {
-  try {
-    await navigator.clipboard.writeText(WECHAT_CAPTURE_BOOKMARKLET)
-    $q.notify({ type: 'positive', message: '采集书签代码已复制，请新建书签并粘贴到网址栏。' })
-  } catch {
-    $q.notify({ type: 'warning', message: '浏览器未允许复制，请将绿色按钮拖到书签栏完成安装。' })
-  }
 }
 
 const openLibrary = async () => {
@@ -380,7 +344,6 @@ defineExpose({
       maxlength="5000"
       aria-label="给内容助手发送消息"
       @keydown="onKeydown"
-      @paste="onPaste"
     />
     <div v-if="linkEditorOpen" class="prompt-composer__link-editor">
       <q-input
@@ -517,16 +480,6 @@ defineExpose({
           :disable="attachments.length >= maxAttachments"
           @click="linkEditorOpen = true"
         />
-        <q-btn
-          class="prompt-composer__tool-button"
-          outline
-          no-caps
-          icon="travel_explore"
-          label="本地采集公众号"
-          aria-label="本地采集公众号正文"
-          :disable="disabled || attachments.length >= maxAttachments"
-          @click="wechatCaptureDialog = true"
-        />
         <span v-if="attachments.length" class="prompt-composer__count"
           >{{ attachments.length }}/{{ maxAttachments }}</span
         >
@@ -635,36 +588,6 @@ defineExpose({
         :disabled="!selectedLibraryIds.length || libraryLoading"
         @click="addLibraryItems"
       />
-    </template>
-  </AppDialog>
-
-  <AppDialog v-model="wechatCaptureDialog" title="本地采集公众号正文" width="620px">
-    <div class="capture-dialog">
-      <q-banner rounded class="capture-dialog__notice">
-        微信会拦截服务器读取部分文章。采集书签只在当前浏览器读取你已经打开的正文，并复制到本机剪贴板。
-      </q-banner>
-      <ol>
-        <li>把下面的绿色按钮拖到浏览器书签栏，只需安装一次。</li>
-        <li>在浏览器中正常打开需要改写的微信公众号文章。</li>
-        <li>点击书签栏里的“采集公众号正文”。</li>
-        <li>返回本页面，在创作输入框中粘贴；正文会自动变成文本附件。</li>
-      </ol>
-      <a
-        class="capture-dialog__bookmarklet"
-        :href="WECHAT_CAPTURE_BOOKMARKLET"
-        draggable="true"
-        @click.prevent
-      >
-        <q-icon name="content_copy" />
-        采集公众号正文
-      </a>
-      <p class="capture-dialog__privacy">
-        采集过程不会读取聊天记录、账号密码或其他页面；正文只有在你返回平台粘贴并发送后才会上传。
-      </p>
-    </div>
-    <template #actions>
-      <AppButton variant="ghost" label="复制安装代码" @click="copyCaptureBookmarklet" />
-      <AppButton label="我知道了" @click="wechatCaptureDialog = false" />
     </template>
   </AppDialog>
 </template>
@@ -868,49 +791,6 @@ defineExpose({
     place-items: center;
     gap: 10px;
     min-height: 180px;
-    color: var(--app-text-secondary);
-  }
-}
-
-.capture-dialog {
-  display: grid;
-  gap: 16px;
-  min-width: 0;
-  max-height: min(68vh, 600px);
-  padding: 20px;
-  overflow-y: auto;
-
-  &__notice,
-  &__privacy,
-  li {
-    min-width: 0;
-    overflow-wrap: anywhere;
-  }
-
-  ol {
-    display: grid;
-    gap: 8px;
-    margin: 0;
-    padding-left: 24px;
-  }
-
-  &__bookmarklet {
-    display: inline-flex;
-    align-items: center;
-    justify-self: start;
-    gap: 8px;
-    max-width: 100%;
-    padding: 10px 16px;
-    color: var(--app-action-primary-text);
-    background: var(--app-action-primary);
-    border-radius: 10px;
-    text-decoration: none;
-    overflow-wrap: anywhere;
-    cursor: grab;
-  }
-
-  &__privacy {
-    margin: 0;
     color: var(--app-text-secondary);
   }
 }

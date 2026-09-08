@@ -14,7 +14,6 @@ import {
   QCheckbox,
 } from 'quasar'
 import PromptComposer from './PromptComposer.vue'
-import { WECHAT_CAPTURE_PREFIX } from '@/utils/wechatCapture'
 
 const notify = vi.fn()
 vi.mock('quasar', async (original) => ({
@@ -40,32 +39,6 @@ const global = {
 }
 
 describe('composer file drop', () => {
-  it('turns a locally captured WeChat article into a real text attachment', async () => {
-    const wrapper = mount(PromptComposer, { props: { skills: [] }, global })
-    const article = '这是浏览器从微信公众号页面读取的真实正文内容。'.repeat(12)
-    const event = new Event('paste', { bubbles: true, cancelable: true })
-    Object.defineProperty(event, 'clipboardData', {
-      value: {
-        getData: () =>
-          `${WECHAT_CAPTURE_PREFIX}${JSON.stringify({ title: '本地采集测试', text: article })}`,
-      },
-    })
-
-    wrapper.get('textarea').element.dispatchEvent(event)
-    await wrapper.vm.$nextTick()
-
-    expect(event.defaultPrevented).toBe(true)
-    expect(wrapper.findAll('.q-chip')).toHaveLength(1)
-    expect(wrapper.text()).toContain('本地采集测试.txt')
-    expect(wrapper.get('textarea').element.value).toContain('请依据《本地采集测试》')
-    await wrapper.get('[aria-label="发送消息"]').trigger('click')
-    const payload = wrapper.emitted('send')![0]![0] as {
-      attachments: { sourceFile: File }[]
-    }
-    expect(payload.attachments[0]!.sourceFile.name).toBe('本地采集测试.txt')
-    expect(payload.attachments[0]!.sourceFile.size).toBe(new Blob([article]).size)
-  })
-
   it('offers stable automatic routing before fixed model choices', () => {
     const wrapper = mount(PromptComposer, {
       props: {
