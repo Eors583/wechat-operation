@@ -1498,7 +1498,8 @@ async def create_ai_run(
     document_token_budget = max(0, int(remaining_context_tokens * 0.42))
     file_config = primary_config
     file_extraction_route: dict[str, Any] | None = None
-    if file_ids:
+    use_original_file_protocol = content.get("source") == "original_file"
+    if file_ids and use_original_file_protocol:
         try:
             file_input_route(primary_config)
         except ApiError as exc:
@@ -1515,15 +1516,19 @@ async def create_ai_run(
             )
             pipeline_routes["file_extraction"] = file_extraction_route
             route_snapshot["pipeline_routes"] = pipeline_routes
-    model_files = await prepare_model_files(
-        session,
-        owner_id=owner_id,
-        task_id=task.id,
-        document_ids=file_ids,
-        config=file_config,
-        storage=storage,
-        secrets=secrets,
-        max_characters=document_token_budget * 3,
+    model_files = (
+        await prepare_model_files(
+            session,
+            owner_id=owner_id,
+            task_id=task.id,
+            document_ids=file_ids,
+            config=file_config,
+            storage=storage,
+            secrets=secrets,
+            max_characters=document_token_budget * 3,
+        )
+        if file_ids and use_original_file_protocol
+        else []
     )
     reference_content: dict[str, Any] = dict(content)
     if model_files:
