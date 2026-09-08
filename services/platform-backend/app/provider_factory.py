@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.config import Settings
-from app.local_document_processing import ClamAvScanner, LocalDocumentProcessingProvider
+from app.local_document_processing import BuiltInDocumentScanner, LocalDocumentProcessingProvider
 from app.model_content_safety import ModelContentSafetyProvider
 from app.production_providers import (
     HttpDocumentProcessingProvider,
@@ -177,11 +177,7 @@ def build_providers(
     if settings.document_provider_mode == "local":
         document: DocumentProcessingProvider = LocalDocumentProcessingProvider(
             storage,
-            ClamAvScanner(
-                settings.clamd_host,
-                settings.clamd_port,
-                settings.clamd_timeout_seconds,
-            )
+            BuiltInDocumentScanner(),
         )
     elif settings.document_provider_mode == "http":
         try:

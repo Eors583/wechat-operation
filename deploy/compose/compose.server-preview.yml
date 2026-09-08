@@ -21,8 +21,6 @@ x-backend: &backend
       condition: service_healthy
     minio-init:
       condition: service_completed_successfully
-    clamav:
-      condition: service_healthy
   restart: unless-stopped
 
 services:
@@ -92,19 +90,6 @@ services:
       uv run celery -A app.celery_app:celery beat --loglevel=INFO
       --schedule=/tmp/celerybeat-schedule
     mem_limit: 192m
-
-  clamav:
-    image: docker.m.daocloud.io/clamav/clamav:1.4
-    volumes:
-      - clamav-db:/var/lib/clamav
-    healthcheck:
-      test: ["CMD-SHELL", "clamdscan --ping 1 >/dev/null 2>&1"]
-      interval: 15s
-      timeout: 10s
-      retries: 40
-      start_period: 120s
-    mem_limit: 896m
-    restart: unless-stopped
 
   business-db:
     image: postgres:16-alpine
@@ -212,4 +197,3 @@ volumes:
   redis-data:
   rabbitmq-data:
   minio-data:
-  clamav-db:

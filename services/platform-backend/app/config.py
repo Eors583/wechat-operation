@@ -75,9 +75,6 @@ class Settings:
     document_provider_mode: str = "http"
     document_service_url: str = ""
     document_service_secret_ref: str = ""
-    clamd_host: str = "clamav"
-    clamd_port: int = 3310
-    clamd_timeout_seconds: float = 60.0
     layout_provider_mode: str = "wechat_public"
     layout_service_url: str = ""
     layout_service_secret_ref: str = ""
@@ -185,9 +182,6 @@ class Settings:
             document_provider_mode=os.getenv("DOCUMENT_PROVIDER_MODE", "http"),
             document_service_url=os.getenv("DOCUMENT_SERVICE_URL", ""),
             document_service_secret_ref=os.getenv("DOCUMENT_SERVICE_SECRET_REF", ""),
-            clamd_host=os.getenv("CLAMD_HOST", "clamav"),
-            clamd_port=_int("CLAMD_PORT", 3310),
-            clamd_timeout_seconds=_float("CLAMD_TIMEOUT_SECONDS", 60.0),
             layout_provider_mode=os.getenv("LAYOUT_PROVIDER_MODE", "wechat_public"),
             layout_service_url=os.getenv("LAYOUT_SERVICE_URL", ""),
             layout_service_secret_ref=os.getenv("LAYOUT_SERVICE_SECRET_REF", ""),
@@ -333,8 +327,6 @@ class Settings:
             )
         if not 60 <= self.object_storage_presign_seconds <= 86_400:
             raise RuntimeError("OBJECT_STORAGE_PRESIGN_SECONDS must be between 60 and 86400")
-        if not 1 <= self.clamd_port <= 65_535 or self.clamd_timeout_seconds <= 0:
-            raise RuntimeError("ClamAV connection settings are invalid")
         if self.environment == "production":
             if self.wechat_provider_mode == "direct":
                 missing_wechat = [name for name, value in direct_wechat.items() if not value]
@@ -396,7 +388,7 @@ class Settings:
                         "DOCUMENT_SERVICE_SECRET_REF": self.document_service_secret_ref,
                     }
                     if self.document_provider_mode == "http"
-                    else {"CLAMD_HOST": self.clamd_host}
+                    else {}
                 ),
                 **(
                     {

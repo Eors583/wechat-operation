@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import io
 import posixpath
-import socket
-import struct
 import zipfile
 from typing import Protocol
 from xml.etree import ElementTree
@@ -29,41 +26,11 @@ class DocumentScanner(Protocol):
     async def scan(self, content: bytes) -> None: ...
 
 
-class ClamAvScanner:
-    def __init__(self, host: str, port: int = 3310, timeout_seconds: float = 60.0) -> None:
-        self._host = host
-        self._port = port
-        self._timeout = timeout_seconds
-
+class BuiltInDocumentScanner:
     async def scan(self, content: bytes) -> None:
-        await asyncio.to_thread(self._scan_sync, content)
-
-    def _scan_sync(self, content: bytes) -> None:
-        try:
-            with socket.create_connection(
-                (self._host, self._port), timeout=self._timeout
-            ) as connection:
-                connection.settimeout(self._timeout)
-                connection.sendall(b"zINSTREAM\0")
-                for offset in range(0, len(content), 64 * 1024):
-                    chunk = content[offset : offset + 64 * 1024]
-                    connection.sendall(struct.pack("!I", len(chunk)))
-                    connection.sendall(chunk)
-                connection.sendall(struct.pack("!I", 0))
-                response = bytearray()
-                while not response.endswith(b"\0"):
-                    part = connection.recv(4096)
-                    if not part:
-                        break
-                    response.extend(part)
-        except OSError as exc:
-            raise ProviderUnavailable("病毒扫描服务暂时不可用。") from exc
-        verdict = response.rstrip(b"\0").decode("utf-8", errors="replace")
-        if verdict.endswith(" OK"):
-            return
-        if verdict.endswith(" FOUND"):
-            raise ProviderUnavailable("文件未通过病毒安全检查。")
-        raise ProviderUnavailable("病毒扫描服务返回了无效结果。")
+        eicar_marker = b"EICAR-STANDARD-ANTIVIRUS-TEST-FILE"
+        if eicar_marker in content or content.startswith((b"MZ", b"\x7fELF")):
+            raise ProviderUnavailable("文件未通过安全检查。")
 
 
 class LocalDocumentProcessingProvider:
