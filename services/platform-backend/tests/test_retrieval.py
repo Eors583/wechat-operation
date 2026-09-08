@@ -8,7 +8,11 @@ from app.retrieval import RetrievalHit, RetrievalService
 
 
 class StaticEmbeddingProvider:
+    def __init__(self) -> None:
+        self.batch_sizes: list[int] = []
+
     async def embed(self, texts: list[str]) -> EmbeddingResult:
+        self.batch_sizes.append(len(texts))
         return EmbeddingResult(
             vectors=[[float(index), 0.5] for index, _ in enumerate(texts, start=1)],
             model="embedding-test",
@@ -104,9 +108,10 @@ async def test_hybrid_retrieval_filters_reranks_diversifies_and_records_context(
 
 async def test_document_indexing_batches_embeddings_and_preserves_chunk_ids() -> None:
     backend = MemoryRetrievalBackend([])
+    embedding = StaticEmbeddingProvider()
     service = RetrievalService(
         backend=backend,
-        embedding=StaticEmbeddingProvider(),
+        embedding=embedding,
         rerank=StaticRerankProvider(),
     )
     document = Document(
@@ -124,12 +129,13 @@ async def test_document_indexing_batches_embeddings_and_preserves_chunk_ids() ->
             text=f"内容 {index}",
             token_count=2,
         )
-        for index in range(1, 4)
+        for index in range(1, 24)
     ]
     model = await service.index_document(document=document, chunks=chunks)
     assert model == "embedding-test"
     assert backend.index_arguments["chunks"] == chunks
-    assert backend.index_arguments["vectors"] == [[1.0, 0.5], [2.0, 0.5], [3.0, 0.5]]
+    assert embedding.batch_sizes == [10, 10, 3]
+    assert len(backend.index_arguments["vectors"]) == 23
 
 
 async def test_article_indexing_reuses_versioned_chunking_and_embedding_batches() -> None:

@@ -436,6 +436,9 @@ class DisabledRetrievalBackend:
         return None
 
 
+EMBEDDING_BATCH_SIZE = 10
+
+
 class RetrievalService:
     def __init__(
         self,
@@ -464,8 +467,10 @@ class RetrievalService:
         embedding = await self._embedding_factory() if self._embedding_factory else self._embedding
         vectors: list[list[float]] = []
         model = ""
-        for offset in range(0, len(chunks), 64):
-            result = await embedding.embed([chunk.text for chunk in chunks[offset : offset + 64]])
+        for offset in range(0, len(chunks), EMBEDDING_BATCH_SIZE):
+            result = await embedding.embed(
+                [chunk.text for chunk in chunks[offset : offset + EMBEDDING_BATCH_SIZE]]
+            )
             vectors.extend(result.vectors)
             model = result.model
         await self.backend.replace_document(
@@ -499,8 +504,8 @@ class RetrievalService:
             return None
         vectors: list[list[float]] = []
         model = ""
-        for offset in range(0, len(chunks), 64):
-            result = await embedding.embed(chunks[offset : offset + 64])
+        for offset in range(0, len(chunks), EMBEDDING_BATCH_SIZE):
+            result = await embedding.embed(chunks[offset : offset + EMBEDDING_BATCH_SIZE])
             vectors.extend(result.vectors)
             model = result.model
         await self.backend.replace_article(
