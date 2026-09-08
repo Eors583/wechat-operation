@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.config import Settings
+from app.local_document_processing import ClamAvScanner, LocalDocumentProcessingProvider
+from app.model_content_safety import ModelContentSafetyProvider
 from app.production_providers import (
     HttpDocumentProcessingProvider,
     HttpLayoutExtractionProvider,
@@ -110,39 +112,45 @@ def build_providers(
         if settings.environment == "production":
             raise
         rerank = UnconfiguredRerankProvider()
-    if settings.content_safety_provider_mode not in {"openai", "openai_compatible"}:
+    if settings.content_safety_provider_mode == "model":
+        content_safety: ContentSafetyProvider = ModelContentSafetyProvider(model)
+    elif settings.content_safety_provider_mode not in {"openai", "openai_compatible"}:
         raise ProviderUnavailable(
-            "CONTENT_SAFETY_PROVIDER_MODE must be openai or openai_compatible"
+            "CONTENT_SAFETY_PROVIDER_MODE must be model, openai or openai_compatible"
         )
-    try:
-        content_safety: ContentSafetyProvider = OpenAIModerationProvider(
-            api_base=_required(settings.content_safety_api_base, "CONTENT_SAFETY_API_BASE"),
-            api_key=_secret(
-                secrets,
-                settings.content_safety_api_key_ref,
-                "CONTENT_SAFETY_API_KEY_REF",
-            ),
-            model=settings.content_safety_model,
-        )
-    except ProviderUnavailable:
-        if settings.environment == "production":
-            raise
-        content_safety = UnconfiguredContentSafetyProvider()
-    if settings.verification_provider_mode != "http":
-        raise ProviderUnavailable("VERIFICATION_PROVIDER_MODE must be http")
-    try:
-        verification: VerificationProvider = HttpVerificationProvider(
-            _signed_client(
-                settings.verification_service_url,
-                settings.verification_secret_ref,
-                "VERIFICATION",
-                secrets,
+    else:
+        try:
+            content_safety = OpenAIModerationProvider(
+                api_base=_required(settings.content_safety_api_base, "CONTENT_SAFETY_API_BASE"),
+                api_key=_secret(
+                    secrets,
+                    settings.content_safety_api_key_ref,
+                    "CONTENT_SAFETY_API_KEY_REF",
+                ),
+                model=settings.content_safety_model,
             )
-        )
-    except ProviderUnavailable:
-        if settings.environment == "production":
-            raise
-        verification = UnconfiguredVerificationProvider()
+        except ProviderUnavailable:
+            if settings.environment == "production":
+                raise
+            content_safety = UnconfiguredContentSafetyProvider()
+    if settings.verification_provider_mode == "disabled":
+        verification: VerificationProvider = UnconfiguredVerificationProvider()
+    elif settings.verification_provider_mode == "http":
+        try:
+            verification = HttpVerificationProvider(
+                _signed_client(
+                    settings.verification_service_url,
+                    settings.verification_secret_ref,
+                    "VERIFICATION",
+                    secrets,
+                )
+            )
+        except ProviderUnavailable:
+            if settings.environment == "production":
+                raise
+            verification = UnconfiguredVerificationProvider()
+    else:
+        raise ProviderUnavailable("VERIFICATION_PROVIDER_MODE must be disabled or http")
     if settings.storage_provider_mode != "s3":
         raise ProviderUnavailable("STORAGE_PROVIDER_MODE must be s3")
     try:
@@ -166,21 +174,31 @@ def build_providers(
         if settings.environment == "production":
             raise
         storage = UnconfiguredStorageProvider()
-    if settings.document_provider_mode != "http":
-        raise ProviderUnavailable("DOCUMENT_PROVIDER_MODE must be http")
-    try:
-        document: DocumentProcessingProvider = HttpDocumentProcessingProvider(
-            _signed_client(
-                settings.document_service_url,
-                settings.document_service_secret_ref,
-                "DOCUMENT",
-                secrets,
+    if settings.document_provider_mode == "local":
+        document: DocumentProcessingProvider = LocalDocumentProcessingProvider(
+            storage,
+            ClamAvScanner(
+                settings.clamd_host,
+                settings.clamd_port,
+                settings.clamd_timeout_seconds,
             )
         )
-    except ProviderUnavailable:
-        if settings.environment == "production":
-            raise
-        document = UnconfiguredDocumentProcessingProvider()
+    elif settings.document_provider_mode == "http":
+        try:
+            document = HttpDocumentProcessingProvider(
+                _signed_client(
+                    settings.document_service_url,
+                    settings.document_service_secret_ref,
+                    "DOCUMENT",
+                    secrets,
+                )
+            )
+        except ProviderUnavailable:
+            if settings.environment == "production":
+                raise
+            document = UnconfiguredDocumentProcessingProvider()
+    else:
+        raise ProviderUnavailable("DOCUMENT_PROVIDER_MODE must be local or http")
     return ProviderBundle(
         model=model,
         embedding=embedding,

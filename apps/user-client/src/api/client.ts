@@ -1380,6 +1380,7 @@ const uploadRemoteFile = async (
     saveToLibrary?: boolean
     waitForReady?: boolean
     onProgress?: (loaded: number) => void
+    onProcessing?: () => void
     signal?: AbortSignal
   } = {},
 ): Promise<Attachment> => {
@@ -1426,6 +1427,7 @@ const uploadRemoteFile = async (
 
   const attachment = async (documentId: string, assetId?: string): Promise<Attachment> => {
     if (context.waitForReady) {
+      context.onProcessing?.()
       await waitForDocument(documentId, context.signal)
       writePendingUpload(null, fingerprint)
     } else {
@@ -2349,16 +2351,16 @@ export const remoteApi: UserApi = {
           projectId: input.projectId ?? null,
           taskId: input.taskId ?? null,
           saveToLibrary: attachment.saveToLibrary,
+          waitForReady: true,
           signal: input.signal,
           onProgress: input.onAttachmentProgress
             ? (loaded) => report(loaded, 'uploading')
             : undefined,
-        }).then(async (uploaded) => {
-          report(attachment.sourceFile!.size, 'processing')
+          onProcessing: () => report(attachment.sourceFile!.size, 'processing'),
+        }).then((uploaded) => {
           input.onAttachmentUploaded?.(uploaded)
           if (!uploaded.documentId)
             throw new ApiError('上传完成后没有返回资料编号。', 502, 'DOCUMENT_ID_MISSING')
-          await waitForDocument(uploaded.documentId, input.signal)
           report(attachment.sourceFile!.size, 'ready')
           return { ...uploaded, status: 'ready' as const }
         })

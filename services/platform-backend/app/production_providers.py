@@ -784,7 +784,8 @@ class HttpRerankProvider:
         model: str,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self._url = _endpoint(api_base, "rerank")
+        base = api_base.rstrip("/")
+        self._url = base if base.endswith("/reranks") else _endpoint(base, "rerank")
         self._api_key = api_key
         self._model = model
         self._transport = transport

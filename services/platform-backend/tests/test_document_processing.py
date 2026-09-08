@@ -6,8 +6,14 @@ import zipfile
 
 import pytest
 
+from app.local_document_processing import LocalDocumentProcessingProvider
 from app.providers import ProviderUnavailable
-from tests.fakes import InMemoryStorageProvider, LocalDocumentProcessingProvider
+from tests.fakes import InMemoryStorageProvider
+
+
+class CleanScanner:
+    async def scan(self, content: bytes) -> None:
+        assert content
 
 
 def _pptx(*slides: str) -> bytes:
@@ -57,7 +63,7 @@ async def test_local_document_processor_extracts_pptx_by_slide() -> None:
         sha256=hashlib.sha256(content).hexdigest(),
     )
 
-    result = await LocalDocumentProcessingProvider(storage).process(
+    result = await LocalDocumentProcessingProvider(storage, CleanScanner()).process(
         object_key="owner/reference.pptx",
         filename="战略规划.pptx",
         mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -86,7 +92,7 @@ async def test_local_document_processor_rejects_pptx_without_text() -> None:
     )
 
     with pytest.raises(ProviderUnavailable, match="没有可提取的文字"):
-        await LocalDocumentProcessingProvider(storage).process(
+        await LocalDocumentProcessingProvider(storage, CleanScanner()).process(
             object_key="owner/empty.pptx",
             filename="empty.pptx",
             mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",

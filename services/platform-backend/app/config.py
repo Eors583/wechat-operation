@@ -75,6 +75,9 @@ class Settings:
     document_provider_mode: str = "http"
     document_service_url: str = ""
     document_service_secret_ref: str = ""
+    clamd_host: str = "clamav"
+    clamd_port: int = 3310
+    clamd_timeout_seconds: float = 60.0
     layout_provider_mode: str = "wechat_public"
     layout_service_url: str = ""
     layout_service_secret_ref: str = ""
@@ -182,6 +185,9 @@ class Settings:
             document_provider_mode=os.getenv("DOCUMENT_PROVIDER_MODE", "http"),
             document_service_url=os.getenv("DOCUMENT_SERVICE_URL", ""),
             document_service_secret_ref=os.getenv("DOCUMENT_SERVICE_SECRET_REF", ""),
+            clamd_host=os.getenv("CLAMD_HOST", "clamav"),
+            clamd_port=_int("CLAMD_PORT", 3310),
+            clamd_timeout_seconds=_float("CLAMD_TIMEOUT_SECONDS", 60.0),
             layout_provider_mode=os.getenv("LAYOUT_PROVIDER_MODE", "wechat_public"),
             layout_service_url=os.getenv("LAYOUT_SERVICE_URL", ""),
             layout_service_secret_ref=os.getenv("LAYOUT_SERVICE_SECRET_REF", ""),
@@ -236,11 +242,14 @@ class Settings:
             ),
             "CONTENT_SAFETY_PROVIDER_MODE": (
                 self.content_safety_provider_mode,
-                {"openai", "openai_compatible"},
+                {"model", "openai", "openai_compatible"},
             ),
-            "VERIFICATION_PROVIDER_MODE": (self.verification_provider_mode, {"http"}),
+            "VERIFICATION_PROVIDER_MODE": (
+                self.verification_provider_mode,
+                {"disabled", "http"},
+            ),
             "STORAGE_PROVIDER_MODE": (self.storage_provider_mode, {"s3"}),
-            "DOCUMENT_PROVIDER_MODE": (self.document_provider_mode, {"http"}),
+            "DOCUMENT_PROVIDER_MODE": (self.document_provider_mode, {"http", "local"}),
             "LAYOUT_PROVIDER_MODE": (self.layout_provider_mode, {"http", "wechat_public"}),
         }
         for name, (selected, supported) in provider_modes.items():
@@ -324,6 +333,8 @@ class Settings:
             )
         if not 60 <= self.object_storage_presign_seconds <= 86_400:
             raise RuntimeError("OBJECT_STORAGE_PRESIGN_SECONDS must be between 60 and 86400")
+        if not 1 <= self.clamd_port <= 65_535 or self.clamd_timeout_seconds <= 0:
+            raise RuntimeError("ClamAV connection settings are invalid")
         if self.environment == "production":
             if self.wechat_provider_mode == "direct":
                 missing_wechat = [name for name, value in direct_wechat.items() if not value]
@@ -359,16 +370,34 @@ class Settings:
                 "RERANK_API_BASE": self.rerank_api_base,
                 "RERANK_API_KEY_REF": self.rerank_api_key_ref,
                 "RERANK_MODEL": self.rerank_model,
-                "CONTENT_SAFETY_API_BASE": self.content_safety_api_base,
-                "CONTENT_SAFETY_API_KEY_REF": self.content_safety_api_key_ref,
-                "VERIFICATION_SERVICE_URL": self.verification_service_url,
-                "VERIFICATION_SECRET_REF": self.verification_secret_ref,
+                **(
+                    {
+                        "CONTENT_SAFETY_API_BASE": self.content_safety_api_base,
+                        "CONTENT_SAFETY_API_KEY_REF": self.content_safety_api_key_ref,
+                    }
+                    if self.content_safety_provider_mode != "model"
+                    else {}
+                ),
+                **(
+                    {
+                        "VERIFICATION_SERVICE_URL": self.verification_service_url,
+                        "VERIFICATION_SECRET_REF": self.verification_secret_ref,
+                    }
+                    if self.verification_provider_mode == "http"
+                    else {}
+                ),
                 "OBJECT_STORAGE_ENDPOINT": self.object_storage_endpoint,
                 "OBJECT_STORAGE_BUCKET": self.object_storage_bucket,
                 "OBJECT_STORAGE_ACCESS_KEY_REF": self.object_storage_access_key_ref,
                 "OBJECT_STORAGE_SECRET_KEY_REF": self.object_storage_secret_key_ref,
-                "DOCUMENT_SERVICE_URL": self.document_service_url,
-                "DOCUMENT_SERVICE_SECRET_REF": self.document_service_secret_ref,
+                **(
+                    {
+                        "DOCUMENT_SERVICE_URL": self.document_service_url,
+                        "DOCUMENT_SERVICE_SECRET_REF": self.document_service_secret_ref,
+                    }
+                    if self.document_provider_mode == "http"
+                    else {"CLAMD_HOST": self.clamd_host}
+                ),
                 **(
                     {
                         "LAYOUT_SERVICE_URL": self.layout_service_url,
