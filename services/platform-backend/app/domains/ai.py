@@ -1340,6 +1340,9 @@ async def create_ai_run(
     model_deployment_id: str | None = None,
 ) -> CreatedRun:
     task = await owned_task(session, owner_id=owner_id, task_id=task_id)
+    retry_run_id = content.get("retry_of_run_id")
+    if retry_run_id:
+        await session.scalar(select(Task).where(Task.id == task.id).with_for_update())
     limits = await session.scalar(select(ResourceLimit).where(ResourceLimit.owner_id == owner_id))
     if not limits or not limits.ai_enabled:
         raise ApiError(403, "AI_CAPABILITY_DISABLED", "当前账号暂不能发起新的 AI 任务。")
@@ -1354,9 +1357,32 @@ async def create_ai_run(
             .where(AIRun.task_id == task.id, AIRun.idempotency_key == idempotency_key)
             .order_by(AIRun.created_at.desc())
         )
-        if not existing_run:
-            raise ApiError(409, "MESSAGE_ALREADY_EXISTS", "该消息已经提交。")
-        return CreatedRun(existing_message, existing_run)
+        if existing_run:
+            return CreatedRun(existing_message, existing_run)
+        previous_run = await session.scalar(
+            select(AIRun)
+            .where(
+                AIRun.task_id == task.id,
+                AIRun.owner_id == owner_id,
+                AIRun.context_snapshot["source_message_id"].as_string() == existing_message.id,
+            )
+            .order_by(AIRun.created_at.desc())
+            .limit(1)
+        )
+        if (
+            not isinstance(retry_run_id, str)
+            or not previous_run
+            or previous_run.id != retry_run_id
+            or previous_run.status not in {"failed", "cancelled"}
+        ):
+            raise ApiError(
+                409, "MESSAGE_ALREADY_EXISTS", "原消息已有运行结果或正在处理，请刷新对话。"
+            )
+        # Regeneration owns a new run, not a new user message or new attachments.
+        text = existing_message.plain_text
+        content = dict(existing_message.content_json)
+    elif retry_run_id:
+        raise ApiError(409, "RETRY_MESSAGE_MISSING", "找不到原消息，请刷新对话后重试。")
     recent_messages = list(
         (
             await session.scalars(
@@ -1669,7 +1695,7 @@ async def create_ai_run(
             continue
         selected_preferences.append(preference)
         preference_budget -= cost
-    message = Message(
+    message = existing_message or Message(
         task_id=task.id,
         role="user",
         content_json=content,
@@ -2579,6 +2605,11 @@ async def process_ai_run(
         await emit("text.delta", {"text": assistant_message.plain_text})
     for attempt in execution_attempts:
         session.add(ai_attempt_record(run.id, attempt))
+    assistant_message.content_json = {
+        **assistant_message.content_json,
+        "source_message_id": model_context.get("source_message_id"),
+        "ai_run_id": run.id,
+    }
     await session.flush()
     latest_summary_version = await session.scalar(
         select(func.coalesce(func.max(TaskMemorySummary.version_no), 0)).where(

@@ -69,7 +69,8 @@ type PromptComposerInstance = {
 const bundle = computed(() => taskQuery.data.value ?? null)
 const task = computed(() => bundle.value?.task ?? null)
 const messages = computed(() => bundle.value?.messages ?? [])
-const visibleMessages = computed(() => [
+const retrySourceId = ref('')
+const rawVisibleMessages = computed(() => [
   ...messages.value,
   ...pendingMessages.value.filter(
     (pending) =>
@@ -80,6 +81,43 @@ const visibleMessages = computed(() => [
       ),
   ),
 ])
+const visibleMessages = computed(() => {
+  const latestReplies = new Map<string, Message>()
+  for (const message of rawVisibleMessages.value) {
+    if (message.role === 'assistant' && message.sourceMessageId)
+      latestReplies.set(message.sourceMessageId, message)
+  }
+  const rendered = new Set<string>()
+  return rawVisibleMessages.value.flatMap((message): Message[] => {
+    if (message.role !== 'assistant' || !message.sourceMessageId) return [message]
+    const sourceId = message.sourceMessageId
+    if (rendered.has(sourceId)) return []
+    rendered.add(sourceId)
+    const reply = latestReplies.get(sourceId) ?? message
+    if (sourceId === retrySourceId.value && generating.value)
+      return [{ ...reply, id: message.id, responseKind: 'retry_loading', content: '' }]
+    if (sourceId === retrySourceId.value && runError.value)
+      return [
+        {
+          ...reply,
+          id: message.id,
+          responseKind: 'ai_error',
+          content: runError.value,
+          errorCode: runErrorCode.value,
+          aiRunId: runErrorRunId.value || reply.aiRunId,
+        },
+      ]
+    return [{ ...reply, id: message.id }]
+  })
+})
+const inlineRetry = computed(() =>
+  Boolean(
+    retrySourceId.value &&
+    rawVisibleMessages.value.some(
+      (message) => message.role === 'assistant' && message.sourceMessageId === retrySourceId.value,
+    ),
+  ),
+)
 const latestAiRun = computed(() => bundle.value?.latestAiRun ?? null)
 const lastUserMessage = computed(() =>
   [...visibleMessages.value].reverse().find((message) => message.role === 'user'),
@@ -209,6 +247,7 @@ const persistedFailureRunIds = computed(
 
 const displayedRunFailure = computed(() => {
   if (generating.value) return null
+  if (inlineRetry.value && runError.value) return null
   if (
     runError.value &&
     (!runErrorRunId.value || !persistedFailureRunIds.value.has(runErrorRunId.value))
@@ -371,14 +410,21 @@ const loadEarlierMessages = async () => {
   }
 }
 
-const send = async (payload: { text: string; attachments: Attachment[]; draftId?: string }) => {
+const send = async (payload: {
+  text: string
+  attachments: Attachment[]
+  draftId?: string
+  retryMessage?: Message
+  retryOfRunId?: string
+}) => {
   if (generating.value) return
+  retrySourceId.value = payload.retryMessage?.id ?? ''
   generationController?.abort()
   generationController = new AbortController()
   const controller = generationController
   const token = ++generationToken
   uploadProgress.value = []
-  const pendingMessage: Message = {
+  const pendingMessage: Message = payload.retryMessage ?? {
     id: `pending_${payload.draftId ?? crypto.randomUUID()}`,
     clientMessageId: `message_${crypto.randomUUID()}`,
     taskId: taskId.value || 'pending',
@@ -395,7 +441,7 @@ const send = async (payload: { text: string; attachments: Attachment[]; draftId?
     (activeGenerationTaskId.value
       ? taskId.value === activeGenerationTaskId.value
       : route.fullPath === originRoute)
-  pendingMessages.value = [...pendingMessages.value, pendingMessage]
+  if (!payload.retryMessage) pendingMessages.value = [...pendingMessages.value, pendingMessage]
   generating.value = true
   runError.value = ''
   runErrorCode.value = ''
@@ -406,6 +452,7 @@ const send = async (payload: { text: string; attachments: Attachment[]; draftId?
   try {
     const pending = api.sendMessage({
       clientMessageId: pendingMessage.clientMessageId,
+      retryOfRunId: payload.retryOfRunId,
       taskId: taskId.value || undefined,
       projectId: taskId.value ? (task.value?.projectId ?? null) : selectedProjectId.value,
       text: payload.text,
@@ -528,14 +575,23 @@ const failedMessageSource = (failure?: Message) => {
 }
 
 const retryLastRun = async (failure?: Message) => {
-  if (!failure && awaitingConfirmation.value) {
+  if (awaitingConfirmation.value && (!failure || failure.sourceMessageId === retrySourceId.value)) {
     resumeOriginalRequest()
     return
   }
   const message = failedMessageSource(failure)
   if (!message || generating.value || !selectedModelAvailable.value) return
-  pendingMessages.value = pendingMessages.value.filter((item) => item.id !== message.id)
-  await send({ text: message.content, attachments: message.attachments ?? [] })
+  const retryOfRunId = failure?.aiRunId || displayedRunFailure.value?.runId
+  if (retryOfRunId && message.clientMessageId) {
+    await send({
+      text: message.content,
+      attachments: message.attachments ?? [],
+      retryMessage: message,
+      retryOfRunId,
+    })
+  } else {
+    resumeOriginalRequest()
+  }
 }
 
 const isFailureMessage = (message: Message) => message.responseKind === 'ai_error'
@@ -597,6 +653,12 @@ const resumeOriginalRequest = () => {
   if (generating.value) return
   const saved = api.getPendingMessage(taskId.value)
   if (!saved) return
+  const original = messages.value.find(
+    (message) =>
+      message.role === 'user' && message.clientMessageId === saved.message.clientMessageId,
+  )
+  if (original && messages.value.some((message) => message.sourceMessageId === original.id))
+    retrySourceId.value = original.id
   if (!pendingMessages.value.some((message) => message.id === saved.message.id))
     pendingMessages.value.push(saved.message)
   const token = ++generationToken
@@ -773,7 +835,19 @@ const layoutArticle = async () => {
                 icon="auto_awesome"
               />
               <div class="message__bubble">
-                <div v-if="isFailureMessage(message)" class="message__failure" role="alert">
+                <template v-if="message.responseKind === 'retry_loading'">
+                  <GenerationProgress
+                    :stage="runStage"
+                    :history="runStageHistory"
+                    :model-name="selectedModelName"
+                  />
+                  <div
+                    v-if="streamingText"
+                    class="message__rich-text"
+                    v-html="renderSafeMarkdown(streamingText)"
+                  />
+                </template>
+                <div v-else-if="isFailureMessage(message)" class="message__failure" role="alert">
                   <strong><q-icon name="error_outline" />本次生成没有完成</strong>
                   <p>{{ message.content }}</p>
                   <div class="message__failure-meta">
@@ -790,10 +864,16 @@ const layoutArticle = async () => {
                       @click="switchModel"
                     />
                     <AppButton
-                      label="重新生成"
+                      :label="
+                        awaitingConfirmation && message.sourceMessageId === retrySourceId
+                          ? '继续原请求'
+                          : '重新生成'
+                      "
                       icon="refresh"
                       :loading="generating"
-                      :disabled="!failedMessageSource(message) || !selectedModelAvailable"
+                      :disabled="
+                        generating || !failedMessageSource(message) || !selectedModelAvailable
+                      "
                       @click="retryLastRun(message)"
                     />
                   </div>
@@ -827,11 +907,14 @@ const layoutArticle = async () => {
                   </div>
                 </div>
                 <MessageArticleCard
-                  v-if="message.articleId"
+                  v-if="message.articleId && message.responseKind !== 'retry_loading'"
                   :message="message"
                   @preview="openArticle(message)"
                 />
-                <div v-if="message.suggestions?.length" class="message__suggestions">
+                <div
+                  v-if="message.suggestions?.length && message.responseKind !== 'retry_loading'"
+                  class="message__suggestions"
+                >
                   <button
                     v-for="suggestion in message.suggestions"
                     :key="suggestion"
@@ -846,7 +929,10 @@ const layoutArticle = async () => {
               }}</q-avatar>
             </div>
 
-            <div v-if="generating" class="message message--assistant message--thinking">
+            <div
+              v-if="generating && !inlineRetry"
+              class="message message--assistant message--thinking"
+            >
               <q-avatar color="primary" text-color="white" icon="auto_awesome" />
               <div class="message__bubble">
                 <GenerationProgress
@@ -857,7 +943,10 @@ const layoutArticle = async () => {
               </div>
             </div>
 
-            <div v-if="streamingText" class="message message--assistant message--streaming">
+            <div
+              v-if="streamingText && !inlineRetry"
+              class="message message--assistant message--streaming"
+            >
               <q-avatar color="primary" text-color="white" icon="auto_awesome" />
               <div class="message__bubble">
                 <div class="message__rich-text" v-html="renderSafeMarkdown(streamingText)" />
