@@ -134,7 +134,7 @@ from app.providers import (
     WechatProvider,
 )
 from app.retrieval import RetrievalService
-from app.security import RateLimiter, hash_token, new_opaque_token, new_uuid, verify_password
+from app.security import RateLimiter, hash_token, new_opaque_token, verify_password
 from app.system_settings import published_setting_section, published_system_settings
 from app.wechat_open_platform import (
     WechatOpenPlatformClient,
@@ -1937,40 +1937,9 @@ async def create_personal_skill(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    await ensure_personal_skills_enabled(session)
-    code = f"user-{user.id[:8]}-{new_uuid()[:8]}"
-    skill = Skill(
-        scope="personal",
-        owner_id=user.id,
-        code=code,
-        name=payload.name,
-        description=payload.description,
-        category=payload.category,
-        status="published",
-        current_version_no=1,
-    )
-    session.add(skill)
-    await session.flush()
-    version_payload: dict[str, Any] = {
-        "instructions": payload.instructions,
-        "input_schema": {
-            "scenario": payload.scenario,
-            "example_article": payload.example_article,
-        },
-        "output_schema": {"type": "article"},
-        "tool_policy": {"wechat_publish": False},
-    }
-    version = SkillVersion(
-        skill_id=skill.id,
-        version_no=1,
-        status="published",
-        checksum=hashlib.sha256(
-            json.dumps(version_payload, sort_keys=True, ensure_ascii=False).encode()
-        ).hexdigest(),
-        **version_payload,
-    )
-    session.add(version)
-    session.add(UserSkillSetting(user_id=user.id, skill_id=skill.id, enabled=True))
+    from app.domains.personal_skills import create_personal_skill as save_personal_skill
+
+    skill, version = await save_personal_skill(session, owner_id=user.id, **payload.model_dump())
     await session.commit()
     return {"skill": model_dict(skill), "version": model_dict(version), "enabled": True}
 

@@ -6,13 +6,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.personal_skills import create_personal_skill
 from app.errors import ApiError
-from app.models import AuditLog, Message, Task, UserPreference, utcnow
+from app.models import AuditLog, Message, Skill, Task, UserPreference, utcnow
 
 
 def needs_model(action: dict[str, Any]) -> bool:
     return action["operation"] in {"describe", "update"} or (
-        action["operation"] == "save" and not action.get("value")
+        action["operation"] in {"save", "save_skill"} and not action.get("value")
     )
 
 
@@ -92,7 +93,31 @@ async def plan_action(
         )
     )
     followup = bool(prior) and bool(re.search(r"刚才|上面|这个|这条|它|保存下来|保存吧", text))
-    if not style and not followup and not re.search(r"偏好(?:学习|使用)|使用偏好", text):
+    destination = re.search(
+        r"(?:保存|另存|存入|存到|添加|新增|转成|做成).{0,12}?(技能|写作风格|写作偏好|行文风格)",
+        command,
+    )
+    explicit_destinations = list(
+        re.finditer(
+            r"(?:成|为|到|入)(?:我的|个人|自己的|一个|一项|一条|的|新|\s)*"
+            r"(技能|写作风格|写作偏好|行文风格|模板|项目要求|草稿箱|文章库)",
+            command,
+        )
+    )
+    if explicit_destinations:
+        destination = explicit_destinations[-1]
+    if destination and destination[1] in {"模板", "项目要求", "草稿箱", "文章库"}:
+        return {"operation": "help", "reply": "这个保存目标尚未接入对话，请使用对应页面保存。"}
+    explicit_style = destination is not None and destination[1] != "技能"
+    skill_target = (
+        "技能" in command or (followup and prior.get("operation") == "save_skill")
+    ) and not explicit_style
+    if (
+        not style
+        and not followup
+        and not skill_target
+        and not re.search(r"偏好(?:学习|使用)|使用偏好", text)
+    ):
         return None
     # Questions, quotations, negation and multiple commands never authorize a mutation.
     if re.search(
@@ -110,6 +135,26 @@ async def plan_action(
                 "例如：总结并保存我的写作风格；查看我的写作风格；删除写作风格《名称》。"
             ),
         }
+    # The requested destination wins over the type of the previous answer.
+    if skill_target:
+        if not re.search(r"保存|另存|存入|存到|添加|新增|转成|做成", command):
+            return {"operation": "help", "reply": "请明确技能操作，例如：把这个保存成我的技能。"}
+        value = prior.get("value")
+        if not isinstance(value, str) or not value.strip():
+            value = (
+                previous.plain_text
+                if previous and previous.content_json.get("response_kind") != "ai_error"
+                else None
+            )
+        if not value or re.search(r"(?:重新|再).{0,4}(?:总结|提炼|归纳)", command):
+            return {
+                "operation": "help",
+                "reply": "请先给出要保存的技能内容，或先让我总结，再保存成技能。",
+            }
+        action = {"operation": "save_skill", "value": value}
+        if prior.get("operation") == "save_skill" and prior.get("skill_id"):
+            action["skill_id"] = prior["skill_id"]
+        return action
     if re.search(r"(?:开启|打开|启用|关闭|关掉|停用).*(?:偏好学习|使用偏好|偏好使用)", text):
         return {"operation": "toggle", "enabled": not bool(re.search(r"关闭|关掉|停用", text))}
     candidates = []
@@ -143,7 +188,7 @@ async def plan_action(
         }
     if operation in {"save", "describe"}:
         action: dict[str, Any] = {"operation": operation}
-        if followup and prior.get("operation") in {"describe", "save"}:
+        if followup and prior.get("operation") in {"describe", "save", "save_skill"}:
             value = prior.get("value")
             if isinstance(value, str):
                 action["value"] = value
@@ -196,6 +241,30 @@ async def execute_action(
 ) -> tuple[str, dict[str, Any]]:
     operation = action["operation"]
     metadata = {"operation": operation}
+    if operation == "save_skill":
+        value = str(action.get("value") or generated).strip()
+        code = f"dialogue-{source_id}"
+        existing = await session.scalar(
+            select(Skill).where(
+                Skill.owner_id == task.owner_id,
+                Skill.scope == "personal",
+                Skill.id == action["skill_id"] if action.get("skill_id") else Skill.code == code,
+            )
+        )
+        if existing and existing.deleted_at:
+            raise ApiError(409, "SKILL_CHANGED", "这个技能已被删除，请明确要重新创建的内容。")
+        if existing is None:
+            name = value.splitlines()[0].lstrip("# ").strip() if value else ""
+            existing, _ = await create_personal_skill(
+                session,
+                owner_id=task.owner_id,
+                name=name,
+                instructions=value,
+                scenario="用户明确保存的写作方法，用于后续内容创作。",
+                code=code,
+            )
+        metadata.update({"skill_id": existing.id, "value": value})
+        return f"已保存到我的技能：《{existing.name}》。", metadata
     if operation == "help":
         return action["reply"], metadata
     if operation == "list":

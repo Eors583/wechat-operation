@@ -525,6 +525,7 @@ const send = async (payload: {
       queryClient.invalidateQueries({ queryKey: ['tasks'] }),
       queryClient.invalidateQueries({ queryKey: ['library'] }),
       queryClient.invalidateQueries({ queryKey: ['preferences'] }),
+      queryClient.invalidateQueries({ queryKey: ['skills'] }),
     ])
     if (visibleForRun() && !taskId.value) await router.replace(`/tasks/${result.task.id}`)
   } catch (error) {
@@ -715,6 +716,7 @@ const resumeOriginalRequest = () => {
         queryClient.invalidateQueries({ queryKey: ['tasks'] }),
         queryClient.invalidateQueries({ queryKey: ['library'] }),
         queryClient.invalidateQueries({ queryKey: ['preferences'] }),
+        queryClient.invalidateQueries({ queryKey: ['skills'] }),
       ])
       if (visibleForRun() && taskId.value !== result.task.id)
         await router.replace(`/tasks/${result.task.id}`)
