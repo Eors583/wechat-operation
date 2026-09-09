@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from app.providers import ProviderUnavailable, WebReferenceContent
+from app.wechat_public_layout import WeChatArticleApiConfig
 
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_EXTRACTED_CHARACTERS = 300_000
@@ -121,10 +122,12 @@ class SafeHttpWebReferenceProvider:
         timeout_seconds: float = 12.0,
         transport: httpx.AsyncBaseTransport | None = None,
         resolver: HostResolver | None = None,
+        article_apis: list[WeChatArticleApiConfig] | None = None,
     ) -> None:
         self._timeout = timeout_seconds
         self._transport = transport
         self._resolver = resolver or _resolve_public_addresses
+        self._article_apis = article_apis
         self._semaphore = asyncio.Semaphore(8)
 
     async def _validate_url(self, url: str) -> None:
@@ -155,6 +158,7 @@ class SafeHttpWebReferenceProvider:
                 return await WeChatPublicLayoutExtractionProvider(
                     timeout_seconds=self._timeout,
                     transport=self._transport,
+                    article_apis=self._article_apis,
                 ).fetch_reference(source_url=url)
             return await self._fetch(url)
 

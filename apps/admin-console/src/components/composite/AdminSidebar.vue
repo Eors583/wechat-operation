@@ -27,6 +27,7 @@ const navGroups = [
     items: [
       { label: '系统设置', icon: 'tune', to: '/settings' },
       { label: '外部知识库', icon: 'link', to: '/settings/external-knowledge' },
+      { label: '正文解析 API', icon: 'language', to: '/settings/wechat-article-apis' },
       { label: '管理员账号', icon: 'admin_panel_settings', to: '/settings/admins' },
       { label: '审计日志', icon: 'verified_user', to: '/settings/audit' },
     ],

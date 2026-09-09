@@ -11,13 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings
 from app.database import get_session
 from app.errors import ApiError
-from app.models import Admin, AdminSession, RefreshToken, User, utcnow
+from app.models import Admin, AdminSession, ExternalKnowledgeSource, RefreshToken, User, utcnow
 from app.providers import (
     ContentSafetyProvider,
     DocumentProcessingProvider,
     EmbeddingProvider,
     LayoutExtractionProvider,
     ModelProvider,
+    ProviderUnavailable,
     RerankProvider,
     SecretProvider,
     StorageProvider,
@@ -51,8 +52,63 @@ def document_processing_provider(request: Request) -> DocumentProcessingProvider
     return request.app.state.document_processing_provider
 
 
-def layout_extraction_provider(request: Request) -> LayoutExtractionProvider:
-    return request.app.state.layout_extraction_provider
+async def _wechat_article_api_configs(
+    session: AsyncSession, secrets: SecretProvider
+) -> list[Any]:
+    rows = list(
+        (
+            await session.scalars(
+                select(ExternalKnowledgeSource)
+                .where(ExternalKnowledgeSource.source_type == "wechat_article_api")
+                .order_by(ExternalKnowledgeSource.created_at)
+            )
+        ).all()
+    )
+    if not rows:
+        from app.wechat_public_layout import DEFAULT_MPTEXT_CONFIG
+
+        return [DEFAULT_MPTEXT_CONFIG]
+    from app.wechat_public_layout import WeChatArticleApiConfig
+
+    configs: list[WeChatArticleApiConfig] = []
+    for row in rows:
+        if row.status != "active":
+            continue
+        configuration = row.configuration
+        try:
+            api_key = secrets.resolve(row.secret_ref) if row.secret_ref else None
+        except ProviderUnavailable:
+            continue
+        configs.append(
+            WeChatArticleApiConfig(
+                name=row.name,
+                base_url=str(configuration.get("base_url", "")),
+                priority=int(configuration.get("priority", 100)),
+                api_key=api_key,
+                auth_header=str(configuration.get("auth_header", "X-Auth-Key")),
+                auth_prefix=str(configuration.get("auth_prefix", "")),
+            )
+        )
+    return configs
+
+
+async def layout_extraction_provider(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> LayoutExtractionProvider:
+    provider = request.app.state.layout_extraction_provider
+    from app.wechat_public_layout import WeChatPublicLayoutExtractionProvider
+
+    if isinstance(provider, WeChatPublicLayoutExtractionProvider):
+        if provider._transport is not None:  # Preserve explicit test/custom transports.
+            return provider
+        return WeChatPublicLayoutExtractionProvider(
+            timeout_seconds=request.app.state.settings.model_timeout_seconds,
+            article_apis=await _wechat_article_api_configs(
+                session, request.app.state.secret_provider
+            ),
+        )
+    return provider
 
 
 def model_provider(request: Request) -> ModelProvider:
@@ -75,8 +131,22 @@ def wechat_provider(request: Request) -> WechatProvider:
     return request.app.state.wechat_provider
 
 
-def web_reference_provider(request: Request) -> WebReferenceProvider:
-    return request.app.state.web_reference_provider
+async def web_reference_provider(
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> WebReferenceProvider:
+    from app.web_references import SafeHttpWebReferenceProvider
+
+    configured = request.app.state.web_reference_provider
+    if not isinstance(configured, SafeHttpWebReferenceProvider):
+        return configured
+    if configured._transport is not None:  # Preserve explicit test/custom transports.
+        return configured
+    return SafeHttpWebReferenceProvider(
+        article_apis=await _wechat_article_api_configs(
+            session, request.app.state.secret_provider
+        )
+    )
 
 
 def secret_provider(request: Request) -> SecretProvider:

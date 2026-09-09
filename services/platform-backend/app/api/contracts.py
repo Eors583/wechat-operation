@@ -840,6 +840,27 @@ class ExternalKnowledgeSourceListResponse(ContractModel):
     items: list[ExternalKnowledgeSourceResponse]
 
 
+class WechatArticleApiResponse(ContractModel):
+    id: str
+    name: str
+    base_url: str
+    priority: int
+    auth_header: str
+    auth_prefix: str
+    secret_configured: bool
+    status: str
+    is_default: bool
+    last_tested_at: datetime | None
+    last_test_result: JsonValue
+    error_code: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class WechatArticleApiListResponse(ContractModel):
+    items: list[WechatArticleApiResponse]
+
+
 class RouteTestResponse(ValidationTestResponse):
     checked_deployments: list[str]
 

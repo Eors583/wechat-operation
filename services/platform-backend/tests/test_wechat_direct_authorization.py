@@ -405,11 +405,20 @@ async def test_direct_scan_authorization_binds_account_to_authenticated_owner(
         stored.expires_at = utcnow() + timedelta(seconds=600)
         await session.commit()
 
+    wrong_component = await client.get(
+        "/callbacks/v1/wechat/authorize",
+        params={
+            "state": state,
+            "component_appid": "wx-wrong-component-appid",
+            "auth_code": "one-time-authorization-code",
+        },
+    )
+    assert wrong_component.status_code == 409, wrong_component.text
+
     callback = await client.get(
         "/callbacks/v1/wechat/authorize",
         params={
             "state": state,
-            "component_appid": "wx-component-appid",
             "auth_code": "one-time-authorization-code",
         },
     )

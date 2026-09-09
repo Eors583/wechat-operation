@@ -16,6 +16,7 @@ import type {
   TaskStatus,
   UserRecord,
   UserStatus,
+  WechatArticleApi,
   WechatPlatformConfig,
 } from "./contracts";
 import { adminOpenApi, adminOpenApiData, requestId } from "./client";
@@ -1097,6 +1098,83 @@ export const adminRepository = {
       created_at: item.created_at,
       updated_at: item.updated_at,
     }));
+  },
+
+  async wechatArticleApis(): Promise<WechatArticleApi[]> {
+    const response = await adminOpenApiData(
+      adminOpenApi.GET("/admin-api/v1/wechat-article-apis"),
+    );
+    return response.items.map((item) => ({
+      ...item,
+      status: item.status === "active" ? "active" : "disabled",
+      last_test_passed: boolean(record(item.last_test_result).passed),
+    }));
+  },
+
+  async createWechatArticleApi(input: {
+    name: string;
+    baseUrl: string;
+    priority: number;
+    apiKey?: string;
+    authHeader: string;
+    authPrefix: string;
+  }): Promise<void> {
+    await adminOpenApiData(
+      adminOpenApi.POST("/admin-api/v1/wechat-article-apis", {
+        body: {
+          name: input.name,
+          base_url: input.baseUrl,
+          priority: input.priority,
+          api_key: input.apiKey,
+          auth_header: input.authHeader,
+          auth_prefix: input.authPrefix,
+        },
+      }),
+    );
+  },
+
+  async updateWechatArticleApi(
+    sourceId: string,
+    input: {
+      name?: string;
+      baseUrl?: string;
+      priority?: number;
+      apiKey?: string;
+      clearApiKey?: boolean;
+      authHeader?: string;
+      authPrefix?: string;
+      status?: "active" | "disabled";
+      reason: string;
+    },
+  ): Promise<void> {
+    await adminOpenApiData(
+      adminOpenApi.PATCH("/admin-api/v1/wechat-article-apis/{source_id}", {
+        params: { path: { source_id: sourceId } },
+        body: {
+          name: input.name,
+          base_url: input.baseUrl,
+          priority: input.priority,
+          api_key: input.apiKey,
+          clear_api_key: input.clearApiKey ?? false,
+          auth_header: input.authHeader,
+          auth_prefix: input.authPrefix,
+          status: input.status,
+          reason: input.reason,
+        },
+      }),
+    );
+  },
+
+  async testWechatArticleApi(
+    sourceId: string,
+    sourceUrl: string,
+  ): Promise<{ passed: boolean; message: string }> {
+    return adminOpenApiData(
+      adminOpenApi.POST("/admin-api/v1/wechat-article-apis/{source_id}/test", {
+        params: { path: { source_id: sourceId } },
+        body: { source_url: sourceUrl },
+      }),
+    );
   },
 
   async createExternalKnowledgeSource(input: {

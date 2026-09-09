@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import ipaddress
 import re
+import socket
 from collections import Counter
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -13,6 +16,7 @@ from app.providers import LayoutExtractionResult, ProviderUnavailable, WebRefere
 
 _WECHAT_HOST = "mp.weixin.qq.com"
 _MAX_HTML_CHARS = 5_000_000
+_DEFAULT_MPTEXT_URL = "https://down.mptext.top/api/public/v1/download"
 _BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Linux; Android 12; SM-G9910) AppleWebKit/537.36 "
@@ -61,6 +65,25 @@ class _Sample:
         return max(1, min(len(self.text), 200))
 
 
+@dataclass(frozen=True, slots=True)
+class WeChatArticleApiConfig:
+    """One normalized HTML download endpoint in the configured fallback chain."""
+
+    name: str
+    base_url: str
+    priority: int = 100
+    api_key: str | None = None
+    auth_header: str = "X-Auth-Key"
+    auth_prefix: str = ""
+
+
+DEFAULT_MPTEXT_CONFIG = WeChatArticleApiConfig(
+    name="mptext 免费 API",
+    base_url=_DEFAULT_MPTEXT_URL,
+    priority=10,
+)
+
+
 class WeChatPublicLayoutExtractionProvider:
     """Extract reusable layout tokens from public WeChat article HTML."""
 
@@ -69,9 +92,16 @@ class WeChatPublicLayoutExtractionProvider:
         *,
         timeout_seconds: float = 20.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        article_apis: list[WeChatArticleApiConfig] | None = None,
+        direct_fallback: bool = True,
     ) -> None:
         self._timeout = timeout_seconds
         self._transport = transport
+        self._article_apis = sorted(
+            article_apis or [],
+            key=lambda item: item.priority,
+        )
+        self._direct_fallback = direct_fallback
 
     async def extract(self, *, source_url: str) -> LayoutExtractionResult:
         clean_url = _validate_url(source_url)
@@ -138,6 +168,76 @@ class WeChatPublicLayoutExtractionProvider:
         return parser
 
     async def _fetch_page(self, url: str) -> str:
+        last_error: ProviderUnavailable | None = None
+        for api in self._article_apis:
+            try:
+                return await self._fetch_page_from_api(url, api)
+            except ProviderUnavailable as exc:
+                last_error = exc
+                continue
+        if not self._direct_fallback:
+            raise last_error or ProviderUnavailable("没有可用的微信公众号正文 API")
+        return await self._fetch_page_direct(url)
+
+    async def _fetch_page_from_api(self, url: str, api: WeChatArticleApiConfig) -> str:
+        parsed = urlparse(api.base_url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.port not in {None, 443}
+        ):
+            raise ProviderUnavailable(f"{api.name} 的接口地址不安全")
+        if self._transport is None:
+            try:
+                addresses = await asyncio.to_thread(
+                    lambda: {
+                        str(item[4][0])
+                        for item in socket.getaddrinfo(
+                            parsed.hostname, None, type=socket.SOCK_STREAM
+                        )
+                    }
+                )
+            except OSError as exc:
+                raise ProviderUnavailable(f"{api.name} 的接口域名无法解析") from exc
+            if not addresses or any(not _is_public_ip(value) for value in addresses):
+                raise ProviderUnavailable(f"{api.name} 的接口地址不是公网地址")
+        headers = dict(_BROWSER_HEADERS)
+        if api.api_key:
+            headers[api.auth_header] = f"{api.auth_prefix}{api.api_key}"
+        try:
+            async with httpx.AsyncClient(
+                headers=headers,
+                timeout=self._timeout,
+                follow_redirects=False,
+                transport=self._transport,
+            ) as client:
+                async with client.stream(
+                    "GET", api.base_url, params={"url": url, "format": "html"}
+                ) as response:
+                    if response.is_redirect:
+                        raise ProviderUnavailable(f"{api.name} 返回了不受信任的跳转")
+                    response.raise_for_status()
+                    content_type = response.headers.get("content-type", "").casefold()
+                    if "html" not in content_type and "text/plain" not in content_type:
+                        raise ProviderUnavailable(f"{api.name} 没有返回 HTML")
+                    chunks: list[bytes] = []
+                    size = 0
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > _MAX_HTML_CHARS:
+                            raise ProviderUnavailable(f"{api.name} 返回的文章页面过大")
+                        chunks.append(chunk)
+                    text = b"".join(chunks).decode(
+                        response.encoding or "utf-8", errors="replace"
+                    )
+        except httpx.HTTPError as exc:
+            raise ProviderUnavailable(f"{api.name} 暂时不可用") from exc
+        _validate_article_html(text, provider_name=api.name)
+        return text
+
+    async def _fetch_page_direct(self, url: str) -> str:
         try:
             async with httpx.AsyncClient(
                 headers=_BROWSER_HEADERS,
@@ -181,9 +281,26 @@ class WeChatPublicLayoutExtractionProvider:
         if urlparse(final_url).hostname != _WECHAT_HOST:
             raise ProviderUnavailable("微信文章链接跳转到了非微信页面，已拒绝提取。")
         _raise_for_wechat_guard_page(text, final_url=final_url)
-        if 'id="js_content"' not in text.casefold() and "rich_media_content" not in text.casefold():
-            raise ProviderUnavailable("没有读取到微信公众号正文，请确认文章链接仍然有效。")
+        _validate_article_html(text, provider_name="微信公众号")
         return text
+
+
+def _is_public_ip(value: str) -> bool:
+    address = ipaddress.ip_address(value)
+    return not (
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    )
+
+
+def _validate_article_html(text: str, *, provider_name: str) -> None:
+    folded = text.casefold()
+    if 'id="js_content"' not in folded and "rich_media_content" not in folded:
+        raise ProviderUnavailable(f"{provider_name} 没有返回可识别的微信公众号正文")
 
 
 class _WeChatContentParser(HTMLParser):

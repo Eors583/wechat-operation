@@ -54,6 +54,11 @@ export const router = createRouter({
           component: () => import('@/pages/settings/ExternalKnowledgePage.vue'),
         },
         {
+          path: 'settings/wechat-article-apis',
+          name: 'wechat-article-apis',
+          component: () => import('@/pages/settings/WechatArticleApisPage.vue'),
+        },
+        {
           path: 'settings/admins',
           name: 'admins',
           component: () => import('@/pages/settings/AdminAccountsPage.vue'),

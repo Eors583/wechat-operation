@@ -544,7 +544,7 @@ async def direct_wechat_authorization_entry(
 async def direct_wechat_authorization_callback(
     request: Request,
     state: str = Query(min_length=32, max_length=200),
-    component_appid: str = Query(min_length=3, max_length=120),
+    component_appid: str | None = Query(default=None, min_length=3, max_length=120),
     auth_code: str | None = Query(default=None, min_length=3, max_length=1000),
     authorization_code: str | None = Query(default=None, min_length=3, max_length=1000),
     session: AsyncSession = Depends(get_session),
@@ -574,7 +574,11 @@ async def direct_wechat_authorization_callback(
         .where(WechatPlatformConfig.id == authorization_state.platform_config_id)
         .with_for_update()
     )
-    if not config or config.component_appid != component_appid or config.status != "published":
+    if (
+        not config
+        or config.status != "published"
+        or (component_appid is not None and config.component_appid != component_appid)
+    ):
         raise ApiError(409, "WECHAT_CONFIG_CHANGED", "微信平台配置已变化，请重新扫码授权。")
     client = WechatOpenPlatformClient()
     try:

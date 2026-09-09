@@ -156,6 +156,12 @@ def readable_model_result(result: ModelResult) -> ModelResult:
     return dataclass_replace(result, text=extract_plain_text(document), structured=document)
 
 
+def article_repair_route(route_snapshot: dict[str, Any]) -> dict[str, Any]:
+    routes = route_snapshot.get("pipeline_routes")
+    revision = routes.get("article_revision") if isinstance(routes, dict) else None
+    return revision if isinstance(revision, dict) else route_snapshot
+
+
 def generated_article_message(content: dict[str, Any]) -> str:
     if "article" not in content:
         return ""
@@ -2147,7 +2153,7 @@ async def process_ai_run(
                 },
             )
             repair_result = await execute_model_call(
-                snapshot=run.model_route_snapshot,
+                snapshot=article_repair_route(run.model_route_snapshot),
                 purpose="article_generation",
                 prompt=(
                     article_output_contract()

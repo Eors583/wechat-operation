@@ -258,6 +258,23 @@ export interface ExternalKnowledgeSource {
   updated_at: string;
 }
 
+export interface WechatArticleApi {
+  id: string;
+  name: string;
+  base_url: string;
+  priority: number;
+  auth_header: string;
+  auth_prefix: string;
+  secret_configured: boolean;
+  status: "active" | "disabled";
+  is_default: boolean;
+  last_tested_at: string | null;
+  last_test_passed: boolean;
+  error_code: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AdminAccount {
   id: string;
   username: string;

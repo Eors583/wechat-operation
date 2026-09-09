@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from app.providers import ProviderUnavailable
-from app.wechat_public_layout import WeChatPublicLayoutExtractionProvider
+from app.wechat_public_layout import WeChatArticleApiConfig, WeChatPublicLayoutExtractionProvider
 
 
 @pytest.mark.asyncio
@@ -67,6 +67,71 @@ async def test_wechat_public_layout_extracts_inline_article_styles() -> None:
     assert result.style_tokens["quote"]["background"] == "#f3f4f6"
     assert result.style_tokens["quote"]["border_left"] == "4px solid #059669"
     assert result.style_tokens["caption"]["align"] == "center"
+
+
+@pytest.mark.asyncio
+async def test_wechat_article_api_returns_downloaded_article_html() -> None:
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text=(
+                '<html><meta property="og:title" content="第三方正文">'
+                '<div id="js_content"><p>'
+                + "这是通过第三方接口读取的微信公众号正文。" * 8
+                + "</p></div></html>"
+            ),
+        )
+
+    provider = WeChatPublicLayoutExtractionProvider(
+        transport=httpx.MockTransport(handler),
+        article_apis=[
+            WeChatArticleApiConfig(
+                name="mptext",
+                base_url="https://down.mptext.top/api/public/v1/download",
+                api_key="secret-key",
+            )
+        ],
+        direct_fallback=False,
+    )
+    result = await provider.fetch_reference(source_url="https://mp.weixin.qq.com/s/example")
+
+    assert result.title == "第三方正文"
+    assert "第三方接口读取" in result.text
+    assert requests[0].url.params["format"] == "html"
+    assert requests[0].url.params["url"] == "https://mp.weixin.qq.com/s/example"
+    assert requests[0].headers["X-Auth-Key"] == "secret-key"
+
+
+@pytest.mark.asyncio
+async def test_wechat_article_api_falls_back_in_priority_order() -> None:
+    hosts: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(str(request.url.host))
+        if request.url.host == "first.example.com":
+            return httpx.Response(429, text="rate limited")
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            text='<div id="js_content"><p>' + "备用接口正文内容。" * 12 + "</p></div>",
+        )
+
+    provider = WeChatPublicLayoutExtractionProvider(
+        transport=httpx.MockTransport(handler),
+        article_apis=[
+            WeChatArticleApiConfig("second", "https://second.example.com/download", 20),
+            WeChatArticleApiConfig("first", "https://first.example.com/download", 10),
+        ],
+        direct_fallback=False,
+    )
+    result = await provider.fetch_reference(source_url="https://mp.weixin.qq.com/s/example")
+
+    assert "备用接口正文" in result.text
+    assert hosts == ["first.example.com", "second.example.com"]
 
 
 @pytest.mark.asyncio

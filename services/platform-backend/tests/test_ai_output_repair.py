@@ -4,10 +4,20 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy import select
 
+from app.domains.ai import article_repair_route
 from app.models import AIRunAttempt, AIRunEvent
 from app.providers import ModelResult
 
 from .conftest import bearer, register_and_login
+
+
+def test_article_repair_uses_frozen_revision_route() -> None:
+    selected = {"primary_deployment_id": "manus", "pipeline_routes": {}}
+    revision = {"primary_deployment_id": "qwen"}
+
+    assert article_repair_route(selected) is selected
+    selected["pipeline_routes"] = {"article_revision": revision}
+    assert article_repair_route(selected) is revision
 
 
 class InvalidThenRepairedModel:

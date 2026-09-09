@@ -100,6 +100,7 @@ from app.security import (
 )
 from app.system_settings import ai_run_credit_cost
 from app.wechat_open_platform import WechatOpenPlatformClient, component_access_token
+from app.wechat_public_layout import WeChatArticleApiConfig, WeChatPublicLayoutExtractionProvider
 
 from . import contracts as contract
 from .utils import model_dict
@@ -2715,6 +2716,33 @@ class ExternalKnowledgeSourcePatch(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
 
 
+class WechatArticleApiCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    base_url: HttpUrl
+    priority: int = Field(default=100, ge=1, le=999)
+    api_key: SecretStr | None = None
+    auth_header: str = Field(default="X-Auth-Key", pattern=r"^[A-Za-z0-9-]+$", max_length=80)
+    auth_prefix: str = Field(default="", max_length=32)
+
+
+class WechatArticleApiPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    base_url: HttpUrl | None = None
+    priority: int | None = Field(default=None, ge=1, le=999)
+    api_key: SecretStr | None = None
+    clear_api_key: bool = False
+    auth_header: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9-]+$", max_length=80
+    )
+    auth_prefix: str | None = Field(default=None, max_length=32)
+    status: Literal["active", "disabled"] | None = None
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class WechatArticleApiTestRequest(BaseModel):
+    source_url: HttpUrl
+
+
 def _external_source_public(source: ExternalKnowledgeSource) -> dict[str, Any]:
     return {
         "id": source.id,
@@ -2735,6 +2763,26 @@ def _external_source_public(source: ExternalKnowledgeSource) -> dict[str, Any]:
     }
 
 
+def _wechat_article_api_public(source: ExternalKnowledgeSource) -> dict[str, Any]:
+    configuration = source.configuration
+    return {
+        "id": source.id,
+        "name": source.name,
+        "base_url": configuration.get("base_url", ""),
+        "priority": configuration.get("priority", 100),
+        "auth_header": configuration.get("auth_header", "X-Auth-Key"),
+        "auth_prefix": configuration.get("auth_prefix", ""),
+        "secret_configured": bool(source.secret_ref),
+        "status": source.status,
+        "is_default": bool(configuration.get("is_default")),
+        "last_tested_at": source.last_tested_at,
+        "last_test_result": source.last_test_result,
+        "error_code": source.error_code,
+        "created_at": source.created_at,
+        "updated_at": source.updated_at,
+    }
+
+
 @router.get(
     "/external-knowledge-sources",
     response_model=contract.ExternalKnowledgeSourceListResponse,
@@ -2747,11 +2795,190 @@ async def list_external_knowledge_sources(
     rows = list(
         (
             await session.scalars(
-                select(ExternalKnowledgeSource).order_by(ExternalKnowledgeSource.created_at)
+                select(ExternalKnowledgeSource)
+                .where(ExternalKnowledgeSource.source_type == "lexiang")
+                .order_by(ExternalKnowledgeSource.created_at)
             )
         ).all()
     )
     return {"items": [_external_source_public(row) for row in rows]}
+
+
+@router.get(
+    "/wechat-article-apis",
+    response_model=contract.WechatArticleApiListResponse,
+)
+async def list_wechat_article_apis(
+    admin: Admin = Depends(require_admin_permission("settings:read")),
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, Any]:
+    del admin
+    rows = list(
+        (
+            await session.scalars(
+                select(ExternalKnowledgeSource)
+                .where(ExternalKnowledgeSource.source_type == "wechat_article_api")
+                .order_by(ExternalKnowledgeSource.created_at)
+            )
+        ).all()
+    )
+    rows.sort(key=lambda item: int(item.configuration.get("priority", 100)))
+    return {"items": [_wechat_article_api_public(row) for row in rows]}
+
+
+@router.post(
+    "/wechat-article-apis",
+    status_code=201,
+    response_model=contract.WechatArticleApiResponse,
+)
+async def create_wechat_article_api(
+    payload: WechatArticleApiCreate,
+    request: Request,
+    admin: Admin = Depends(require_admin_permission("settings:write")),
+    session: AsyncSession = Depends(get_session),
+    secrets: SecretProvider = Depends(secret_provider),
+) -> dict[str, Any]:
+    source = ExternalKnowledgeSource(
+        source_type="wechat_article_api",
+        name=payload.name.strip(),
+        configuration={
+            "base_url": str(payload.base_url),
+            "priority": payload.priority,
+            "auth_header": payload.auth_header,
+            "auth_prefix": payload.auth_prefix,
+            "is_default": False,
+        },
+        secret_ref=(
+            secrets.protect(payload.api_key.get_secret_value()) if payload.api_key else None
+        ),
+        scope={},
+        status="disabled",
+    )
+    session.add(source)
+    await session.flush()
+    audit(
+        session,
+        actor_type="admin",
+        actor_id=admin.id,
+        action="wechat_article_api.create",
+        target_type="wechat_article_api",
+        target_id=source.id,
+        request_id=request.state.request_id,
+        details={"base_url": str(payload.base_url), "priority": payload.priority},
+    )
+    await session.commit()
+    return _wechat_article_api_public(source)
+
+
+@router.patch(
+    "/wechat-article-apis/{source_id}",
+    response_model=contract.WechatArticleApiResponse,
+)
+async def patch_wechat_article_api(
+    source_id: str,
+    payload: WechatArticleApiPatch,
+    request: Request,
+    admin: Admin = Depends(require_admin_permission("settings:write")),
+    session: AsyncSession = Depends(get_session),
+    secrets: SecretProvider = Depends(secret_provider),
+) -> dict[str, Any]:
+    source = await session.get(ExternalKnowledgeSource, source_id)
+    if not source or source.source_type != "wechat_article_api":
+        raise ApiError(404, "WECHAT_ARTICLE_API_NOT_FOUND", "正文 API 配置不存在。")
+    configuration = dict(source.configuration)
+    if payload.name is not None:
+        source.name = payload.name.strip()
+    if payload.base_url is not None:
+        configuration["base_url"] = str(payload.base_url)
+    if payload.priority is not None:
+        configuration["priority"] = payload.priority
+    if payload.auth_header is not None:
+        configuration["auth_header"] = payload.auth_header
+    if payload.auth_prefix is not None:
+        configuration["auth_prefix"] = payload.auth_prefix
+    if payload.api_key is not None:
+        source.secret_ref = secrets.protect(payload.api_key.get_secret_value())
+    elif payload.clear_api_key:
+        source.secret_ref = None
+    if payload.status is not None:
+        source.status = payload.status
+    source.configuration = configuration
+    audit(
+        session,
+        actor_type="admin",
+        actor_id=admin.id,
+        action="wechat_article_api.update",
+        target_type="wechat_article_api",
+        target_id=source.id,
+        reason=payload.reason,
+        request_id=request.state.request_id,
+        details={
+            "status": payload.status,
+            "priority": payload.priority,
+            "secret_replaced": payload.api_key is not None,
+            "secret_cleared": payload.clear_api_key,
+        },
+    )
+    await session.commit()
+    return _wechat_article_api_public(source)
+
+
+@router.post(
+    "/wechat-article-apis/{source_id}/test",
+    response_model=contract.ValidationTestResponse,
+)
+async def test_wechat_article_api(
+    source_id: str,
+    payload: WechatArticleApiTestRequest,
+    request: Request,
+    admin: Admin = Depends(require_admin_permission("settings:write")),
+    session: AsyncSession = Depends(get_session),
+    secrets: SecretProvider = Depends(secret_provider),
+) -> dict[str, Any]:
+    source = await session.get(ExternalKnowledgeSource, source_id)
+    if not source or source.source_type != "wechat_article_api":
+        raise ApiError(404, "WECHAT_ARTICLE_API_NOT_FOUND", "正文 API 配置不存在。")
+    configuration = source.configuration
+    try:
+        api_key = secrets.resolve(source.secret_ref) if source.secret_ref else None
+        result = await WeChatPublicLayoutExtractionProvider(
+            article_apis=[
+                WeChatArticleApiConfig(
+                    name=source.name,
+                    base_url=str(configuration.get("base_url", "")),
+                    priority=int(configuration.get("priority", 100)),
+                    api_key=api_key,
+                    auth_header=str(configuration.get("auth_header", "X-Auth-Key")),
+                    auth_prefix=str(configuration.get("auth_prefix", "")),
+                )
+            ],
+            direct_fallback=False,
+        ).fetch_reference(source_url=str(payload.source_url))
+        test_result = {
+            "passed": True,
+            "message": f"连接成功，已读取《{result.title}》（{len(result.text)} 字）。",
+        }
+        source.error_code = None
+    except ProviderUnavailable:
+        test_result = {
+            "passed": False,
+            "message": "连接失败，请检查接口地址、密钥、额度和文章链接。",
+        }
+        source.error_code = "WECHAT_ARTICLE_API_TEST_FAILED"
+    source.last_tested_at = utcnow()
+    source.last_test_result = test_result
+    audit(
+        session,
+        actor_type="admin",
+        actor_id=admin.id,
+        action="wechat_article_api.test",
+        target_type="wechat_article_api",
+        target_id=source.id,
+        request_id=request.state.request_id,
+        details={"passed": test_result["passed"]},
+    )
+    await session.commit()
+    return test_result
 
 
 @router.post(
