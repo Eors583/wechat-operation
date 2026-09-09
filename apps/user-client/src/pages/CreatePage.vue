@@ -32,7 +32,6 @@ import MessageArticleCard from '@/components/business/MessageArticleCard.vue'
 import { usePublicSettings } from '@/composables/usePublicSettings'
 import { renderSafeMarkdown } from '@/utils/safeMarkdown'
 import { defaultArticleTemplate } from '@/utils/articleDownload'
-import { messageArticle } from '@/utils/messageArticle'
 
 const route = useRoute()
 const router = useRouter()
@@ -121,7 +120,6 @@ const skills = computed(() => [
 ])
 const articleVisible = ref(false)
 const selectedArticle = ref<Article | null>(null)
-const historicalPreview = ref(false)
 let previewRequest = 0
 const previewTemplateId = ref<string | null>(null)
 const previewTemplatesQuery = useQuery({
@@ -701,10 +699,10 @@ onBeforeUnmount(() => {
 const openArticle = async (message: Message) => {
   const request = ++previewRequest
   try {
-    const resolved = await messageArticle(api, message)
+    if (!message.articleId) throw new Error('这条消息没有关联文章。')
+    const resolved = await api.getArticle(message.articleId)
     if (request !== previewRequest) return
-    selectedArticle.value = resolved.article
-    historicalPreview.value = resolved.historical
+    selectedArticle.value = resolved
     articleVisible.value = true
   } catch (error) {
     if (request === previewRequest)
@@ -1026,9 +1024,7 @@ const layoutArticle = async () => {
     <AppDialog
       v-if="selectedArticle"
       v-model="articleVisible"
-      :title="
-        historicalPreview ? `历史文章预览 · 第 ${selectedArticle.versionNo} 版（只读）` : '文章预览'
-      "
+      title="文章预览"
       width="1480px"
       :full-screen-mobile="false"
     >
@@ -1037,7 +1033,6 @@ const layoutArticle = async () => {
         ref="articlePreviewPanel"
         :key="`${selectedArticle.id}:${selectedArticle.versionNo}`"
         :article="selectedArticle"
-        :read-only="historicalPreview"
         :template="previewTemplate"
         :templates="previewTemplates"
         :templates-loading="previewTemplatesQuery.isPending.value"
@@ -1048,7 +1043,7 @@ const layoutArticle = async () => {
         "
         @select-template="previewTemplateId = $event"
       />
-      <template v-if="!historicalPreview" #actions>
+      <template #actions>
         <AppButton
           class="article-preview-dialog__button article-preview-dialog__local"
           variant="outline"
