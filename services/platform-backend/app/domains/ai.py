@@ -14,6 +14,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
+from app.domains.conversation_actions import execute_action, needs_model, plan_action
 from app.domains.dialogue_flow import (
     explicit_article_request,
     local_revision_requested,
@@ -1456,6 +1457,9 @@ async def create_ai_run(
         has_current_article=current_article_snapshot is not None,
         has_reference_links=has_links,
     )
+    conversation_action = await plan_action(session, task, text, recent_messages)
+    if conversation_action:
+        run_type = "discussion"
     if local_revision_requested(text):
         local_content = (current_article_snapshot or {}).get("content")
         run_type = (
@@ -1468,6 +1472,9 @@ async def create_ai_run(
         run_type = "article_generation"
     file_ids = await conversation_file_ids(session, task_id=task.id, content=content)
     deterministic = None if file_ids else _deterministic_response(run_type)
+    if conversation_action and not needs_model(conversation_action):
+        deterministic = ("正在处理写作风格请求。", [])
+        file_ids = []
     route_purpose = "article_generation" if run_type == "article_generation" else "fast_task"
     route_snapshot: dict[str, Any] = (
         {"purpose": "deterministic_clarification", "provider_mode": "internal"}
@@ -1590,22 +1597,26 @@ async def create_ai_run(
         document_context,
         reference_links,
         external_context,
-    ) = await _resolve_untrusted_references(
-        session,
-        owner_id=owner_id,
-        task_id=task.id,
-        project_id=task.project_id,
-        query=text,
-        content=reference_content,
-        retrieval=retrieval,
-        secrets=secrets,
-        web_references=web_references,
-        storage=storage,
-        settings=settings,
-        external_knowledge_enabled=not (
-            isinstance(feature_flags, dict) and feature_flags.get("external_knowledge") is False
-        ),
-        document_character_budget=max(2_000, document_token_budget * 3),
+    ) = (
+        ([], [], [], [])
+        if conversation_action and not needs_model(conversation_action)
+        else await _resolve_untrusted_references(
+            session,
+            owner_id=owner_id,
+            task_id=task.id,
+            project_id=task.project_id,
+            query=text,
+            content=reference_content,
+            retrieval=retrieval,
+            secrets=secrets,
+            web_references=web_references,
+            storage=storage,
+            settings=settings,
+            external_knowledge_enabled=not (
+                isinstance(feature_flags, dict) and feature_flags.get("external_knowledge") is False
+            ),
+            document_character_budget=max(2_000, document_token_budget * 3),
+        )
     )
     if any(item.get("fetch_status") == "unavailable" for item in document_context):
         raise ApiError(
@@ -1667,7 +1678,8 @@ async def create_ai_run(
     )
     session.add(message)
     await session.flush()
-    await learn_preferences(session, owner_id=owner_id, message_id=message.id)
+    if not conversation_action:
+        await learn_preferences(session, owner_id=owner_id, message_id=message.id)
     frozen_context = {
         "untrusted_user_input": text,
         "untrusted_message_content": content,
@@ -1709,6 +1721,7 @@ async def create_ai_run(
         "skill_selection": skill_selection,
         "run_type": run_type,
         "route_purpose": route_purpose,
+        "conversation_action": conversation_action,
         "pipeline_prompt_versions": pipeline_prompts,
         "ai_settings": ai_settings,
     }
@@ -1895,6 +1908,12 @@ async def process_ai_run(
     directives: list[str] = []
     execution_attempts: list[ModelExecutionAttempt] = []
     model_context = dict(run.context_snapshot)
+    conversation_action = model_context.get("conversation_action")
+    if not isinstance(conversation_action, dict):
+        conversation_action = None
+    action_metadata: dict[str, Any] | None = None
+    if conversation_action and not needs_model(conversation_action):
+        deterministic = ("正在处理写作风格请求。", [])
     frozen_current = model_context.get("current_article")
     local_document = frozen_current.get("content") if isinstance(frozen_current, dict) else None
     local_target = (
@@ -2178,7 +2197,7 @@ async def process_ai_run(
             "交付内容必须直接包含实际正文，不得只返回完成说明或本地文件下载路径。"
         )
         if run.run_type != "article_generation":
-            if style_action(user_input):
+            if conversation_action or style_action(user_input):
                 directives.append(
                     "本轮提炼写作风格，不修改文章。结合用户指定的文章、最近对话和明确反馈，"
                     "输出一个简短标题和具体风格要求，格式为 '# 标题'、空行、正文。"
@@ -2186,6 +2205,12 @@ async def process_ai_run(
                     "开头、论证和用词，不以文章字数冒充完整风格。不编造未提供的资料。"
                     "仅返回风格内容，不声称已经保存；保存结果由系统确认。"
                 )
+                if conversation_action and conversation_action["operation"] == "update":
+                    model_context["style_to_update"] = conversation_action["value"]
+                    directives.append(
+                        "本轮只修改 style_to_update 中的写作风格，按用户要求调整标题或内容，"
+                        "保留未要求修改的部分，返回修改后的完整风格；不要重新总结文章。"
+                    )
             if is_preference_only(user_input):
                 directives.append(
                     "本轮仅设置未来写作偏好，不是创作或修改文章。不要生成正文、文章预览或声称"
@@ -2235,6 +2260,7 @@ async def process_ai_run(
                 run.run_type != "article_generation"
                 and not is_preference_only(user_input)
                 and not style_action(user_input)
+                and not conversation_action
             ),
         )
     await stage("validating_output")
@@ -2360,43 +2386,18 @@ async def process_ai_run(
             "生成内容未通过安全检查。",
             details={"reason": reason},
         )
-    style_saved = False
-    if run.run_type != "article_generation" and style_action(user_input) == "save":
-        if not task.use_preferences:
-            result = dataclass_replace(
-                result, text=result.text + "\n\n当前任务关闭了偏好学习，未保存。"
-            )
-        elif (
-            not re.fullmatch(r"# [^\r\n]{1,80}\r?\n\s*\n[\s\S]+", result.text.strip())
-            or len(result.text.strip()) > 2000
-        ):
-            raise ApiError(422, "WRITING_STYLE_INVALID", "风格总结格式不完整或过长，未保存为偏好。")
-        else:
-            preference = await session.scalar(
-                select(UserPreference).where(
-                    UserPreference.user_id == run.owner_id,
-                    UserPreference.source_id == model_context.get("source_message_id"),
-                    UserPreference.preference_type == "writing_style",
-                )
-            )
-            if preference is None:
-                session.add(
-                    UserPreference(
-                        user_id=run.owner_id,
-                        project_id=task.project_id,
-                        preference_type="writing_style",
-                        value=result.text.strip(),
-                        scope="project" if task.project_id else "personal",
-                        confidence=1,
-                        source_type="explicit",
-                        source_id=model_context.get("source_message_id"),
-                        status="confirmed",
-                    )
-                )
-                style_saved = True
-            elif preference.status == "confirmed":
-                style_saved = True
-    if not is_preference_only(user_input):
+    if conversation_action:
+        action_text, action_metadata = await execute_action(
+            session,
+            task,
+            conversation_action,
+            source_id=str(model_context["source_message_id"]),
+            generated=result.text,
+        )
+        result = dataclass_replace(result, text=action_text)
+        # Action acknowledgements are persisted with the mutation, not streamed before commit.
+        live_events = False
+    if conversation_action or not is_preference_only(user_input):
         if streamed_text:
             if stream_buffer:
                 await emit("text.delta", {"text": stream_buffer})
@@ -2478,15 +2479,21 @@ async def process_ai_run(
             content_json={"response_kind": run.run_type, "suggestions": suggestions},
             plain_text=result.text,
         )
-    if run.run_type != "article_generation" and is_preference_only(user_input):
+    if (
+        not conversation_action
+        and run.run_type != "article_generation"
+        and is_preference_only(user_input)
+    ):
         assistant_message.plain_text = (
             "本轮仅处理写作偏好，没有生成或修改文章；保存结果由后端确认。"
         )
     session.add(assistant_message)
-    if style_saved:
-        acknowledgement = "\n\n写作风格已保存，可在个人设置中查看和编辑；本轮没有修改文章。"
-        assistant_message.plain_text += acknowledgement
-        await emit("text.delta", {"text": acknowledgement})
+    if action_metadata:
+        assistant_message.content_json = {
+            "response_kind": "discussion",
+            "suggestions": [],
+            "conversation_action": action_metadata,
+        }
     deterministic_memory = f"用户最近要求：{user_input.strip()[:1500]}\n" + (
         f"当前文章：{article.title}（版本 {version.version_no}）"
         if article and version
@@ -2496,6 +2503,7 @@ async def process_ai_run(
     memory_source = "deterministic-run-summary-v1"
     if (
         not deterministic
+        and not conversation_action
         and run.run_type != "article_generation"
         and is_preference_only(user_input)
     ):
@@ -2535,7 +2543,11 @@ async def process_ai_run(
                     "message": "记忆摘要模型不可用，已使用确定性摘要继续完成任务。",
                 },
             )
-    if run.run_type != "article_generation" and is_preference_only(user_input):
+    if (
+        not conversation_action
+        and run.run_type != "article_generation"
+        and is_preference_only(user_input)
+    ):
         learned = list(
             (
                 await session.scalars(
@@ -2589,7 +2601,7 @@ async def process_ai_run(
             version_no=int(latest_summary_version or 0) + 1,
         )
     )
-    if not deterministic and not is_preference_only(user_input):
+    if not deterministic and not conversation_action and not is_preference_only(user_input):
         emit_outbox(
             session,
             event_type="ai.run.memory.requested",

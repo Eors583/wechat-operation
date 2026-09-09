@@ -477,6 +477,7 @@ const send = async (payload: { text: string; attachments: Attachment[]; draftId?
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['tasks'] }),
       queryClient.invalidateQueries({ queryKey: ['library'] }),
+      queryClient.invalidateQueries({ queryKey: ['preferences'] }),
     ])
     if (visibleForRun() && !taskId.value) await router.replace(`/tasks/${result.task.id}`)
   } catch (error) {
@@ -651,6 +652,7 @@ const resumeOriginalRequest = () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['tasks'] }),
         queryClient.invalidateQueries({ queryKey: ['library'] }),
+        queryClient.invalidateQueries({ queryKey: ['preferences'] }),
       ])
       if (visibleForRun() && taskId.value !== result.task.id)
         await router.replace(`/tasks/${result.task.id}`)

@@ -2194,17 +2194,9 @@ async def create_preference(
         raise ApiError(422, "PREFERENCE_SCOPE_INVALID", "个人偏好不能绑定项目。")
     if payload.project_id:
         await owned_project(session, owner_id=user.id, project_id=payload.project_id)
-    preference = UserPreference(
-        user_id=user.id,
-        project_id=payload.project_id,
-        preference_type=payload.preference_type,
-        value=payload.value,
-        scope=payload.scope,
-        confidence=payload.confidence,
-        source_type="explicit",
-        status="confirmed",
-    )
-    session.add(preference)
+    from app.domains.conversation_actions import create_preference as save_preference
+
+    preference = await save_preference(session, user.id, payload.model_dump())
     await session.commit()
     return model_dict(preference)
 
@@ -2216,19 +2208,10 @@ async def patch_preference(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    preference = await session.scalar(
-        select(UserPreference).where(
-            UserPreference.id == preference_id, UserPreference.user_id == user.id
-        )
-    )
-    if not preference:
-        raise ApiError(404, "PREFERENCE_NOT_FOUND", "写作偏好不存在。")
-    for key, value in payload.model_dump(exclude_unset=True).items():
-        setattr(preference, key, value)
-    if preference.status == "revoked":
-        preference.revoked_at = utcnow()
-    else:
-        preference.revoked_at = None
+    from app.domains.conversation_actions import owned_preference, update_preference
+
+    preference = await owned_preference(session, user.id, preference_id)
+    update_preference(session, preference, payload.model_dump(exclude_unset=True))
     await session.commit()
     return model_dict(preference)
 
@@ -2239,15 +2222,10 @@ async def delete_preference(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Response:
-    preference = await session.scalar(
-        select(UserPreference).where(
-            UserPreference.id == preference_id, UserPreference.user_id == user.id
-        )
-    )
-    if not preference:
-        raise ApiError(404, "PREFERENCE_NOT_FOUND", "写作偏好不存在。")
-    preference.status = "revoked"
-    preference.revoked_at = utcnow()
+    from app.domains.conversation_actions import owned_preference, update_preference
+
+    preference = await owned_preference(session, user.id, preference_id)
+    update_preference(session, preference, {"status": "revoked"})
     await session.commit()
     return Response(status_code=204)
 
