@@ -340,6 +340,7 @@ export interface AttachmentUploadProgress {
 }
 
 export interface SendMessageInput {
+  retryOfRunId?: string
   clientMessageId?: string
   taskId?: string
   projectId?: string | null

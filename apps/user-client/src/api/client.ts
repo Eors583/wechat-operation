@@ -2397,6 +2397,7 @@ export const remoteApi: UserApi = {
       documentId: attachment.documentId,
     }))
     const intentSignature = JSON.stringify({
+      retryOfRunId: input.retryOfRunId ?? null,
       taskId: input.taskId ?? null,
       projectId: input.projectId ?? null,
       text: input.text,
@@ -2410,6 +2411,7 @@ export const remoteApi: UserApi = {
     const message = {
       text: input.text,
       content: {
+        ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
         attachments: serializedAttachments,
         documentIds: attachments
           .map((item) => item.documentId)

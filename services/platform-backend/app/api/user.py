@@ -701,6 +701,7 @@ class MessageAttachment(BaseModel):
 class MessageContent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    retry_of_run_id: str | None = Field(default=None, min_length=1, max_length=36)
     document_ids: list[str] = Field(default_factory=list, max_length=20)
     links: list[str] = Field(default_factory=list, max_length=20)
     attachments: list[MessageAttachment] = Field(default_factory=list, max_length=20)
