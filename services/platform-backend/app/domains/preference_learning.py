@@ -10,6 +10,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.dialogue_flow import style_action
 from app.models import AuditLog, Message, Task, User, UserPreference, utcnow
 
 RULES = {
@@ -48,6 +49,8 @@ tone/article_length/structure/audience/formatting。没有可靠证据返回空�
 
 def is_preference_only(text: str) -> bool:
     """Future defaults are not permission to modify the current article."""
+    if style_action(text):
+        return False
     clauses = re.split(r"[，,。；;！!\n]|同时|然后|并且|(?=并(?:帮我|写|生成|修改))", text.strip())
     preference = False
     action = False

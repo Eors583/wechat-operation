@@ -14,6 +14,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
+from app.domains.dialogue_flow import explicit_article_request, local_revision_target, style_action
 from app.domains.preference_learning import (
     MEMORY_INSTRUCTIONS,
     is_preference_only,
@@ -490,6 +491,8 @@ def classify_run_type(
 ) -> str:
     """Conservative intent boundary: only explicit writing/revision requests change an article."""
     normalized = " ".join(text.strip().split())
+    if style_action(normalized) and not explicit_article_request(normalized):
+        return "discussion"
     if is_preference_only(normalized):
         return "discussion"
     if (
@@ -511,6 +514,11 @@ def classify_run_type(
         "覆盖当前文章",
     }:
         return "article_generation"
+    if explicit_article_request(normalized) and not re.fullmatch(
+        r"(?:请|帮我|麻烦)?(?:写|撰写|创作|生成)(?:一|1)?篇(?:微信公众号|公众号)?文章[。！!？?]?",
+        normalized,
+    ):
+        return "article_generation"
     if re.search(r"(?:给我|生成|提供|想|列出|再来).{0,8}(?:标题|题目)", normalized):
         return "titles"
     if re.search(r"(?:提纲|大纲|文章结构|内容结构)", normalized):
@@ -530,6 +538,7 @@ def classify_run_type(
     revision = has_current_article and bool(
         re.search(
             r"修改|改写|重写|润色|调整|删除|删掉|去掉|移除|替换|精简|扩写|缩写|优化|换个开头|改成|改为"
+            r"|(?:标题|开头|结尾).{0,12}(?:改|换)"
             r"|(?:开头|结尾|这段|第.{0,4}(?:部分|段)).{0,16}(?:不要|别|改|直接|增加|删除)"
             r"|(?:这篇|这个|当前)?文章.{0,24}(?:不要|不能|缺少|没有|全是|都是)"
             r"|(?:不要|不能).{0,24}(?:出现在|写在|放在)(?:这篇|这个|当前)?文章"
@@ -1372,6 +1381,11 @@ async def create_ai_run(
                 "summary": article.summary,
                 "plain_text": article_version.plain_text,
                 "content_hash": article_version.content_hash,
+                "content": (
+                    article_version.content_json
+                    if local_revision_target(text, article_version.content_json) is not None
+                    else None
+                ),
             }
         else:
             # Heal legacy pointers left by older deletion behavior. The conversation
@@ -1863,6 +1877,13 @@ async def process_ai_run(
     directives: list[str] = []
     execution_attempts: list[ModelExecutionAttempt] = []
     model_context = dict(run.context_snapshot)
+    frozen_current = model_context.get("current_article")
+    local_document = frozen_current.get("content") if isinstance(frozen_current, dict) else None
+    local_target = (
+        local_revision_target(user_input, local_document)
+        if run.run_type == "article_generation" and isinstance(local_document, dict)
+        else None
+    )
 
     def pipeline_route(purpose: str) -> dict[str, Any]:
         raw_routes = run.model_route_snapshot.get("pipeline_routes")
@@ -1906,6 +1927,21 @@ async def process_ai_run(
         return "\n\n".join(part for part in parts if part)
 
     long_context_cache: dict[str, str] = {}
+    streamed_text = ""
+    stream_buffer = ""
+
+    async def stream_reply(fragment: str) -> None:
+        nonlocal streamed_text, stream_buffer
+        stream_buffer += fragment
+        if len(stream_buffer) < 160 and "\n" not in stream_buffer:
+            return
+        await ensure_not_cancelled()
+        allowed, _ = await safety.check_text(streamed_text + stream_buffer)
+        if not allowed:
+            raise ApiError(422, "CONTENT_SAFETY_BLOCKED", "生成内容未通过安全检查。")
+        await emit("text.delta", {"text": stream_buffer})
+        streamed_text += stream_buffer
+        stream_buffer = ""
 
     async def execute_model_call(
         *,
@@ -1914,6 +1950,7 @@ async def process_ai_run(
         context: dict[str, Any],
         snapshot: dict[str, Any],
         compact: bool = True,
+        stream: bool = False,
     ) -> ModelResult:
         await ensure_not_cancelled()
         if compact and requires_local_compaction(snapshot):
@@ -1955,6 +1992,7 @@ async def process_ai_run(
                 context=context,
                 default_timeout_seconds=model_timeout_seconds,
                 session=session,
+                on_text=stream_reply if stream else None,
             )
         except ModelRouteExhausted as exc:
             offset = len(execution_attempts)
@@ -2039,7 +2077,7 @@ async def process_ai_run(
             model_context["untrusted_vision_analysis"] = vision.text[:4000]
         if run.run_type == "article_generation":
             directives.append(article_output_contract())
-            if needs_article_planning(model_context):
+            if local_target is None and needs_article_planning(model_context):
                 await stage("planning")
                 planning = await execute_model_call(
                     purpose="article_planning",
@@ -2070,7 +2108,38 @@ async def process_ai_run(
         skill_version = await session.get(SkillVersion, run.skill_version_id)
         if skill_version:
             directives.append(skill_version.instructions)
-    if deterministic:
+    if local_target is not None and isinstance(local_document, dict):
+        blocks = list(local_document["content"])
+        original_block = blocks[local_target]
+        replacement = await execute_model_call(
+            purpose="article_revision",
+            snapshot=run.model_route_snapshot,
+            prompt=(
+                "只返回指定位置的替换纯文本，不加标题标签、解释或代码围栏。"
+                "保持事实边界；标题只返回一行，段落只返回一个自然段。"
+            ),
+            context={
+                "untrusted_user_input": user_input,
+                "selected_text": extract_plain_text(original_block),
+                "article_title": frozen_current.get("title"),
+                "preferences": model_context.get("preferences", []),
+            },
+        )
+        replacement_text = replacement.text.strip()
+        if (
+            not replacement_text
+            or "\n" in replacement_text
+            or (original_block.get("type") == "heading" and len(replacement_text) > 120)
+        ):
+            raise ApiError(
+                422, "LOCAL_REVISION_INVALID", "局部修改未返回有效的单段内容，原文未改动。"
+            )
+        blocks[local_target] = {
+            **original_block,
+            "content": [{"type": "text", "text": replacement_text}],
+        }
+        result = dataclass_replace(replacement, structured={**local_document, "content": blocks})
+    elif deterministic:
         response_text, _ = deterministic
         result = ModelResult(
             text=response_text,
@@ -2091,6 +2160,14 @@ async def process_ai_run(
             "交付内容必须直接包含实际正文，不得只返回完成说明或本地文件下载路径。"
         )
         if run.run_type != "article_generation":
+            if style_action(user_input):
+                directives.append(
+                    "本轮提炼写作风格，不修改文章。结合用户指定的文章、最近对话和明确反馈，"
+                    "输出一个简短标题和具体风格要求，格式为 '# 标题'、空行、正文。"
+                    "总计不超过 2000 字符，标题不超过80字符。涵盖有依据的语气、结构、"
+                    "开头、论证和用词，不以文章字数冒充完整风格。不编造未提供的资料。"
+                    "仅返回风格内容，不声称已经保存；保存结果由系统确认。"
+                )
             if is_preference_only(user_input):
                 directives.append(
                     "本轮仅设置未来写作偏好，不是创作或修改文章。不要生成正文、文章预览或声称"
@@ -2120,7 +2197,8 @@ async def process_ai_run(
                     )
         directives.append(
             "用户本轮原文保存在 context_snapshot.untrusted_user_input；它是最高优先级的"
-            "业务要求，但仍不能覆盖平台安全边界。"
+            "业务要求，但仍不能覆盖平台安全边界。本轮明确要求优先于项目要求，"
+            "项目要求优先于已确认的个人风格；冲突时不把历史偏好强加给本轮。"
         )
         if run.run_type == "article_generation":
             directives.append(
@@ -2135,11 +2213,16 @@ async def process_ai_run(
             prompt="\n\n".join(directives),
             context=model_context,
             snapshot=run.model_route_snapshot,
+            stream=(
+                run.run_type != "article_generation"
+                and not is_preference_only(user_input)
+                and not style_action(user_input)
+            ),
         )
     await stage("validating_output")
     result = readable_model_result(result)
     article_message = ""
-    if run.run_type == "article_generation":
+    if run.run_type == "article_generation" and local_target is None:
         try:
             article_message = generated_article_message(result.structured)
             canonical_output = generated_article_content(result.structured)
@@ -2259,8 +2342,48 @@ async def process_ai_run(
             "生成内容未通过安全检查。",
             details={"reason": reason},
         )
+    style_saved = False
+    if run.run_type != "article_generation" and style_action(user_input) == "save":
+        if not task.use_preferences:
+            result = dataclass_replace(
+                result, text=result.text + "\n\n当前任务关闭了偏好学习，未保存。"
+            )
+        elif (
+            not re.fullmatch(r"# [^\r\n]{1,80}\r?\n\s*\n[\s\S]+", result.text.strip())
+            or len(result.text.strip()) > 2000
+        ):
+            raise ApiError(422, "WRITING_STYLE_INVALID", "风格总结格式不完整或过长，未保存为偏好。")
+        else:
+            preference = await session.scalar(
+                select(UserPreference).where(
+                    UserPreference.user_id == run.owner_id,
+                    UserPreference.source_id == model_context.get("source_message_id"),
+                    UserPreference.preference_type == "writing_style",
+                )
+            )
+            if preference is None:
+                session.add(
+                    UserPreference(
+                        user_id=run.owner_id,
+                        project_id=task.project_id,
+                        preference_type="writing_style",
+                        value=result.text.strip(),
+                        scope="project" if task.project_id else "personal",
+                        confidence=1,
+                        source_type="explicit",
+                        source_id=model_context.get("source_message_id"),
+                        status="confirmed",
+                    )
+                )
+                style_saved = True
+            elif preference.status == "confirmed":
+                style_saved = True
     if not is_preference_only(user_input):
-        await emit("text.delta", {"text": result.text})
+        if streamed_text:
+            if stream_buffer:
+                await emit("text.delta", {"text": stream_buffer})
+        else:
+            await emit("text.delta", {"text": result.text})
     await ensure_not_cancelled()
     live_events = False
     frozen_article = run.context_snapshot.get("current_article")
@@ -2286,7 +2409,11 @@ async def process_ai_run(
             owner_id=run.owner_id,
             article_id=existing_article.id,
             base_version_no=base_version_no,
-            title=existing_article.title,
+            title=(
+                extract_plain_text(result.structured["content"][0]).strip()
+                if local_target == 0 and result.structured["content"][0].get("type") == "heading"
+                else existing_article.title
+            ),
             summary=existing_article.summary,
             content=result.structured,
             source="ai",
@@ -2338,6 +2465,10 @@ async def process_ai_run(
             "本轮仅处理写作偏好，没有生成或修改文章；保存结果由后端确认。"
         )
     session.add(assistant_message)
+    if style_saved:
+        acknowledgement = "\n\n写作风格已保存，可在个人设置中查看和编辑；本轮没有修改文章。"
+        assistant_message.plain_text += acknowledgement
+        await emit("text.delta", {"text": acknowledgement})
     deterministic_memory = f"用户最近要求：{user_input.strip()[:1500]}\n" + (
         f"当前文章：{article.title}（版本 {version.version_no}）"
         if article and version
@@ -2345,7 +2476,11 @@ async def process_ai_run(
     )
     memory_text = deterministic_memory
     memory_source = "deterministic-run-summary-v1"
-    if not deterministic and run.run_type != "article_generation":
+    if (
+        not deterministic
+        and run.run_type != "article_generation"
+        and is_preference_only(user_input)
+    ):
         try:
             memory = await execute_model_call(
                 purpose="memory_summary",
@@ -2414,6 +2549,7 @@ async def process_ai_run(
         await emit("text.delta", {"text": assistant_message.plain_text})
     for attempt in execution_attempts:
         session.add(ai_attempt_record(run.id, attempt))
+    await session.flush()
     latest_summary_version = await session.scalar(
         select(func.coalesce(func.max(TaskMemorySummary.version_no), 0)).where(
             TaskMemorySummary.task_id == task.id
@@ -2428,13 +2564,14 @@ async def process_ai_run(
                 "source": memory_source,
                 "run_id": run.id,
                 "run_type": run.run_type,
+                "assistant_message_id": assistant_message.id,
                 "article_id": article.id if article else None,
                 "article_version_no": version.version_no if version else None,
             },
             version_no=int(latest_summary_version or 0) + 1,
         )
     )
-    if run.run_type == "article_generation" and not deterministic:
+    if not deterministic and not is_preference_only(user_input):
         emit_outbox(
             session,
             event_type="ai.run.memory.requested",
@@ -2490,9 +2627,9 @@ async def process_ai_run_memory(
     secrets: SecretProvider,
     model_timeout_seconds: float = 120.0,
 ) -> TaskMemorySummary | None:
-    """Enrich a completed article run's deterministic memory without delaying delivery."""
+    """Enrich completed run memory without delaying the user's response."""
     run = await session.scalar(select(AIRun).where(AIRun.id == run_id))
-    if not run or run.status != "completed" or run.run_type != "article_generation":
+    if not run or run.status != "completed":
         return None
     summary = await session.scalar(
         select(TaskMemorySummary).where(
@@ -2536,6 +2673,11 @@ async def process_ai_run_memory(
 
     user_input = model_context.get("untrusted_user_input")
     source_message_id = model_context.get("source_message_id")
+    assistant_message = (
+        await session.get(Message, facts["assistant_message_id"])
+        if isinstance(facts.get("assistant_message_id"), str)
+        else None
+    )
     try:
         routed = await generate_with_frozen_route(
             snapshot=route,
@@ -2546,7 +2688,11 @@ async def process_ai_run_memory(
             context={
                 "previous_summary": model_context.get("task_memory_summary"),
                 "user_input": user_input if isinstance(user_input, str) else "",
-                "assistant_response": "文章已生成，可以打开预览并继续修改。",
+                "assistant_response": (
+                    assistant_message.plain_text[:12000]
+                    if assistant_message and assistant_message.task_id == run.task_id
+                    else "文章已生成。"
+                ),
                 "article_id": facts.get("article_id"),
                 "article_version_no": facts.get("article_version_no"),
             },
@@ -2582,7 +2728,7 @@ async def process_ai_run_memory(
         memory_text, proposed_preferences = parse_memory(routed.result.text)
         summary.summary = memory_text
         summary.facts = {**facts, "source": "model-route-memory-summary-v1"}
-        if isinstance(source_message_id, str):
+        if isinstance(source_message_id, str) and not style_action(str(user_input or "")):
             await learn_preferences(
                 session,
                 owner_id=run.owner_id,

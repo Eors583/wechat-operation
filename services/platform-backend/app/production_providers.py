@@ -8,6 +8,7 @@ import json
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any, Never, cast
 from urllib.parse import urljoin, urlsplit
 
@@ -237,6 +238,7 @@ class OpenAICompatibleModelProvider:
         max_output_tokens: int | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         response_schema: dict[str, Any] | None = None,
+        on_text: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._api_base = api_base
         self._api_key = api_key
@@ -248,6 +250,7 @@ class OpenAICompatibleModelProvider:
         )
         self._transport = transport
         self._response_schema = response_schema
+        self._on_text = on_text
 
     async def generate(self, *, purpose: str, prompt: str, context: dict[str, Any]) -> ModelResult:
         files = context.get("untrusted_model_files", [])
@@ -414,9 +417,21 @@ class OpenAICompatibleModelProvider:
                 timeout=self._timeout, transport=self._transport
             ) as client:
                 async with asyncio.timeout(self._timeout):
-                    response = await client.post(url, headers=headers, json=payload)
-                    response.raise_for_status()
-                    body = _object(response.json(), service="Model provider")
+                    if self._on_text and not article_output and self._response_schema is None:
+                        payload["stream"] = True
+                        if self._api_style == "chat_completions":
+                            payload["stream_options"] = {"include_usage": True}
+                        async with client.stream(
+                            "POST", url, headers=headers, json=payload
+                        ) as response:
+                            if response.is_error:
+                                await response.aread()
+                            response.raise_for_status()
+                            body = await self._read_stream(response)
+                    else:
+                        response = await client.post(url, headers=headers, json=payload)
+                        response.raise_for_status()
+                        body = _object(response.json(), service="Model provider")
         except httpx.HTTPStatusError as exc:
             _raise_classified_http_error(exc, service="Model provider")
         except (httpx.TimeoutException, TimeoutError) as exc:
@@ -462,6 +477,58 @@ class OpenAICompatibleModelProvider:
                 body.get("id") or response.headers.get("x-request-id") or "unknown"
             ),
         )
+
+    async def _read_stream(self, response: httpx.Response) -> dict[str, Any]:
+        fragments: list[str] = []
+        body: dict[str, Any] = {}
+        finished = False
+        async for line in response.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            raw = line[5:].strip()
+            if raw == "[DONE]":
+                break
+            if not raw:
+                continue
+            event = _object(json.loads(raw), service="Model provider stream")
+            if event.get("error") or event.get("type") in {
+                "error",
+                "response.failed",
+                "response.incomplete",
+            }:
+                raise ProviderUnavailable("Model stream did not complete successfully")
+            delta = ""
+            if self._api_style == "responses":
+                if event.get("type") == "response.output_text.delta":
+                    delta = event.get("delta", "")
+                elif event.get("type") == "response.completed":
+                    body = _object(event.get("response"), service="Model response")
+                    finished = body.get("status") == "completed"
+            else:
+                if event.get("id"):
+                    body["id"] = event["id"]
+                if isinstance(event.get("usage"), dict):
+                    body["usage"] = event["usage"]
+                choices = event.get("choices") or []
+                if choices:
+                    choice = choices[0]
+                    reason = choice.get("finish_reason")
+                    if reason and reason != "stop":
+                        raise ProviderUnavailable("Model stream was truncated or rejected")
+                    finished = finished or reason == "stop"
+                    delta = (choice.get("delta") or {}).get("content") or ""
+            if isinstance(delta, str) and delta:
+                fragments.append(delta)
+                if self._on_text:
+                    await self._on_text(delta)
+        if not finished:
+            raise ProviderTransientError("Model stream ended before completion")
+        text = "".join(fragments)
+        if self._api_style == "responses":
+            body["output_text"] = text
+        else:
+            body["choices"] = [{"message": {"content": text}, "finish_reason": "stop"}]
+        return body
 
     @staticmethod
     def _response_output_text(body: dict[str, Any]) -> str:

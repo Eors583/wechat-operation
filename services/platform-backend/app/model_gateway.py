@@ -444,6 +444,7 @@ async def generate_with_frozen_route(
     session: AsyncSession | None = None,
     response_schema: dict[str, Any] | None = None,
     result_validator: Callable[[ModelResult], None] | None = None,
+    on_text: Callable[[str], Awaitable[None]] | None = None,
 ) -> RoutedModelResult:
     """Execute the immutable primary/fallback chain captured when the run began."""
     configs = snapshot.get("execution_configs")
@@ -480,6 +481,14 @@ async def generate_with_frozen_route(
     )
     max_retry_after = _positive_int(policy.get("max_retry_after_seconds"), 30)
     attempts: list[ModelExecutionAttempt] = []
+    stream_started = False
+
+    async def forward_text(text: str) -> None:
+        nonlocal stream_started
+        stream_started = True
+        if on_text:
+            await on_text(text)
+
     attempt_no = 0
     for raw_config in selected_configs:
         if not isinstance(raw_config, dict):
@@ -521,6 +530,8 @@ async def generate_with_frozen_route(
                     }
                     if response_schema is not None:
                         model_kwargs["response_schema"] = response_schema
+                    if on_text is not None:
+                        model_kwargs["on_text"] = forward_text
                     model = OpenAICompatibleModelProvider(
                         **model_kwargs,
                     )
@@ -617,6 +628,9 @@ async def generate_with_frozen_route(
                         error_message=str(exc)[:1000],
                     )
                 )
+            if stream_started:
+                # Once text has arrived, never concatenate a retry or another model's answer.
+                raise ModelRouteExhausted(tuple(attempts))
         if attempt_no >= max_attempts:
             break
     raise ModelRouteExhausted(tuple(attempts))
