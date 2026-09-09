@@ -31,6 +31,8 @@ from app.wechat_open_platform import (
 
 from .conftest import bearer, register_and_login
 
+_LONG_AUTHORIZER_ACCESS_TOKEN = "authorizer-access-token-" + "x" * 180
+
 
 def _encrypted_callback(
     *, xml: str, appid: str, token: str, aes_key_text: str, timestamp: str, nonce: str
@@ -245,7 +247,7 @@ class FakeWechatOpenPlatformClient:
     async def exchange_authorization(self, **_: str) -> AuthorizationDetails:
         return AuthorizationDetails(
             authorizer_appid="wx-authorized-account",
-            access_token="authorizer-access-token",
+            access_token=_LONG_AUTHORIZER_ACCESS_TOKEN,
             refresh_token="authorizer-refresh-token",
             expires_in=7200,
             scope_ids=[7, 11],
@@ -463,5 +465,6 @@ async def test_direct_scan_authorization_binds_account_to_authenticated_owner(
         assert account.name == "授权测试公众号"
         assert account.capability_flags == ["assets", "draft", "publish"]
         assert account.token_secret_ref is not None
-        assert secrets.resolve(account.token_secret_ref) == "authorizer-access-token"
+        assert len(account.token_secret_ref) > 255
+        assert secrets.resolve(account.token_secret_ref) == _LONG_AUTHORIZER_ACCESS_TOKEN
         assert "authorizer-refresh-token" not in str(account.technical_metadata)

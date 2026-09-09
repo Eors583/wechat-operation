@@ -160,7 +160,7 @@ class NormalizedAuthorizationEvent(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     avatar_url: str | None = Field(default=None, max_length=1000)
     capability_flags: list[str] = Field(default_factory=list)
-    token_secret_ref: str = Field(min_length=5, max_length=255)
+    token_secret_ref: str = Field(min_length=5, max_length=4096)
     token_expires_at: datetime | None = None
 
 

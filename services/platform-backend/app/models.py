@@ -597,7 +597,7 @@ class OfficialAccount(Base, IdMixin, TimestampMixin, OwnerMixin):
     avatar_url: Mapped[str | None] = mapped_column(String(1000))
     status: Mapped[str] = mapped_column(String(40), default="connected", nullable=False)
     capability_flags: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
-    token_secret_ref: Mapped[str | None] = mapped_column(String(255))
+    token_secret_ref: Mapped[str | None] = mapped_column(Text)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
