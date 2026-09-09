@@ -288,6 +288,7 @@ export interface OfficialAccountAuthorization {
 
 export interface Preference {
   id: string
+  title: string
   text: string
   source: string
   status: 'candidate' | 'confirmed'

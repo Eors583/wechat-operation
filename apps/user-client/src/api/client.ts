@@ -1361,11 +1361,29 @@ const mapPreference = (value: unknown): Preference => {
     explicit: '用户明确设置',
     article: '根据已确认文章总结',
     system: '系统建议',
+    dialogue_feedback: '对话中的写作要求',
+    final_preview: '最终预览确认',
   }
   const sourceType = textValue(source.sourceType, 'explicit')
+  const valueText = textValue(source.value)
+  // A readable heading preserves the existing text API and model-context consumers.
+  const heading = /^# ([^\r\n]+)\r?\n\r?\n([\s\S]*)$/.exec(valueText)
+  const titles: Record<string, string> = {
+    article_length: '文章篇幅',
+    tone: '语言风格',
+    structure: '文章结构',
+    audience: '目标读者',
+    formatting: '排版习惯',
+    direct_opening: '开头写法',
+    direct_title: '标题写法',
+    concise_expression: '表达方式',
+    concrete_examples: '案例运用',
+    avoid_jargon: '用词习惯',
+  }
   return {
     id: textValue(source.id),
-    text: textValue(source.value),
+    title: heading?.[1] ?? titles[textValue(source.preferenceType)] ?? '写作风格',
+    text: heading?.[2] ?? valueText,
     source: sourceLabels[sourceType] ?? '写作记录',
     status: source.status === 'candidate' ? 'candidate' : 'confirmed',
     updatedAt: textValue(source.updatedAt, now()),

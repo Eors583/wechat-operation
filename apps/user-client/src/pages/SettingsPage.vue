@@ -34,6 +34,16 @@ const preferences = computed(() => [
 const preferenceDialog = ref(false)
 const editing = ref<Preference | null>(null)
 const preferenceText = ref('')
+const preferenceTitle = ref('')
+const preferenceValue = computed(
+  () => `# ${preferenceTitle.value.trim()}\n\n${preferenceText.value.trim()}`,
+)
+const preferenceValid = computed(
+  () =>
+    Boolean(preferenceTitle.value.trim() && preferenceText.value.trim()) &&
+    [...preferenceTitle.value.trim()].length <= 80 &&
+    [...preferenceValue.value].length <= 2000,
+)
 const saving = ref(false)
 const confirmingId = ref('')
 const themeSaving = ref(false)
@@ -50,15 +60,16 @@ const themes: { value: ThemePreference; label: string; icon: string; description
 
 const openPreference = (preference?: Preference) => {
   editing.value = preference ?? null
+  preferenceTitle.value = preference?.title ?? ''
   preferenceText.value = preference?.text ?? ''
   preferenceDialog.value = true
 }
 
 const savePreference = async () => {
-  if (!preferenceText.value.trim()) return
+  if (!preferenceValid.value || saving.value) return
   saving.value = true
   try {
-    await api.savePreference(preferenceText.value, editing.value?.id, 'confirmed')
+    await api.savePreference(preferenceValue.value, editing.value?.id, 'confirmed')
     await queryClient.invalidateQueries({ queryKey: ['preferences'] })
     preferenceDialog.value = false
     $q.notify({
@@ -225,13 +236,13 @@ const deleteAccount = async () => {
       <section class="settings-section settings-section--wide surface-card">
         <header>
           <div>
-            <h2>我的写作偏好</h2>
+            <h2>我的写作风格</h2>
             <p>按最近使用顺序分批展示；AI 初稿和参考资料的写法不会自动成为偏好。</p>
           </div>
           <AppButton
             variant="outline"
             icon="add"
-            label="添加偏好"
+            label="添加写作风格"
             :disabled="preferences.length >= 20"
             @click="openPreference()"
           />
@@ -256,7 +267,13 @@ const deleteAccount = async () => {
                   :color="preference.status === 'candidate' ? 'warning' : 'primary'"
               /></q-item-section>
               <q-item-section
-                ><q-item-label class="wrap-anywhere">{{ preference.text }}</q-item-label
+                ><button
+                  class="preference-preview"
+                  type="button"
+                  @click="openPreference(preference)"
+                >
+                  <strong class="wrap-anywhere">{{ preference.title }}</strong>
+                  <span class="preference-preview__excerpt">{{ preference.text }}</span></button
                 ><q-item-label caption class="wrap-anywhere"
                   ><q-badge
                     :color="preference.status === 'candidate' ? 'warning' : 'positive'"
@@ -312,27 +329,43 @@ const deleteAccount = async () => {
     <AppDialog
       v-model="preferenceDialog"
       :title="
-        editing?.status === 'candidate' ? '确认候选偏好' : editing ? '编辑写作偏好' : '添加写作偏好'
+        editing?.status === 'candidate'
+          ? '确认候选写作风格'
+          : editing
+            ? '查看 / 编辑写作风格'
+            : '添加写作风格'
       "
       width="620px"
     >
       <div class="preference-form">
         <q-input
+          v-model="preferenceTitle"
+          outlined
+          label="写作风格标题"
+          placeholder="例如：专业分析型、简洁叙事型"
+          maxlength="80"
+          counter
+          autofocus
+          :disable="saving"
+        />
+        <q-input
           v-model="preferenceText"
           outlined
           type="textarea"
-          label="用一句普通话描述偏好"
-          placeholder="例如：文章开头直接进入主题，不要长篇铺垫。"
-          maxlength="300"
-          autogrow
-          autofocus
+          label="具体写作风格"
+          placeholder="描述语气、文章结构、开头方式、案例运用、用词习惯等具体要求。"
+          rows="9"
+          :disable="saving"
+          :error="[...preferenceValue].length > 2000"
+          error-message="标题与内容合计不能超过 2000 字符（含格式分隔符）。"
+          :hint="`已使用 ${[...preferenceValue].length} / 2000 字符`"
         /><small>本轮明确要求始终高于历史偏好；你也可以在创作输入框中临时关闭历史偏好。</small>
       </div>
       <template #actions
         ><AppButton variant="ghost" label="取消" @click="preferenceDialog = false" /><AppButton
           :label="editing?.status === 'candidate' ? '确认并保存' : '保存偏好'"
           :loading="saving"
-          :disabled="!preferenceText.trim()"
+          :disabled="!preferenceValid"
           @click="savePreference"
       /></template>
     </AppDialog>
@@ -485,6 +518,32 @@ const deleteAccount = async () => {
 .preferences-list__actions {
   display: flex;
 }
+.preference-preview {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  color: var(--app-text-primary);
+  font: inherit;
+  text-align: left;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.preference-preview:focus-visible {
+  outline: 2px solid var(--app-action-primary);
+  outline-offset: 3px;
+}
+.preference-preview__excerpt {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--app-text-secondary);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .preferences-load-more {
   display: flex;
   justify-content: center;
@@ -502,7 +561,11 @@ const deleteAccount = async () => {
   overflow-wrap: anywhere;
 }
 .preference-form :deep(textarea.q-field__native) {
-  max-height: 180px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  max-height: 300px;
   overflow-y: auto !important;
   overflow-wrap: anywhere;
 }
