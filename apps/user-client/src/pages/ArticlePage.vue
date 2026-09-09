@@ -13,7 +13,6 @@ import Link from '@tiptap/extension-link'
 import Image from '@tiptap/extension-image'
 import { moduleParagraph } from '@/editor/moduleParagraph'
 import { ApiError, api } from '@/api/client'
-import { articleStatusLabel } from '@/api/articleStatus'
 import { queryClient } from '@/boot/query'
 import type {
   Article,
@@ -911,7 +910,11 @@ onBeforeUnmount(() => {
               @update:model-value="scheduleSave"
             />
           </div>
-          <div class="save-indicator" :class="`save-indicator--${saveState}`">
+          <div
+            v-if="view === 'edit' || saveState === 'failed'"
+            class="save-indicator"
+            :class="`save-indicator--${saveState}`"
+          >
             <q-spinner v-if="saveState === 'saving'" size="18px" /><q-icon
               v-else
               :name="saveState === 'saved' ? 'cloud_done' : 'cloud_off'"
@@ -935,13 +938,19 @@ onBeforeUnmount(() => {
               @click="retrySave"
             />
           </div>
-          <q-tabs v-model="view" dense active-color="primary" indicator-color="primary"
+          <q-tabs
+            v-if="view === 'edit'"
+            v-model="view"
+            dense
+            active-color="primary"
+            indicator-color="primary"
             ><q-tab name="edit" icon="edit" label="编辑视图" /><q-tab
               name="layout"
               icon="visibility"
               label="公众号排版预览"
           /></q-tabs>
           <AppButton
+            v-if="view === 'edit'"
             variant="outline"
             icon="history"
             label="历史版本"
@@ -1084,10 +1093,6 @@ onBeforeUnmount(() => {
           </section>
 
           <section v-show="view === 'layout'" class="layout-preview-pane">
-            <div class="layout-preview-pane__label">
-              <q-icon name="verified" color="positive" />此处加载服务端生成的不可变
-              Render；最终确认将复用同一排版版本。
-            </div>
             <div class="layout-preview-pane__scroll">
               <div v-if="!selectedAccount || !selectedTemplate" class="render-message">
                 <q-icon name="info_outline" size="28px" /><span
@@ -1113,7 +1118,7 @@ onBeforeUnmount(() => {
           </section>
 
           <aside class="article-meta">
-            <h2>公众号排版</h2>
+            <h2>发布设置</h2>
             <q-select
               v-model="selectedAccountId"
               :options="
@@ -1220,35 +1225,10 @@ onBeforeUnmount(() => {
                 @click="chooseCover"
               />
             </div>
-            <q-list bordered separator class="article-meta__details">
-              <q-item
-                ><q-item-section
-                  ><q-item-label caption>当前版本</q-item-label
-                  ><q-item-label>版本 {{ versionNo }}</q-item-label></q-item-section
-                ></q-item
-              >
-              <q-item
-                ><q-item-section
-                  ><q-item-label caption>文章状态</q-item-label
-                  ><q-item-label>{{
-                    articleStatusLabel(article.status)
-                  }}</q-item-label></q-item-section
-                ></q-item
-              >
-              <q-item
-                ><q-item-section
-                  ><q-item-label caption>排版版本</q-item-label
-                  ><q-item-label>{{
-                    finalRender ? '已锁定；内容或目标变化后失效' : '等待生成'
-                  }}</q-item-label></q-item-section
-                ></q-item
-              >
-            </q-list>
           </aside>
         </main>
 
         <footer class="article-workbench__footer safe-bottom">
-          <span>本地草稿不调用微信；公众号草稿和发布都将先打开同一排版版本的只读最终预览。</span>
           <div>
             <AppButton
               variant="outline"
@@ -1409,17 +1389,12 @@ onBeforeUnmount(() => {
   &__footer {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 16px;
     min-width: 0;
     padding: 12px clamp(12px, 2vw, 24px);
     background: var(--app-bg-surface);
     border-top: 1px solid var(--app-border-default);
-  }
-  &__footer > span {
-    min-width: 0;
-    color: var(--app-text-secondary);
-    overflow-wrap: anywhere;
   }
   &__footer > div {
     display: flex;
@@ -1570,14 +1545,8 @@ onBeforeUnmount(() => {
 }
 
 .layout-preview-pane {
+  grid-template-rows: minmax(0, 1fr);
   background: var(--app-bg-subtle);
-}
-.layout-preview-pane__label {
-  padding: 10px 18px;
-  color: var(--app-text-secondary);
-  background: var(--app-bg-surface);
-  border-bottom: 1px solid var(--app-border-default);
-  overflow-wrap: anywhere;
 }
 .layout-preview-pane__scroll {
   min-width: 0;
@@ -1656,10 +1625,6 @@ onBeforeUnmount(() => {
 }
 .cover-card small {
   color: var(--app-text-secondary);
-}
-.article-meta__details {
-  border-color: var(--app-border-default);
-  border-radius: 10px;
 }
 
 .history-list {
