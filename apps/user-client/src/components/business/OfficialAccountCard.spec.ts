@@ -19,20 +19,23 @@ describe('OfficialAccountCard', () => {
     const wrapper = mount(OfficialAccountCard, { props: { account } })
 
     expect(wrapper.text()).toContain('品牌内容号')
-    expect(wrapper.text()).toContain('连接正常')
+    expect(wrapper.text()).toContain('已绑定 · 长期有效')
     expect(wrapper.text()).toContain('最近同步')
     expect(wrapper.text()).not.toContain(account.id)
     expect(wrapper.text()).not.toContain('服务号')
     expect(wrapper.text()).not.toContain('写入草稿箱')
   })
 
-  it('offers reconnect only when authorization has expired', async () => {
+  it('offers a new scan only when authorization was revoked', async () => {
     const wrapper = mount(OfficialAccountCard, {
       props: { account: { ...account, status: 'reconnect' } },
     })
-    const reconnect = wrapper.findAll('button').find((button) => button.text().includes('重新连接'))
+    const reconnect = wrapper
+      .findAll('button')
+      .find((button) => button.text().includes('重新扫码绑定'))
 
     expect(reconnect).toBeDefined()
+    expect(wrapper.text()).toContain('授权已解除')
     await reconnect?.trigger('click')
     expect(wrapper.emitted('reconnect')).toHaveLength(1)
   })

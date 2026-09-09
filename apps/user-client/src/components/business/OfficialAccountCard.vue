@@ -9,8 +9,8 @@ defineEmits<{ detail: []; templates: []; reconnect: [] }>()
 const status = computed(
   () =>
     ({
-      connected: { label: '连接正常', color: 'positive' },
-      reconnect: { label: '需要重新连接', color: 'warning' },
+      connected: { label: '已绑定 · 长期有效', color: 'positive' },
+      reconnect: { label: '授权已解除', color: 'warning' },
       unsupported: { label: '当前公众号不支持该功能', color: 'negative' },
     })[props.account.status],
 )
@@ -42,7 +42,7 @@ const status = computed(
       <AppButton
         v-if="account.status === 'reconnect'"
         variant="outline"
-        label="重新连接"
+        label="重新扫码绑定"
         @click="$emit('reconnect')"
       />
       <AppButton variant="ghost" label="查看详情" @click="$emit('detail')" />

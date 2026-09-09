@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, useRoute } from 'vue-router'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/vue-query'
 import { useQuasar } from 'quasar'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
@@ -30,6 +30,7 @@ import WechatFinalPreview from '@/components/business/WechatFinalPreview.vue'
 import { usePublicSettings } from '@/composables/usePublicSettings'
 
 const route = useRoute()
+const router = useRouter()
 const $q = useQuasar()
 const auth = useAuthStore()
 const { settings: publicSettings } = usePublicSettings()
@@ -746,7 +747,7 @@ const openFinal = async (action: 'draft' | 'publish') => {
     return
   }
   if (selectedAccount.value.status !== 'connected') {
-    $q.notify({ type: 'warning', message: '该公众号需要重新授权后才能写入或发布。' })
+    $q.notify({ type: 'warning', message: '该公众号授权已解除，请管理员重新扫码绑定。' })
     return
   }
   if ((action === 'draft' && !canDraft.value) || (action === 'publish' && !canPublish.value)) {
@@ -799,6 +800,12 @@ const confirmOutcome = async () => {
     })
     finalIdempotencyKey.value = ''
   } catch (error) {
+    if (error instanceof ApiError && error.code === 'reauth_required') {
+      finalDialog.value = false
+      $q.notify({ type: 'warning', message: '公众号授权已解除，请管理员重新扫码绑定。' })
+      await router.push({ name: 'accounts' })
+      return
+    }
     $q.notify({
       type: 'negative',
       timeout: 8000,
@@ -1147,7 +1154,7 @@ onBeforeUnmount(() => {
               v-if="selectedAccount?.status === 'reconnect'"
               rounded
               class="article-meta__warning"
-              >公众号连接已失效。仍可编辑与预览，存草稿或发布前需要重新连接。</q-banner
+              >公众号授权已由管理员解除。仍可编辑与预览，存草稿或发布前需要重新扫码绑定。</q-banner
             >
             <q-banner
               v-else-if="selectedAccount && (!canDraft || !canPublish)"

@@ -74,7 +74,7 @@ defineEmits<{ 'update:modelValue': [value: boolean]; confirm: [] }>()
           </div>
         </dl>
         <q-banner v-if="account.status !== 'connected'" rounded class="final-preview__warning">
-          公众号连接已失效，请先重新扫码连接。排版内容不会丢失。
+          公众号授权已由管理员解除，请先重新扫码绑定。排版内容不会丢失。
         </q-banner>
         <q-banner v-else-if="!hasCapability" rounded class="final-preview__warning">
           该公众号没有{{

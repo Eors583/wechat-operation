@@ -316,6 +316,44 @@ describe('remote API transport invariants', () => {
     expect(requestHeaders(saveRequests[1]).get('Authorization')).toBe('Bearer access-fresh')
   })
 
+  it('shows the safe provider reason when a WeChat draft fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const { url } = await observedRequest(input, init)
+        if (url.endsWith('/article-renders/render-1/confirm'))
+          return jsonResponse({ id: 'confirm-1' })
+        if (url.endsWith('/wechat-drafts')) {
+          return jsonResponse(
+            {
+              id: 'operation-1',
+              status: 'failed',
+              error_code: 'WECHAT_DRAFT_FAILED',
+              retryable: false,
+              result: { message: '请先设置文章封面，再存入公众号草稿箱。' },
+            },
+            202,
+          )
+        }
+        throw new Error(`Unexpected request: ${url}`)
+      }),
+    )
+
+    await expect(
+      remoteApi.setArticleOutcome({
+        id: 'article-1',
+        outcome: 'wechat_draft',
+        accountId: 'account-1',
+        templateId: 'template-1',
+        renderId: 'render-1',
+        idempotencyKey: 'wechat-draft-1',
+      }),
+    ).rejects.toMatchObject({
+      code: 'WECHAT_DRAFT_FAILED',
+      message: '请先设置文章封面，再存入公众号草稿箱。',
+    })
+  })
+
   it('resumes multipart finalization with the server part size, exact ETags and fixed keys', async () => {
     const file = new File([new Uint8Array([1, 2, 3, 4, 5])], 'data.csv', {
       type: 'application/vnd.ms-excel',

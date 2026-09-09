@@ -35,12 +35,12 @@ from app.providers import (
     UnconfiguredRerankProvider,
     UnconfiguredStorageProvider,
     UnconfiguredVerificationProvider,
-    UnconfiguredWechatProvider,
     VerificationProvider,
     WebReferenceProvider,
     WechatProvider,
 )
 from app.web_references import SafeHttpWebReferenceProvider
+from app.wechat_open_platform import DirectWechatProvider
 from app.wechat_public_layout import WeChatPublicLayoutExtractionProvider
 
 
@@ -242,8 +242,7 @@ def _signed_client(
 
 def _build_wechat(settings: Settings, secrets: SecretProvider) -> WechatProvider:
     if settings.wechat_provider_mode == "direct":
-        # Authorization is handled against the persisted platform configuration.
-        return UnconfiguredWechatProvider()
+        return DirectWechatProvider(secrets)
     if settings.wechat_provider_mode not in {"http_gateway", "configured"}:
         raise ProviderUnavailable("WECHAT_PROVIDER_MODE must be direct or http_gateway")
     return HttpWechatGatewayProvider(

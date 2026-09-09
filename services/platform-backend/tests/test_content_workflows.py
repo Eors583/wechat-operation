@@ -180,7 +180,7 @@ class FailPublishOnceProvider:
         raise AssertionError("authorization is not part of this test")
 
     async def create_or_update_draft(
-        self, *, account_ref: str, html: str, title: str, cover_ref: str | None
+        self, *, account_ref: str, html: str, title: str, digest: str, cover: object | None
     ) -> WechatResult:
         self.draft_calls += 1
         return WechatResult(status="succeeded", media_id="media-existing")
@@ -191,7 +191,9 @@ class FailPublishOnceProvider:
             raise ProviderUnavailable("known pre-response failure")
         return WechatResult(status="succeeded", publish_id="publish-retried")
 
-    async def reconcile(self, *, operation_type: str, external_id: str) -> WechatResult:
+    async def reconcile(
+        self, *, operation_type: str, external_id: str, account_ref: str
+    ) -> WechatResult:
         return WechatResult(status="succeeded", publish_id=external_id)
 
 
@@ -205,7 +207,7 @@ class UnknownDraftProvider:
         raise AssertionError("authorization is not part of this test")
 
     async def create_or_update_draft(
-        self, *, account_ref: str, html: str, title: str, cover_ref: str | None
+        self, *, account_ref: str, html: str, title: str, digest: str, cover: object | None
     ) -> WechatResult:
         self.draft_calls += 1
         raise ProviderResultUnknown("response lost", external_id="media-to-reconcile")
@@ -214,7 +216,9 @@ class UnknownDraftProvider:
         self.publish_calls += 1
         return WechatResult(status="succeeded", publish_id="publish-after-reconcile")
 
-    async def reconcile(self, *, operation_type: str, external_id: str) -> WechatResult:
+    async def reconcile(
+        self, *, operation_type: str, external_id: str, account_ref: str
+    ) -> WechatResult:
         self.reconcile_calls.append((operation_type, external_id))
         return WechatResult(status="succeeded", media_id=external_id)
 
@@ -228,14 +232,16 @@ class AuthorizationProvider:
         return f"https://open.weixin.qq.com/test-authorize?state={state}"
 
     async def create_or_update_draft(
-        self, *, account_ref: str, html: str, title: str, cover_ref: str | None
+        self, *, account_ref: str, html: str, title: str, digest: str, cover: object | None
     ) -> WechatResult:
         raise AssertionError("draft creation is not part of this test")
 
     async def publish(self, *, account_ref: str, media_id: str) -> WechatResult:
         raise AssertionError("publishing is not part of this test")
 
-    async def reconcile(self, *, operation_type: str, external_id: str) -> WechatResult:
+    async def reconcile(
+        self, *, operation_type: str, external_id: str, account_ref: str
+    ) -> WechatResult:
         raise AssertionError("reconciliation is not part of this test")
 
 

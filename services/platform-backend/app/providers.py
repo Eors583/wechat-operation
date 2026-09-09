@@ -22,6 +22,14 @@ class ModelContractViolation(ProviderUnavailable):
 class ProviderAuthenticationError(ProviderUnavailable):
     """The configured external credential was rejected and should be disabled."""
 
+    def __init__(self, message: str, *, code: int | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class ProviderReauthorizationRequired(ProviderAuthenticationError):
+    """The provider confirmed that the user must authorize the account again."""
+
 
 class ProviderTransientError(ProviderUnavailable):
     """A connection or server failure may succeed on a bounded retry."""
@@ -314,16 +322,32 @@ class WechatResult:
     details: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class WechatCover:
+    ref: str
+    filename: str
+    mime_type: str
+    content: bytes
+
+
 class WechatProvider(Protocol):
     async def authorization_url(self, *, state: str, redirect_uri: str) -> str: ...
 
     async def create_or_update_draft(
-        self, *, account_ref: str, html: str, title: str, cover_ref: str | None
+        self,
+        *,
+        account_ref: str,
+        html: str,
+        title: str,
+        digest: str,
+        cover: WechatCover | None,
     ) -> WechatResult: ...
 
     async def publish(self, *, account_ref: str, media_id: str) -> WechatResult: ...
 
-    async def reconcile(self, *, operation_type: str, external_id: str) -> WechatResult: ...
+    async def reconcile(
+        self, *, operation_type: str, external_id: str, account_ref: str
+    ) -> WechatResult: ...
 
     async def refresh_account(self, *, account_ref: str) -> WechatResult: ...
 
@@ -333,14 +357,22 @@ class UnconfiguredWechatProvider:
         raise ProviderUnavailable("WeChat third-party platform is not configured")
 
     async def create_or_update_draft(
-        self, *, account_ref: str, html: str, title: str, cover_ref: str | None
+        self,
+        *,
+        account_ref: str,
+        html: str,
+        title: str,
+        digest: str,
+        cover: WechatCover | None,
     ) -> WechatResult:
         raise ProviderUnavailable("WeChat third-party platform is not configured")
 
     async def publish(self, *, account_ref: str, media_id: str) -> WechatResult:
         raise ProviderUnavailable("WeChat third-party platform is not configured")
 
-    async def reconcile(self, *, operation_type: str, external_id: str) -> WechatResult:
+    async def reconcile(
+        self, *, operation_type: str, external_id: str, account_ref: str
+    ) -> WechatResult:
         raise ProviderUnavailable("WeChat third-party platform is not configured")
 
     async def refresh_account(self, *, account_ref: str) -> WechatResult:

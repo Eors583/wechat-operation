@@ -615,7 +615,7 @@ async def direct_wechat_authorization_callback(
     account.status = "connected"
     account.capability_flags = capability_flags(details.scope_ids)
     account.token_secret_ref = secrets.protect(details.access_token)
-    account.token_expires_at = utcnow() + timedelta(seconds=max(60, details.expires_in - 300))
+    account.token_expires_at = utcnow() + timedelta(seconds=max(60, details.expires_in))
     account.authorized_at = utcnow()
     account.last_synced_at = utcnow()
     account.deleted_at = None
@@ -650,7 +650,8 @@ async def direct_wechat_authorization_callback(
             "<meta name='viewport' content='width=device-width,initial-scale=1'>"
             "<title>公众号授权完成</title><body style='font-family:system-ui;padding:40px;"
             "text-align:center'><h1>公众号授权已完成</h1>"
-            "<p>可以关闭此页面，电脑端会自动刷新授权状态。</p></body></html>",
+            "<p>绑定成功，授权长期有效，接口令牌将由系统自动续期。"
+            "可以关闭此页面。</p></body></html>",
             headers={"Cache-Control": "no-store"},
         )
     return RedirectResponse(

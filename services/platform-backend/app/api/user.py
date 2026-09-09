@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import UTC, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 from urllib.parse import quote, urlparse
@@ -124,6 +124,8 @@ from app.providers import (
     DocumentProcessingProvider,
     LayoutExtractionProvider,
     ModelProvider,
+    ProviderAuthenticationError,
+    ProviderReauthorizationRequired,
     ProviderUnavailable,
     SecretProvider,
     StorageProvider,
@@ -137,6 +139,7 @@ from app.system_settings import published_setting_section, published_system_sett
 from app.wechat_open_platform import (
     WechatOpenPlatformClient,
     component_access_token,
+    ensure_authorizer_access_token,
     published_wechat_config,
 )
 
@@ -2841,10 +2844,7 @@ async def list_official_accounts(
 
 
 def _official_account_public(account: OfficialAccount) -> dict[str, Any]:
-    expired = account.token_expires_at
-    if expired and expired.tzinfo is None:
-        expired = expired.replace(tzinfo=UTC)
-    if account.status != "connected" or (expired and expired <= utcnow()):
+    if account.status == "reconnect_required":
         ui_status = "reconnect_required"
     elif not set(account.capability_flags) & {"draft", "publish"}:
         ui_status = "unsupported"
@@ -2901,7 +2901,39 @@ async def _create_wechat_endpoint(
     session: AsyncSession,
     provider: WechatProvider,
     config: Settings,
+    secrets: SecretProvider,
 ) -> dict[str, Any]:
+    if config.wechat_provider_mode == "direct":
+        render = await owned_render(session, owner_id=user.id, render_id=payload.render_id)
+        if render.official_account_id:
+            try:
+                await ensure_authorizer_access_token(
+                    session,
+                    account_id=render.official_account_id,
+                    environment=config.environment,
+                    secrets=secrets,
+                    client=WechatOpenPlatformClient(),
+                )
+            except ProviderReauthorizationRequired as exc:
+                raise ApiError(
+                    403,
+                    "reauth_required",
+                    "公众号授权已解除，请管理员重新扫码绑定。",
+                ) from exc
+            except ProviderAuthenticationError as exc:
+                raise ApiError(
+                    503,
+                    "WECHAT_TOKEN_REFRESH_FAILED",
+                    "公众号接口令牌自动续期暂时失败，请稍后重试，无需重新扫码。",
+                    retryable=True,
+                ) from exc
+            except ProviderUnavailable as exc:
+                raise ApiError(
+                    503,
+                    "WECHAT_PLATFORM_NOT_READY",
+                    "微信平台暂时不可用，请稍后重试。",
+                    retryable=True,
+                ) from exc
     scope = "wechat.drafts" if operation_type == "draft" else "wechat.publishes"
     attempt = await begin_idempotency(
         session,
@@ -2935,6 +2967,7 @@ async def create_wechat_draft(
     session: AsyncSession = Depends(get_session),
     provider: WechatProvider = Depends(wechat_provider),
     config: Settings = Depends(settings),
+    secrets: SecretProvider = Depends(secret_provider),
 ) -> dict[str, Any]:
     return await _create_wechat_endpoint(
         operation_type="draft",
@@ -2945,6 +2978,7 @@ async def create_wechat_draft(
         session=session,
         provider=provider,
         config=config,
+        secrets=secrets,
     )
 
 
@@ -2957,6 +2991,7 @@ async def create_wechat_publish(
     session: AsyncSession = Depends(get_session),
     provider: WechatProvider = Depends(wechat_provider),
     config: Settings = Depends(settings),
+    secrets: SecretProvider = Depends(secret_provider),
 ) -> dict[str, Any]:
     return await _create_wechat_endpoint(
         operation_type="publish",
@@ -2967,6 +3002,7 @@ async def create_wechat_publish(
         session=session,
         provider=provider,
         config=config,
+        secrets=secrets,
     )
 
 

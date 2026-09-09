@@ -61,7 +61,7 @@ describe('WechatFinalPreview', () => {
     wrapper.unmount()
   })
 
-  it('disables confirmation when the account needs reconnecting', async () => {
+  it('disables confirmation when the account authorization was revoked', async () => {
     const wrapper = mount(WechatFinalPreview, {
       attachTo: document.body,
       props: {
@@ -79,7 +79,7 @@ describe('WechatFinalPreview', () => {
 
     expect(confirm).toBeDefined()
     expect(confirm?.hasAttribute('disabled')).toBe(true)
-    expect(document.body.textContent).toContain('请先重新扫码连接')
+    expect(document.body.textContent).toContain('授权已由管理员解除')
     wrapper.unmount()
   })
 })

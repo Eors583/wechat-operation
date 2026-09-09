@@ -17,15 +17,24 @@ from httpx import ASGITransport, AsyncClient, MockTransport, Request, Response
 from sqlalchemy import select
 
 from app.config import Settings
+from app.domains.wechat import _call_with_silent_token_refresh
 from app.main import create_app
 from app.models import OfficialAccount, WechatAuthorizationState, WechatPlatformConfig, utcnow
+from app.providers import (
+    EnvironmentSecretProvider,
+    ProviderAuthenticationError,
+    WechatCover,
+    WechatResult,
+)
 from app.security import hash_token
 from app.wechat_open_platform import (
     AuthorizationDetails,
+    DirectWechatProvider,
     PreAuthorization,
     WechatOpenPlatformClient,
     decrypt_callback,
     decrypt_callback_message,
+    ensure_authorizer_access_token,
     parse_encrypted_callback,
 )
 
@@ -168,6 +177,20 @@ async def test_open_platform_client_uses_official_authorization_endpoints() -> N
                     }
                 },
             )
+        if request.url.path.endswith("api_authorizer_token"):
+            assert json.loads(request.content) == {
+                "component_appid": "wx-component",
+                "authorizer_appid": "wx-authorizer",
+                "authorizer_refresh_token": "refresh-token",
+            }
+            return Response(
+                200,
+                json={
+                    "authorizer_access_token": "refreshed-access-token",
+                    "authorizer_refresh_token": "refreshed-refresh-token",
+                    "expires_in": 7200,
+                },
+            )
         return Response(
             200,
             json={
@@ -206,6 +229,12 @@ async def test_open_platform_client_uses_official_authorization_endpoints() -> N
             component_access_token=token,
             authorization_code="authorization-code",
         )
+        refreshed = await wechat.refresh_authorization(
+            component_appid="wx-component",
+            component_access_token=token,
+            authorizer_appid="wx-authorizer",
+            authorizer_refresh_token="refresh-token",
+        )
 
     assert expires_in == 7200
     assert "pre_auth_code=pre-auth-code" in pre_auth.url
@@ -214,6 +243,7 @@ async def test_open_platform_client_uses_official_authorization_endpoints() -> N
     assert parse_qs(urlparse(mobile_auth.url).query)["no_scan"] == ["1"]
     assert urlparse(mobile_auth.url).fragment == "wechat_redirect"
     assert authorization.scope_ids == [7, 11]
+    assert refreshed == ("refreshed-access-token", "refreshed-refresh-token", 7200)
     assert requested_paths == [
         "/cgi-bin/component/api_start_push_ticket",
         "/cgi-bin/component/api_component_token",
@@ -221,7 +251,117 @@ async def test_open_platform_client_uses_official_authorization_endpoints() -> N
         "/cgi-bin/component/api_create_preauthcode",
         "/cgi-bin/component/api_query_auth",
         "/cgi-bin/component/api_get_authorizer_info",
+        "/cgi-bin/component/api_authorizer_token",
     ]
+
+
+class FakeDirectDraftClient:
+    def __init__(self) -> None:
+        self.cover: WechatCover | None = None
+        self.draft: dict[str, str] | None = None
+
+    async def upload_permanent_image(self, *, access_token: str, cover: WechatCover) -> str:
+        assert access_token == "authorizer-access-token"
+        self.cover = cover
+        return "thumb-media-id"
+
+    async def add_draft(self, **values: str) -> str:
+        self.draft = values
+        return "draft-media-id"
+
+
+async def test_direct_provider_uploads_cover_before_creating_draft(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WECHAT_AUTHORIZER_TOKEN", "authorizer-access-token")
+    client = FakeDirectDraftClient()
+    provider = DirectWechatProvider(EnvironmentSecretProvider(), client)  # type: ignore[arg-type]
+    cover = WechatCover(
+        ref="asset-1",
+        filename="cover.png",
+        mime_type="image/png",
+        content=b"png-image",
+    )
+
+    result = await provider.create_or_update_draft(
+        account_ref="env:WECHAT_AUTHORIZER_TOKEN",
+        html="<p>正文</p>",
+        title="文章标题",
+        digest="文章摘要",
+        cover=cover,
+    )
+
+    assert result.status == "succeeded"
+    assert result.media_id == "draft-media-id"
+    assert client.cover == cover
+    assert client.draft == {
+        "access_token": "authorizer-access-token",
+        "title": "文章标题",
+        "digest": "文章摘要",
+        "html": "<p>正文</p>",
+        "thumb_media_id": "thumb-media-id",
+    }
+
+
+async def test_direct_provider_rejects_a_draft_without_cover() -> None:
+    provider = DirectWechatProvider(EnvironmentSecretProvider(), FakeDirectDraftClient())  # type: ignore[arg-type]
+
+    result = await provider.create_or_update_draft(
+        account_ref="unused",
+        html="<p>正文</p>",
+        title="文章标题",
+        digest="文章摘要",
+        cover=None,
+    )
+
+    assert result.status == "failed"
+    assert result.details == {"message": "请先设置文章封面，再存入公众号草稿箱。"}
+
+
+async def test_open_platform_client_uses_material_and_draft_endpoints() -> None:
+    requested_paths: list[str] = []
+
+    def handler(request: Request) -> Response:
+        requested_paths.append(request.url.path)
+        assert request.url.params["access_token"] == "authorizer-token"
+        if request.url.path.endswith("add_material"):
+            assert request.url.params["type"] == "image"
+            assert b'filename="cover.png"' in request.content
+            return Response(200, json={"media_id": "thumb-media-id"})
+        assert json.loads(request.content) == {
+            "articles": [
+                {
+                    "title": "文章标题",
+                    "author": "",
+                    "digest": "文章摘要",
+                    "content": "<p>正文</p>",
+                    "content_source_url": "",
+                    "thumb_media_id": "thumb-media-id",
+                    "need_open_comment": 0,
+                    "only_fans_can_comment": 0,
+                }
+            ]
+        }
+        return Response(200, json={"media_id": "draft-media-id"})
+
+    cover = WechatCover("asset-1", "cover.png", "image/png", b"png-image")
+    async with AsyncClient(
+        transport=MockTransport(handler), base_url="https://api.weixin.qq.com"
+    ) as http_client:
+        wechat = WechatOpenPlatformClient(http_client)
+        thumb_media_id = await wechat.upload_permanent_image(
+            access_token="authorizer-token", cover=cover
+        )
+        draft_media_id = await wechat.add_draft(
+            access_token="authorizer-token",
+            title="文章标题",
+            digest="文章摘要",
+            html="<p>正文</p>",
+            thumb_media_id=thumb_media_id,
+        )
+
+    assert draft_media_id == "draft-media-id"
+    assert requested_paths == ["/cgi-bin/material/add_material", "/cgi-bin/draft/add"]
 
 
 class FakeWechatOpenPlatformClient:
@@ -256,6 +396,110 @@ class FakeWechatOpenPlatformClient:
             avatar_url="https://example.com/avatar.png",
             metadata={"funcscope_ids": [7, 11], "user_name": "gh_authorized"},
         )
+
+
+class FakeAuthorizerRefreshClient:
+    def __init__(self) -> None:
+        self.refresh_calls = 0
+
+    async def component_access_token(self, **_: str) -> tuple[str, int]:
+        return "fresh-component-access-token", 7200
+
+    async def refresh_authorization(self, **values: str) -> tuple[str, str, int]:
+        self.refresh_calls += 1
+        assert values["authorizer_appid"] == "wx-refresh-account"
+        assert values["authorizer_refresh_token"] == "old-refresh-token"
+        if self.refresh_calls == 1:
+            assert values["component_access_token"] == "component-access-token"
+            raise ProviderAuthenticationError("component token expired", code=42001)
+        assert values["component_access_token"] == "fresh-component-access-token"
+        return "new-access-token", "new-refresh-token", 7200
+
+
+async def test_expired_authorizer_token_is_refreshed_and_persisted(
+    app: FastAPI, client: AsyncClient
+) -> None:
+    secrets = app.state.secret_provider
+    login = await register_and_login(client, "refresh-wechat@example.com")
+    async with app.state.database.session_maker() as session:
+        config = WechatPlatformConfig(
+            environment="test",
+            component_appid="wx-component-refresh",
+            component_secret_ref=secrets.protect("component-secret"),
+            message_token_ref=secrets.protect("message-token"),
+            encoding_aes_key_ref=secrets.protect("a" * 43),
+            authorization_callback_url="http://testserver/callbacks/v1/wechat/authorize",
+            ticket_callback_url="http://testserver/callbacks/v1/wechat/tickets",
+            component_access_token_ref=secrets.protect("component-access-token"),
+            component_access_token_expires_at=utcnow() + timedelta(hours=1),
+            component_verify_ticket_ref=secrets.protect("component-verify-ticket"),
+            permission_set=["draft"],
+            status="published",
+        )
+        session.add(config)
+        await session.flush()
+        account = OfficialAccount(
+            owner_id=login["registered_user"]["id"],
+            authorizer_appid="wx-refresh-account",
+            name="刷新测试公众号",
+            status="connected",
+            capability_flags=["draft"],
+            token_secret_ref=secrets.protect("expired-access-token"),
+            token_expires_at=utcnow() - timedelta(minutes=1),
+            technical_metadata={
+                "authorizer_refresh_token_ref": secrets.protect("old-refresh-token"),
+                "platform_config_id": config.id,
+            },
+        )
+        session.add(account)
+        await session.commit()
+        account_id = account.id
+
+    accounts = await client.get("/api/v1/official-accounts", headers=bearer(login["access_token"]))
+    assert accounts.status_code == 200
+    assert accounts.json()["items"][0]["ui_status"] == "connected"
+
+    refresh_client = FakeAuthorizerRefreshClient()
+    async with app.state.database.session_maker() as session:
+        refreshed = await ensure_authorizer_access_token(
+            session,
+            account_id=account_id,
+            environment="test",
+            secrets=secrets,
+            client=refresh_client,  # type: ignore[arg-type]
+        )
+        await session.commit()
+
+    assert secrets.resolve(refreshed.token_secret_ref or "") == "new-access-token"
+    refresh_ref = refreshed.technical_metadata["authorizer_refresh_token_ref"]
+    assert secrets.resolve(refresh_ref) == "new-refresh-token"
+    assert refreshed.token_expires_at
+    assert refreshed.token_expires_at > utcnow() + timedelta(minutes=115)
+    assert refresh_client.refresh_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_explicit_token_rejection_is_refreshed_and_replayed_silently() -> None:
+    calls = 0
+    refreshes = 0
+
+    async def call_wechat() -> WechatResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ProviderAuthenticationError("access token expired", code=42001)
+        return WechatResult(status="succeeded", media_id="draft-after-refresh")
+
+    async def refresh_token() -> None:
+        nonlocal refreshes
+        refreshes += 1
+
+    result = await _call_with_silent_token_refresh(call_wechat, refresh_token)
+
+    assert result.status == "succeeded"
+    assert result.media_id == "draft-after-refresh"
+    assert calls == 2
+    assert refreshes == 1
 
 
 async def test_direct_scan_authorization_binds_account_to_authenticated_owner(
@@ -432,6 +676,7 @@ async def test_direct_scan_authorization_binds_account_to_authenticated_owner(
     )
     assert callback.status_code == 200, callback.text
     assert "公众号授权已完成" in callback.text
+    assert "授权长期有效" in callback.text
     consumed = await client.get(entry_url)
     assert consumed.status_code == 400
 
@@ -474,3 +719,29 @@ async def test_direct_scan_authorization_binds_account_to_authenticated_owner(
         assert len(account.token_secret_ref) > 255
         assert secrets.resolve(account.token_secret_ref) == _LONG_AUTHORIZER_ACCESS_TOKEN
         assert "authorizer-refresh-token" not in str(account.technical_metadata)
+
+    unauthorized_xml = (
+        "<xml><InfoType>unauthorized</InfoType>"
+        "<AuthorizerAppid>wx-authorized-account</AuthorizerAppid></xml>"
+    )
+    unauthorized_body, unauthorized_signature = _encrypted_callback(
+        xml=unauthorized_xml,
+        appid="wx-component-appid",
+        token=message_token,
+        aes_key_text=aes_key,
+        timestamp="1700000002",
+        nonce="unauthorized-nonce",
+    )
+    unauthorized = await client.post(
+        "/callbacks/v1/wechat/tickets",
+        params={
+            "msg_signature": unauthorized_signature,
+            "timestamp": "1700000002",
+            "nonce": "unauthorized-nonce",
+        },
+        content=unauthorized_body,
+        headers={"Content-Type": "application/xml"},
+    )
+    assert unauthorized.status_code == 200
+    accounts = await client.get("/api/v1/official-accounts", headers=bearer(login["access_token"]))
+    assert accounts.json()["items"][0]["ui_status"] == "reconnect_required"

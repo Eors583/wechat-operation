@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
+import logging
 import struct
+import time
 from dataclasses import dataclass
 from datetime import UTC, timedelta
 from typing import Any, cast
@@ -16,17 +19,22 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.models import WechatPlatformConfig, utcnow
+from app.models import OfficialAccount, WechatPlatformConfig, utcnow
 from app.providers import (
     ProviderAuthenticationError,
     ProviderRateLimited,
+    ProviderReauthorizationRequired,
+    ProviderResultUnknown,
     ProviderTransientError,
     ProviderUnavailable,
     SecretProvider,
+    WechatCover,
+    WechatResult,
 )
 
 WECHAT_API_BASE = "https://api.weixin.qq.com"
 WECHAT_AUTHORIZATION_PAGE = "https://mp.weixin.qq.com/cgi-bin/componentloginpage"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,9 +162,14 @@ class WechatOpenPlatformClient:
         self._client = client
 
     async def _post(
-        self, path: str, payload: dict[str, Any], *, access_token: str | None = None
+        self,
+        path: str,
+        payload: dict[str, Any],
+        *,
+        access_token: str | None = None,
+        token_parameter: str = "component_access_token",
     ) -> dict[str, Any]:
-        params = {"component_access_token": access_token} if access_token else None
+        params = {token_parameter: access_token} if access_token else None
         owns_client = self._client is None
         client = self._client or httpx.AsyncClient(base_url=WECHAT_API_BASE, timeout=10.0)
         try:
@@ -181,10 +194,113 @@ class WechatOpenPlatformClient:
                 raise ProviderTransientError(error)
             if code in {40001, 40013, 40014, 42001, 61004}:
                 raise ProviderAuthenticationError(
-                    f"WeChat Open Platform rejected the configured credentials ({code})"
+                    f"WeChat Open Platform rejected the configured credentials ({code})",
+                    code=code,
                 )
             raise ProviderUnavailable(f"WeChat Open Platform returned error {code}")
         return cast(dict[str, Any], result)
+
+    async def upload_permanent_image(self, *, access_token: str, cover: WechatCover) -> str:
+        owns_client = self._client is None
+        client = self._client or httpx.AsyncClient(base_url=WECHAT_API_BASE, timeout=20.0)
+        try:
+            response = await client.post(
+                "/cgi-bin/material/add_material",
+                params={"access_token": access_token, "type": "image"},
+                files={"media": (cover.filename, cover.content, cover.mime_type)},
+            )
+            response.raise_for_status()
+            result = response.json()
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
+            raise ProviderTransientError("WeChat cover upload failed") from exc
+        except ValueError as exc:
+            raise ProviderUnavailable("WeChat cover upload returned invalid JSON") from exc
+        finally:
+            if owns_client:
+                await client.aclose()
+        if not isinstance(result, dict):
+            raise ProviderUnavailable("WeChat cover upload returned an invalid response")
+        code = result.get("errcode", 0)
+        if isinstance(code, int) and code != 0:
+            if code in {-1, 45009}:
+                if code == 45009:
+                    raise ProviderRateLimited("WeChat cover upload was rate limited")
+                raise ProviderTransientError("WeChat cover upload failed temporarily")
+            if code in {40001, 40013, 40014, 42001, 61004}:
+                raise ProviderAuthenticationError(
+                    f"WeChat cover upload rejected the access token ({code})", code=code
+                )
+            raise ProviderUnavailable(f"WeChat cover upload returned error {code}")
+        media_id = result.get("media_id")
+        if not isinstance(media_id, str) or not media_id:
+            raise ProviderUnavailable("WeChat cover upload did not return a media ID")
+        return media_id
+
+    async def add_draft(
+        self,
+        *,
+        access_token: str,
+        title: str,
+        digest: str,
+        html: str,
+        thumb_media_id: str,
+    ) -> str:
+        result = await self._post(
+            "/cgi-bin/draft/add",
+            {
+                "articles": [
+                    {
+                        "title": title[:64],
+                        "author": "",
+                        "digest": digest[:120],
+                        "content": html,
+                        "content_source_url": "",
+                        "thumb_media_id": thumb_media_id,
+                        "need_open_comment": 0,
+                        "only_fans_can_comment": 0,
+                    }
+                ]
+            },
+            access_token=access_token,
+            token_parameter="access_token",
+        )
+        media_id = result.get("media_id")
+        if not isinstance(media_id, str) or not media_id:
+            raise ProviderUnavailable("WeChat draft creation did not return a media ID")
+        return media_id
+
+    async def submit_publish(self, *, access_token: str, media_id: str) -> str:
+        result = await self._post(
+            "/cgi-bin/freepublish/submit",
+            {"media_id": media_id},
+            access_token=access_token,
+            token_parameter="access_token",
+        )
+        publish_id = result.get("publish_id")
+        if not isinstance(publish_id, str) or not publish_id:
+            raise ProviderUnavailable("WeChat publish submission did not return a publish ID")
+        return publish_id
+
+    async def get_draft(self, *, access_token: str, media_id: str) -> bool:
+        result = await self._post(
+            "/cgi-bin/draft/get",
+            {"media_id": media_id},
+            access_token=access_token,
+            token_parameter="access_token",
+        )
+        return isinstance(result.get("news_item"), list)
+
+    async def get_publish_status(self, *, access_token: str, publish_id: str) -> int:
+        result = await self._post(
+            "/cgi-bin/freepublish/get",
+            {"publish_id": publish_id},
+            access_token=access_token,
+            token_parameter="access_token",
+        )
+        status = result.get("publish_status")
+        if not isinstance(status, int):
+            raise ProviderUnavailable("WeChat publish query returned an invalid status")
+        return status
 
     async def component_access_token(
         self, *, component_appid: str, component_appsecret: str, verify_ticket: str
@@ -328,6 +444,140 @@ class WechatOpenPlatformClient:
             metadata=metadata,
         )
 
+    async def refresh_authorization(
+        self,
+        *,
+        component_appid: str,
+        component_access_token: str,
+        authorizer_appid: str,
+        authorizer_refresh_token: str,
+    ) -> tuple[str, str, int]:
+        result = await self._post(
+            "/cgi-bin/component/api_authorizer_token",
+            {
+                "component_appid": component_appid,
+                "authorizer_appid": authorizer_appid,
+                "authorizer_refresh_token": authorizer_refresh_token,
+            },
+            access_token=component_access_token,
+        )
+        access_token = result.get("authorizer_access_token")
+        refresh_token = result.get("authorizer_refresh_token") or authorizer_refresh_token
+        expires_in = result.get("expires_in")
+        if (
+            not isinstance(access_token, str)
+            or not access_token
+            or not isinstance(refresh_token, str)
+            or not refresh_token
+            or not isinstance(expires_in, int)
+        ):
+            raise ProviderUnavailable("WeChat authorizer token response is incomplete")
+        return access_token, refresh_token, expires_in
+
+
+class DirectWechatProvider:
+    def __init__(
+        self, secrets: SecretProvider, client: WechatOpenPlatformClient | None = None
+    ) -> None:
+        self._secrets = secrets
+        self._client = client or WechatOpenPlatformClient()
+
+    async def authorization_url(self, *, state: str, redirect_uri: str) -> str:
+        raise ProviderUnavailable(
+            "Direct WeChat authorization requires the persisted platform config"
+        )
+
+    async def create_or_update_draft(
+        self,
+        *,
+        account_ref: str,
+        html: str,
+        title: str,
+        digest: str,
+        cover: WechatCover | None,
+    ) -> WechatResult:
+        if not cover:
+            return WechatResult(
+                status="failed",
+                details={"message": "请先设置文章封面，再存入公众号草稿箱。"},
+            )
+        access_token = self._secrets.resolve(account_ref)
+        try:
+            thumb_media_id = await self._client.upload_permanent_image(
+                access_token=access_token, cover=cover
+            )
+            media_id = await self._client.add_draft(
+                access_token=access_token,
+                title=title,
+                digest=digest,
+                html=html,
+                thumb_media_id=thumb_media_id,
+            )
+        except ProviderAuthenticationError:
+            raise
+        except ProviderTransientError as exc:
+            raise ProviderResultUnknown("WeChat draft response was not received") from exc
+        except ProviderUnavailable:
+            return WechatResult(
+                status="failed",
+                details={"message": "微信拒绝创建草稿，请检查封面、标题和公众号授权权限。"},
+            )
+        return WechatResult(
+            status="succeeded",
+            media_id=media_id,
+            external_action_performed=True,
+        )
+
+    async def publish(self, *, account_ref: str, media_id: str) -> WechatResult:
+        try:
+            publish_id = await self._client.submit_publish(
+                access_token=self._secrets.resolve(account_ref), media_id=media_id
+            )
+        except ProviderAuthenticationError:
+            raise
+        except ProviderTransientError as exc:
+            raise ProviderResultUnknown("WeChat publish response was not received") from exc
+        except ProviderUnavailable:
+            return WechatResult(
+                status="failed",
+                media_id=media_id,
+                details={"message": "微信拒绝发布文章，请检查公众号授权和发布权限。"},
+            )
+        return WechatResult(
+            status="unknown",
+            media_id=media_id,
+            publish_id=publish_id,
+            external_action_performed=True,
+        )
+
+    async def reconcile(
+        self, *, operation_type: str, external_id: str, account_ref: str
+    ) -> WechatResult:
+        access_token = self._secrets.resolve(account_ref)
+        try:
+            if operation_type == "draft":
+                exists = await self._client.get_draft(
+                    access_token=access_token, media_id=external_id
+                )
+                return WechatResult(
+                    status="succeeded" if exists else "failed", media_id=external_id
+                )
+            status = await self._client.get_publish_status(
+                access_token=access_token, publish_id=external_id
+            )
+        except ProviderUnavailable:
+            return WechatResult(status="unknown")
+        if status == 0:
+            return WechatResult(status="succeeded", publish_id=external_id)
+        if status == 1:
+            return WechatResult(status="unknown", publish_id=external_id)
+        return WechatResult(status="failed", publish_id=external_id)
+
+    async def refresh_account(self, *, account_ref: str) -> WechatResult:
+        return WechatResult(
+            status="failed", details={"message": "公众号令牌由系统自动续期，无需重新扫码。"}
+        )
+
 
 async def component_access_token(
     session: AsyncSession,
@@ -363,6 +613,114 @@ async def component_access_token(
     config.last_token_refresh_at = utcnow()
     await session.flush()
     return token
+
+
+async def ensure_authorizer_access_token(
+    session: AsyncSession,
+    *,
+    account_id: str,
+    environment: str,
+    secrets: SecretProvider,
+    client: WechatOpenPlatformClient,
+    force: bool = False,
+) -> OfficialAccount:
+    account = await session.scalar(
+        select(OfficialAccount).where(OfficialAccount.id == account_id).with_for_update()
+    )
+    if not account:
+        raise ProviderUnavailable("WeChat account is unavailable")
+    if account.status == "reconnect_required":
+        raise ProviderReauthorizationRequired("WeChat authorization was revoked")
+    expires_at = account.token_expires_at
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if not force and account.token_secret_ref and (
+        not expires_at or expires_at > utcnow() + timedelta(seconds=300)
+    ):
+        return account
+    metadata = account.technical_metadata if isinstance(account.technical_metadata, dict) else {}
+    refresh_ref = metadata.get("authorizer_refresh_token_ref")
+    config_id = metadata.get("platform_config_id")
+    config = None
+    if isinstance(config_id, str) and config_id:
+        config = await session.scalar(
+            select(WechatPlatformConfig)
+            .where(
+                WechatPlatformConfig.id == config_id,
+                WechatPlatformConfig.status == "published",
+            )
+            .with_for_update()
+        )
+    if not config:
+        config = await published_wechat_config(session, environment=environment)
+    if not config or not isinstance(refresh_ref, str) or not refresh_ref:
+        raise ProviderUnavailable("WeChat refresh credential is unavailable")
+    started_at = time.monotonic()
+    last_error: ProviderUnavailable | None = None
+    for attempt in range(3):
+        try:
+            platform_token = await component_access_token(
+                session, config=config, secrets=secrets, client=client
+            )
+            access_token, refresh_token, expires_in = await client.refresh_authorization(
+                component_appid=config.component_appid,
+                component_access_token=platform_token,
+                authorizer_appid=account.authorizer_appid,
+                authorizer_refresh_token=secrets.resolve(refresh_ref),
+            )
+            break
+        except ProviderAuthenticationError as exc:
+            last_error = exc
+            if exc.code in {40001, 40014, 42001} and attempt == 0:
+                config.component_access_token_ref = None
+                config.component_access_token_expires_at = None
+                await session.flush()
+                continue
+            logger.warning(
+                "wechat_authorizer_token_refresh_failed appid=%s duration_ms=%d errcode=%s",
+                account.authorizer_appid,
+                round((time.monotonic() - started_at) * 1000),
+                exc.code,
+            )
+            account.technical_metadata = {
+                **metadata,
+                "last_refresh_error": f"errcode:{exc.code or 'credential_rejected'}",
+            }
+            await session.flush()
+            raise ProviderUnavailable("WeChat token refresh was rejected") from exc
+        except ProviderUnavailable as exc:
+            last_error = exc
+            if attempt == 2:
+                logger.warning(
+                    "wechat_authorizer_token_refresh_failed appid=%s duration_ms=%d error=%s",
+                    account.authorizer_appid,
+                    round((time.monotonic() - started_at) * 1000),
+                    type(exc).__name__,
+                )
+                account.technical_metadata = {
+                    **metadata,
+                    "last_refresh_error": type(exc).__name__,
+                }
+                await session.flush()
+                raise
+            await asyncio.sleep(2**attempt)
+    else:  # pragma: no cover - the loop either succeeds or raises
+        raise ProviderUnavailable("WeChat token refresh failed") from last_error
+    account.token_secret_ref = secrets.protect(access_token)
+    account.token_expires_at = utcnow() + timedelta(seconds=max(60, expires_in))
+    account.last_synced_at = utcnow()
+    account.technical_metadata = {
+        **{key: value for key, value in metadata.items() if key != "last_refresh_error"},
+        "authorizer_refresh_token_ref": secrets.protect(refresh_token),
+        "platform_config_id": config.id,
+    }
+    await session.flush()
+    logger.info(
+        "wechat_authorizer_token_refreshed appid=%s duration_ms=%d",
+        account.authorizer_appid,
+        round((time.monotonic() - started_at) * 1000),
+    )
+    return account
 
 
 async def published_wechat_config(

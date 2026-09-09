@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC
 from decimal import Decimal
 
@@ -12,13 +13,23 @@ from app.models import (
     ArticleConfirmation,
     ArticleRender,
     ArticleVersion,
+    Asset,
     JobRecord,
     OfficialAccount,
     ResourceLimit,
     WechatOperation,
     utcnow,
 )
-from app.providers import ProviderResultUnknown, ProviderUnavailable, WechatProvider
+from app.providers import (
+    ProviderAuthenticationError,
+    ProviderReauthorizationRequired,
+    ProviderResultUnknown,
+    ProviderUnavailable,
+    StorageProvider,
+    WechatCover,
+    WechatProvider,
+    WechatResult,
+)
 from app.system_settings import published_setting_section
 
 from .article import (
@@ -30,6 +41,22 @@ from .article import (
 from .common import create_job, emit_outbox
 
 BLOCKING_WECHAT_OPERATION_STATUSES = frozenset({"queued", "submitting", "reconciling", "unknown"})
+WechatTokenEnsurer = Callable[[OfficialAccount, bool], Awaitable[OfficialAccount]]
+WechatProviderCall = Callable[[], Awaitable[WechatResult]]
+WechatTokenRefresh = Callable[[], Awaitable[None]]
+
+
+async def _call_with_silent_token_refresh(
+    call: WechatProviderCall,
+    refresh: WechatTokenRefresh | None,
+) -> WechatResult:
+    try:
+        return await call()
+    except ProviderAuthenticationError:
+        if not refresh:
+            raise
+        await refresh()
+        return await call()
 
 
 def _article_operation_status(operation: WechatOperation) -> str:
@@ -154,9 +181,16 @@ async def create_wechat_operation(
     account = await owned_official_account(
         session, owner_id=owner_id, account_id=render.official_account_id
     )
-    if account.status != "connected" or _account_token_expired(account):
+    if account.status == "reconnect_required":
+        raise ApiError(403, "reauth_required", "公众号授权已解除，请管理员重新扫码绑定。")
+    metadata = account.technical_metadata if isinstance(account.technical_metadata, dict) else {}
+    can_refresh = bool(metadata.get("authorizer_refresh_token_ref"))
+    if account.status != "connected" or (_account_token_expired(account) and not can_refresh):
         raise ApiError(
-            409, "OFFICIAL_ACCOUNT_REAUTH_REQUIRED", "公众号连接已失效，请重新扫码连接。"
+            503,
+            "WECHAT_TOKEN_REFRESH_FAILED",
+            "公众号接口令牌暂时不可用，请稍后重试，无需重新扫码。",
+            retryable=True,
         )
     required_capabilities = {"draft"}
     if operation_type == "publish":
@@ -282,7 +316,12 @@ async def current_wechat_operation(
 
 
 async def process_wechat_operation(
-    session: AsyncSession, *, operation_id: str, provider: WechatProvider
+    session: AsyncSession,
+    *,
+    operation_id: str,
+    provider: WechatProvider,
+    storage: StorageProvider | None = None,
+    ensure_account_token: WechatTokenEnsurer | None = None,
 ) -> WechatOperation:
     operation = await session.scalar(
         select(WechatOperation).where(WechatOperation.id == operation_id).with_for_update()
@@ -308,12 +347,33 @@ async def process_wechat_operation(
         operation.error_code = "FROZEN_INPUT_MISMATCH"
         await sync_article_operation_status(session, operation=operation, article=article)
         return operation
+    active_account: OfficialAccount = account
     job = await session.scalar(
         select(JobRecord).where(
             JobRecord.resource_type == "wechat_operation",
             JobRecord.resource_id == operation.id,
         )
     )
+    if ensure_account_token:
+        try:
+            active_account = await ensure_account_token(active_account, False)
+        except ProviderReauthorizationRequired:
+            operation.status = "failed"
+            operation.error_code = "reauth_required"
+            operation.result = {"message": "公众号授权已解除，请管理员重新扫码绑定。"}
+        except ProviderUnavailable:
+            operation.status = "failed"
+            operation.error_code = "WECHAT_TOKEN_REFRESH_FAILED"
+            operation.result = {
+                "message": "公众号接口令牌自动续期暂时失败，请稍后重试，无需重新扫码。"
+            }
+        if operation.status == "failed":
+            if job:
+                job.status = "failed"
+                job.stage = "token_refresh_failed"
+                job.error_code = operation.error_code
+            await sync_article_operation_status(session, operation=operation, article=article)
+            return operation
     operation.status = "submitting"
     operation.error_code = None
     operation.result = {
@@ -337,11 +397,43 @@ async def process_wechat_operation(
         if operation.operation_type == "publish" and operation.media_id:
             media_id = operation.media_id
         else:
-            draft_result = await provider.create_or_update_draft(
-                account_ref=account.token_secret_ref or account.id,
-                html=render.html,
-                title=article.title,
-                cover_ref=render.cover_asset_id,
+            cover = None
+            if render.cover_asset_id:
+                asset = await session.scalar(
+                    select(Asset).where(
+                        Asset.id == render.cover_asset_id,
+                        Asset.owner_id == operation.owner_id,
+                        Asset.deleted_at.is_(None),
+                    )
+                )
+                if not asset or not storage:
+                    raise ProviderUnavailable("WeChat cover asset is unavailable")
+                cover = WechatCover(
+                    ref=asset.id,
+                    filename=asset.filename,
+                    mime_type=asset.mime_type,
+                    content=await storage.read_bytes(
+                        object_key=asset.object_key, max_bytes=10 * 1024 * 1024
+                    ),
+                )
+            async def create_draft() -> WechatResult:
+                return await provider.create_or_update_draft(
+                    account_ref=active_account.token_secret_ref or active_account.id,
+                    html=render.html,
+                    title=article.title,
+                    digest=article.summary or "",
+                    cover=cover,
+                )
+
+            async def refresh_token() -> None:
+                nonlocal active_account
+                if not ensure_account_token:
+                    return
+                active_account = await ensure_account_token(active_account, True)
+
+            draft_result = await _call_with_silent_token_refresh(
+                create_draft,
+                refresh_token if ensure_account_token else None,
             )
             operation.result = draft_result.details or {}
             if draft_result.status == "failed":
@@ -373,9 +465,21 @@ async def process_wechat_operation(
             # this point, reconciliation can query the publish stage without recreating
             # the draft.
             await session.commit()
-            publish_result = await provider.publish(
-                account_ref=account.token_secret_ref or account.id,
-                media_id=media_id,
+            async def publish_draft() -> WechatResult:
+                return await provider.publish(
+                    account_ref=active_account.token_secret_ref or active_account.id,
+                    media_id=media_id,
+                )
+
+            async def refresh_publish_token() -> None:
+                nonlocal active_account
+                if not ensure_account_token:
+                    return
+                active_account = await ensure_account_token(active_account, True)
+
+            publish_result = await _call_with_silent_token_refresh(
+                publish_draft,
+                refresh_publish_token if ensure_account_token else None,
             )
             operation.publish_id = publish_result.publish_id
             operation.result = publish_result.details or {}
@@ -396,6 +500,13 @@ async def process_wechat_operation(
             operation.publish_id = exc.external_id or operation.publish_id
         else:
             operation.media_id = exc.external_id or operation.media_id
+    except ProviderAuthenticationError:
+        active_account.token_expires_at = utcnow()
+        operation.status = "failed"
+        operation.error_code = "WECHAT_TOKEN_REFRESH_FAILED"
+        operation.result = {
+            "message": "公众号接口令牌自动续期暂时失败，本次操作未提交，无需重新扫码。"
+        }
     except ProviderUnavailable:
         operation.status = "failed"
         operation.error_code = (
@@ -417,7 +528,11 @@ async def process_wechat_operation(
 
 
 async def reconcile_wechat_operation(
-    session: AsyncSession, *, operation_id: str, provider: WechatProvider
+    session: AsyncSession,
+    *,
+    operation_id: str,
+    provider: WechatProvider,
+    ensure_account_token: WechatTokenEnsurer | None = None,
 ) -> WechatOperation:
     operation = await session.scalar(
         select(WechatOperation).where(WechatOperation.id == operation_id).with_for_update()
@@ -453,11 +568,31 @@ async def reconcile_wechat_operation(
             job.error_message = "No external identifier is available for a safe status query."
         await sync_article_operation_status(session, operation=operation)
         return operation
+    account = await session.get(OfficialAccount, operation.official_account_id)
+    if not account or not account.token_secret_ref:
+        operation.status = "unknown"
+        operation.error_code = "WECHAT_RECONCILIATION_ACCOUNT_UNAVAILABLE"
+        await sync_article_operation_status(session, operation=operation)
+        return operation
+    if ensure_account_token:
+        try:
+            account = await ensure_account_token(account, False)
+        except ProviderUnavailable:
+            operation.status = "unknown"
+            operation.error_code = "WECHAT_TOKEN_REFRESH_FAILED"
+            await sync_article_operation_status(session, operation=operation)
+            return operation
+    if not account.token_secret_ref:
+        operation.status = "unknown"
+        operation.error_code = "WECHAT_RECONCILIATION_ACCOUNT_UNAVAILABLE"
+        await sync_article_operation_status(session, operation=operation)
+        return operation
     operation.status = "reconciling"
     try:
         result = await provider.reconcile(
             operation_type=reconcile_stage,
             external_id=external_id,
+            account_ref=account.token_secret_ref,
         )
     except ProviderUnavailable:
         operation.status = "unknown"
@@ -495,9 +630,7 @@ async def reconcile_wechat_operation(
     await sync_article_operation_status(session, operation=operation)
     if job:
         job.status = operation.status
-        job.stage = (
-            "reconciled" if operation.status == "succeeded" else operation.status
-        )
+        job.stage = "reconciled" if operation.status == "succeeded" else operation.status
         job.progress = 100 if operation.status == "succeeded" else job.progress
         job.error_code = operation.error_code
     return operation

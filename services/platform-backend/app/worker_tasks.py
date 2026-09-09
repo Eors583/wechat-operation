@@ -35,12 +35,14 @@ from app.models import (
     JobRecord,
     LayoutTemplate,
     LibraryItem,
+    OfficialAccount,
     OutboxEvent,
     utcnow,
 )
 from app.provider_factory import build_providers
 from app.providers import EnvironmentSecretProvider, ProviderUnavailable
 from app.retrieval_routing import build_route_aware_retrieval_service
+from app.wechat_open_platform import WechatOpenPlatformClient, ensure_authorizer_access_token
 
 
 def _run(coroutine: Any) -> Any:
@@ -233,7 +235,8 @@ def process_wechat_operation_task(
 async def _process_wechat(operation_id: str, message_id: str | None = None) -> dict[str, Any]:
     config = Settings.from_env()
     database = Database(config)
-    provider = build_providers(config).wechat
+    secrets = _configured_secrets(config)
+    providers = build_providers(config, secrets)
     try:
         async with database.session_maker() as session:
             consumer = "process_wechat_operation"
@@ -242,8 +245,27 @@ async def _process_wechat(operation_id: str, message_id: str | None = None) -> d
             )
             if processed:
                 return processed.result
+
+            async def ensure_account_token(
+                account: OfficialAccount, force: bool = False
+            ) -> OfficialAccount:
+                return await ensure_authorizer_access_token(
+                    session,
+                    account_id=account.id,
+                    environment=config.environment,
+                    secrets=secrets,
+                    client=WechatOpenPlatformClient(),
+                    force=force,
+                )
+
             operation = await process_wechat_operation(
-                session, operation_id=operation_id, provider=provider
+                session,
+                operation_id=operation_id,
+                provider=providers.wechat,
+                storage=providers.storage,
+                ensure_account_token=(
+                    ensure_account_token if config.wechat_provider_mode == "direct" else None
+                ),
             )
             result = {"operation_id": operation.id, "status": operation.status}
             remember_inbox_message(session, consumer=consumer, message_id=message_id, result=result)
@@ -263,7 +285,8 @@ def reconcile_wechat_operation_task(
 async def _reconcile_wechat(operation_id: str, message_id: str | None = None) -> dict[str, Any]:
     config = Settings.from_env()
     database = Database(config)
-    provider = build_providers(config).wechat
+    secrets = _configured_secrets(config)
+    provider = build_providers(config, secrets).wechat
     try:
         async with database.session_maker() as session:
             consumer = "reconcile_wechat_operation"
@@ -272,8 +295,26 @@ async def _reconcile_wechat(operation_id: str, message_id: str | None = None) ->
             )
             if processed:
                 return processed.result
+
+            async def ensure_account_token(
+                account: OfficialAccount, force: bool = False
+            ) -> OfficialAccount:
+                return await ensure_authorizer_access_token(
+                    session,
+                    account_id=account.id,
+                    environment=config.environment,
+                    secrets=secrets,
+                    client=WechatOpenPlatformClient(),
+                    force=force,
+                )
+
             operation = await reconcile_wechat_operation(
-                session, operation_id=operation_id, provider=provider
+                session,
+                operation_id=operation_id,
+                provider=provider,
+                ensure_account_token=(
+                    ensure_account_token if config.wechat_provider_mode == "direct" else None
+                ),
             )
             result = {"operation_id": operation.id, "status": operation.status}
             remember_inbox_message(session, consumer=consumer, message_id=message_id, result=result)

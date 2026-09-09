@@ -83,11 +83,13 @@ from app.providers import (
     ContentSafetyProvider,
     EmbeddingProvider,
     ModelProvider,
+    ProviderReauthorizationRequired,
     ProviderResultUnknown,
     ProviderUnavailable,
     RerankProvider,
     SecretProvider,
     WechatProvider,
+    WechatResult,
 )
 from app.security import (
     RateLimiter,
@@ -99,7 +101,11 @@ from app.security import (
     request_hash,
 )
 from app.system_settings import ai_run_credit_cost
-from app.wechat_open_platform import WechatOpenPlatformClient, component_access_token
+from app.wechat_open_platform import (
+    WechatOpenPlatformClient,
+    component_access_token,
+    ensure_authorizer_access_token,
+)
 from app.wechat_public_layout import WeChatArticleApiConfig, WeChatPublicLayoutExtractionProvider
 
 from . import contracts as contract
@@ -1409,9 +1415,7 @@ async def delete_model_configuration(
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     deployment, provider = await _model_configuration_records(session, configuration_id, lock=True)
-    routes = list(
-        (await session.scalars(select(ModelRouteVersion).with_for_update())).all()
-    )
+    routes = list((await session.scalars(select(ModelRouteVersion).with_for_update())).all())
     route_changes: list[dict[str, Any]] = []
     for route in routes:
         fallbacks = [item for item in route.fallback_deployment_ids if item != deployment.id]
@@ -2570,6 +2574,8 @@ async def refresh_official_account(
     admin: Admin = Depends(require_admin_permission("wechat_accounts:write")),
     session: AsyncSession = Depends(get_session),
     provider: WechatProvider = Depends(wechat_provider),
+    config: Settings = Depends(settings),
+    secrets: SecretProvider = Depends(secret_provider),
 ) -> dict[str, Any]:
     account = await session.scalar(
         select(OfficialAccount)
@@ -2578,10 +2584,34 @@ async def refresh_official_account(
     )
     if not account:
         raise ApiError(404, "OFFICIAL_ACCOUNT_NOT_FOUND", "公众号连接不存在。")
-    if account.status == "reconnect_required" or not account.token_secret_ref:
-        raise ApiError(409, "WECHAT_RECONNECT_REQUIRED", "授权已失效，需要用户重新连接。")
+    if account.status == "reconnect_required":
+        raise ApiError(403, "reauth_required", "公众号授权已解除，请管理员重新扫码绑定。")
+    if not account.token_secret_ref:
+        raise ApiError(
+            503,
+            "WECHAT_TOKEN_REFRESH_FAILED",
+            "公众号接口令牌不可用，请检查服务配置，无需重新扫码。",
+            retryable=True,
+        )
+    account_ref = account.token_secret_ref
     try:
-        result = await provider.refresh_account(account_ref=account.token_secret_ref)
+        if config.wechat_provider_mode == "direct":
+            account = await ensure_authorizer_access_token(
+                session,
+                account_id=account.id,
+                environment=config.environment,
+                secrets=secrets,
+                client=WechatOpenPlatformClient(),
+            )
+            result = WechatResult(status="succeeded")
+        else:
+            result = await provider.refresh_account(account_ref=account_ref)
+    except ProviderReauthorizationRequired as exc:
+        raise ApiError(
+            403,
+            "reauth_required",
+            "公众号授权已解除，请管理员重新扫码绑定。",
+        ) from exc
     except ProviderResultUnknown as exc:
         account.status = "limited"
         account.technical_metadata = {
@@ -2731,9 +2761,7 @@ class WechatArticleApiPatch(BaseModel):
     priority: int | None = Field(default=None, ge=1, le=999)
     api_key: SecretStr | None = None
     clear_api_key: bool = False
-    auth_header: str | None = Field(
-        default=None, pattern=r"^[A-Za-z0-9-]+$", max_length=80
-    )
+    auth_header: str | None = Field(default=None, pattern=r"^[A-Za-z0-9-]+$", max_length=80)
     auth_prefix: str | None = Field(default=None, max_length=32)
     status: Literal["active", "disabled"] | None = None
     reason: str = Field(min_length=3, max_length=500)

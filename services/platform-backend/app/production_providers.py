@@ -34,6 +34,7 @@ from app.providers import (
     ProviderUnavailable,
     RerankResult,
     UploadDescriptor,
+    WechatCover,
     WechatResult,
 )
 
@@ -1130,7 +1131,13 @@ class HttpWechatGatewayProvider:
         return url
 
     async def create_or_update_draft(
-        self, *, account_ref: str, html: str, title: str, cover_ref: str | None
+        self,
+        *,
+        account_ref: str,
+        html: str,
+        title: str,
+        digest: str,
+        cover: WechatCover | None,
     ) -> WechatResult:
         request_id = f"draft_{uuid.uuid4().hex}"
         result = await self._client.post(
@@ -1140,7 +1147,8 @@ class HttpWechatGatewayProvider:
                 "account_ref": account_ref,
                 "html": html,
                 "title": title,
-                "cover_ref": cover_ref,
+                "digest": digest,
+                "cover_ref": cover.ref if cover else None,
             },
             result_unknown_on_transport_error=True,
             external_id=request_id,
@@ -1157,7 +1165,9 @@ class HttpWechatGatewayProvider:
         )
         return self._wechat_result(result)
 
-    async def reconcile(self, *, operation_type: str, external_id: str) -> WechatResult:
+    async def reconcile(
+        self, *, operation_type: str, external_id: str, account_ref: str
+    ) -> WechatResult:
         result = await self._client.post(
             "/v1/reconcile",
             {"operation_type": operation_type, "external_id": external_id},

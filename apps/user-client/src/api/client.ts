@@ -1325,9 +1325,9 @@ const mapTemplate = (value: unknown): LayoutTemplate => {
 }
 
 const accountStatus = (value: unknown): AccountStatus => {
-  if (value === 'connected') return 'connected'
+  if (value === 'reconnect_required') return 'reconnect'
   if (value === 'unsupported') return 'unsupported'
-  return 'reconnect'
+  return 'connected'
 }
 
 const avatarColor = (name: string) => {
@@ -2096,8 +2096,9 @@ const settleWechatOperation = async (
     }
     if (status === 'failed' || status === 'cancelled') {
       writePendingArticleOutcome(null, pending.articleId)
+      const result = record(operation.result)
       throw new ApiError(
-        '公众号操作没有完成，请检查连接状态后重试。',
+        optionalText(result.message) ?? '公众号操作没有完成，请检查连接状态后重试。',
         409,
         textValue(operation.errorCode, 'WECHAT_OPERATION_FAILED'),
         { operationId, result: operation.result },

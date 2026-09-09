@@ -94,8 +94,8 @@ const columns: QTableColumn<OfficialAccount>[] = [
 
 const statusInfo = (status: OfficialAccount['status']) =>
   ({
-    connected: { label: '连接正常', color: 'positive' },
-    reconnect: { label: '需要重新连接', color: 'warning' },
+    connected: { label: '已绑定 · 长期有效', color: 'positive' },
+    reconnect: { label: '授权已解除', color: 'warning' },
     unsupported: { label: '当前公众号不支持该功能', color: 'negative' },
   })[status]
 const capabilityLabel = (capability: string) =>
@@ -299,7 +299,7 @@ const disconnect = () => {
                   dense
                   no-caps
                   color="warning"
-                  label="重新连接"
+                  label="重新扫码绑定"
                   @click="openAuthorize(row)" /><q-btn
                   flat
                   dense
@@ -393,14 +393,14 @@ const disconnect = () => {
           label="模板管理"
           @click="showSelectedTemplates" /><AppButton
           v-if="selected.status === 'reconnect'"
-          label="重新连接"
+          label="重新扫码绑定"
           @click="reconnectSelected"
       /></template>
     </AppDialog>
 
     <AppDialog
       v-model="authDialog"
-      :title="selected ? '重新连接公众号' : '授权新公众号'"
+      :title="selected ? '重新扫码绑定公众号' : '授权新公众号'"
       width="650px"
       persistent
     >
@@ -422,8 +422,9 @@ const disconnect = () => {
         />
         <h2>{{ authorizationError ? '授权入口暂不可用' : '请使用公众号管理员微信扫码' }}</h2>
         <p v-if="authorization">
-          扫码后将直接进入微信授权确认，请选择需要接入的公众号。授权入口约在
-          <strong>{{ Math.ceil(authorization.expiresIn / 60) }} 分钟</strong> 后失效。
+          本次扫码仅用于绑定公众号，请选择需要接入的公众号。二维码约在
+          <strong>{{ Math.ceil(authorization.expiresIn / 60) }} 分钟</strong>
+          后失效；绑定后授权长期有效，接口令牌由系统自动续期，无需重复扫码。如需解除，请在公众号后台“授权管理”操作。
         </p>
         <p v-else-if="!authorizationError">正在向微信公众平台申请一次性授权入口…</p>
         <q-banner rounded
