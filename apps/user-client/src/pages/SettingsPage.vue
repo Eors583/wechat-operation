@@ -359,7 +359,7 @@ const deleteAccount = async () => {
           :error="[...preferenceValue].length > 2000"
           error-message="标题与内容合计不能超过 2000 字符（含格式分隔符）。"
           :hint="`已使用 ${[...preferenceValue].length} / 2000 字符`"
-        /><small>本轮明确要求始终高于历史偏好；你也可以在创作输入框中临时关闭历史偏好。</small>
+        />
       </div>
       <template #actions
         ><AppButton variant="ghost" label="取消" @click="preferenceDialog = false" /><AppButton
