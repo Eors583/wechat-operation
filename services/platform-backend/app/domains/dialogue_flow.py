@@ -4,10 +4,20 @@ import re
 from typing import Any
 
 
+def local_revision_requested(text: str) -> bool:
+    return bool(
+        re.match(
+            r"(?:请|帮我)?(?:只|仅)(?:把|修改|调整|润色|改写|精简|优化|替换|改|换)?"
+            r"(?:一下)?(?:文章的?)?(标题|开头|首段|第一段|结尾|末段|最后一段)",
+            text.strip(),
+        )
+    )
+
+
 def local_revision_target(text: str, document: dict[str, Any]) -> int | None:
     """Only a single, explicitly limited top-level block is safe to replace automatically."""
     match = re.fullmatch(
-        r"(?:请|帮我)?(?:只|仅)(?:把|修改|调整|润色|改写|精简|优化|替换)?"
+        r"(?:请|帮我)?(?:只|仅)(?:把|修改|调整|润色|改写|精简|优化|替换|改|换)?"
         r"(?:一下)?(?:文章的?)?(标题|开头|首段|第一段|结尾|末段|最后一段)[\s\S]*",
         text.strip(),
     )

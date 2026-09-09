@@ -14,7 +14,12 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
-from app.domains.dialogue_flow import explicit_article_request, local_revision_target, style_action
+from app.domains.dialogue_flow import (
+    explicit_article_request,
+    local_revision_requested,
+    local_revision_target,
+    style_action,
+)
 from app.domains.preference_learning import (
     MEMORY_INSTRUCTIONS,
     is_preference_only,
@@ -558,6 +563,11 @@ def classify_run_type(
 
 
 def _deterministic_response(run_type: str) -> tuple[str, list[str]] | None:
+    if run_type == "local_revision_clarification":
+        return (
+            "本轮要求只修改局部，但没有唯一定位到对应内容。请在编辑器中选中要修改的文字后发起局部修改；原文未改动。",
+            [],
+        )
     if run_type == "article_conflict_confirmation":
         return (
             "当前任务已经有一篇文章。你希望覆盖当前文章，还是新建任务保留两篇文章？",
@@ -1446,6 +1456,14 @@ async def create_ai_run(
         has_current_article=current_article_snapshot is not None,
         has_reference_links=has_links,
     )
+    if local_revision_requested(text):
+        local_content = (current_article_snapshot or {}).get("content")
+        run_type = (
+            "article_generation"
+            if isinstance(local_content, dict)
+            and local_revision_target(text, local_content) is not None
+            else "local_revision_clarification"
+        )
     if run_type == "clarification" and ai_settings.get("max_clarification_rounds") == 0:
         run_type = "article_generation"
     file_ids = await conversation_file_ids(session, task_id=task.id, content=content)
