@@ -41,6 +41,37 @@ test('first message creates a task, article, editor and confirmed WeChat draft',
   ).toBeVisible()
 })
 
+test('skill selection is visibly confirmed and remains selected', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await login(page)
+
+  await page.getByRole('button', { name: '更多创作选项' }).click()
+  const skillMenu = page.getByRole('listbox', { name: '选择技能' })
+  const skillOption = skillMenu.getByRole('option').nth(1)
+  const skillName = (await skillOption.locator('.q-item__label').first().textContent())?.trim()
+  expect(skillName).toBeTruthy()
+  await skillOption.click()
+
+  const selectedButton = page.locator('.prompt-composer__skill-button', { hasText: skillName! })
+  await expect(selectedButton).toBeVisible()
+  await selectedButton.click()
+  await expect(skillMenu.getByRole('option').filter({ hasText: skillName! })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  )
+  await expect(skillMenu.getByLabel('当前已选择')).toBeVisible()
+
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 1280, height: 720 },
+    { width: 1024, height: 768 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport)
+    await expectNoGlobalOverflow(page, `技能选择菜单 ${viewport.width}px`)
+  }
+})
+
 test('article version conflicts preserve local edits and offer an explicit recovery path', async ({
   page,
   context,

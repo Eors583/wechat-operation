@@ -39,6 +39,55 @@ const global = {
 }
 
 describe('composer file drop', () => {
+  it('shows the selected skill and emits a new selection from the menu', async () => {
+    const skills = [
+      {
+        id: 'skill-rewrite',
+        scope: 'official' as const,
+        name: '爆款文章改写',
+        description: '保留原文事实与核心观点',
+        category: '内容创作',
+        enabled: true,
+        scenes: '文章改写',
+        requirements: '忠于原文',
+        examples: [],
+      },
+      {
+        id: 'skill-title',
+        scope: 'official' as const,
+        name: '公众号标题优化',
+        description: '生成清晰、有点击动力的标题',
+        category: '内容创作',
+        enabled: true,
+        scenes: '标题优化',
+        requirements: '避免标题党',
+        examples: [],
+      },
+    ]
+    const wrapper = mount(PromptComposer, {
+      attachTo: document.body,
+      props: { skills, selectedSkillId: 'skill-rewrite' },
+      global,
+    })
+
+    expect(wrapper.get('[aria-label="当前技能：爆款文章改写，点击更改"]').text()).toContain(
+      '爆款文章改写',
+    )
+    await wrapper.get('[aria-label="当前技能：爆款文章改写，点击更改"]').trigger('click')
+    const titleOption = wrapper
+      .findAllComponents(QItem)
+      .find((item) => item.text().includes('公众号标题优化'))
+    expect(titleOption).toBeTruthy()
+    await titleOption!.trigger('click')
+    expect(wrapper.emitted('update:selectedSkillId')).toEqual([['skill-title']])
+
+    await wrapper.setProps({ selectedSkillId: 'skill-title' })
+    expect(wrapper.get('[aria-label="当前技能：公众号标题优化，点击更改"]').text()).toContain(
+      '公众号标题优化',
+    )
+    wrapper.unmount()
+  })
+
   it('offers stable automatic routing before fixed model choices', () => {
     const wrapper = mount(PromptComposer, {
       props: {
