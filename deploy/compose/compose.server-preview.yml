@@ -1,7 +1,7 @@
 name: wechat-ai-preview
 
 x-backend: &backend
-  image: wechat-ai-backend:${BACKEND_VERSION:-preview}
+  image: ${BACKEND_IMAGE_REPOSITORY:-wechat-ai-backend}:${BACKEND_VERSION:-preview}
   env_file:
     - path: ../../.env.server
       required: true
@@ -71,10 +71,7 @@ services:
       args:
         PIP_INDEX_URL: https://mirrors.aliyun.com/pypi/simple
         UV_DEFAULT_INDEX: https://mirrors.aliyun.com/pypi/simple
-    command: >-
-      /bin/sh -ec "uv run alembic upgrade head &&
-      uv run python scripts/migrate_retrieval.py &&
-      uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    command: uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
     mem_limit: 384m
 
   worker:
