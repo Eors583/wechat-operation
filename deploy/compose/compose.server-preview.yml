@@ -1,7 +1,7 @@
 name: wechat-ai-preview
 
 x-backend: &backend
-  image: wechat-ai-backend:${APP_VERSION:-preview}
+  image: wechat-ai-backend:${BACKEND_VERSION:-preview}
   env_file:
     - path: ../../.env.server
       required: true
@@ -44,7 +44,7 @@ services:
     restart: unless-stopped
 
   user-web:
-    image: wechat-ai-user:${APP_VERSION:-preview}
+    image: wechat-ai-user:${USER_WEB_VERSION:-preview}
     build:
       context: ../../apps/user-client
       target: production
@@ -54,7 +54,7 @@ services:
     restart: unless-stopped
 
   admin-web:
-    image: wechat-ai-admin:${APP_VERSION:-preview}
+    image: wechat-ai-admin:${ADMIN_WEB_VERSION:-preview}
     build:
       context: ../../apps/admin-console
       target: production
