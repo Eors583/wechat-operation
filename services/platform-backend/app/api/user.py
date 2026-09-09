@@ -6,7 +6,7 @@ import json
 from datetime import UTC, timedelta
 from decimal import Decimal
 from typing import Annotated, Any, Literal
-from urllib.parse import quote, urlencode, urljoin, urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Cookie, Depends, Header, Query, Request, Response
 from fastapi.responses import StreamingResponse
@@ -2758,19 +2758,21 @@ async def create_authorization_url(
             )
         client = WechatOpenPlatformClient()
         try:
-            await component_access_token(
+            token = await component_access_token(
                 session,
                 config=platform_config,
                 secrets=secrets,
                 client=client,
             )
-            # A scanned WeChat URL has no Referer. Establish our public origin first.
-            url = (
-                urljoin(platform_config.authorization_callback_url, "/callbacks/v1/wechat/entry")
-                + "?"
-                + urlencode({"state": state})
+            authorization = await client.pre_authorization(
+                component_appid=platform_config.component_appid,
+                component_access_token=token,
+                callback_url=platform_config.authorization_callback_url,
+                state=state,
+                mobile=True,
             )
-            expires_in = 600
+            url = authorization.url
+            expires_in = authorization.expires_in
         except ProviderUnavailable as exc:
             raise ApiError(
                 503,

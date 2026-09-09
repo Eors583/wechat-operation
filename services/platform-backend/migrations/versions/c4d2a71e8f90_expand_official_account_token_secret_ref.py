@@ -17,20 +17,20 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.alter_column(
-        "official_accounts",
-        "token_secret_ref",
-        existing_type=sa.String(length=255),
-        type_=sa.Text(),
-        existing_nullable=True,
-    )
+    with op.batch_alter_table("official_accounts") as batch_op:
+        batch_op.alter_column(
+            "token_secret_ref",
+            existing_type=sa.String(length=255),
+            type_=sa.Text(),
+            existing_nullable=True,
+        )
 
 
 def downgrade() -> None:
-    op.alter_column(
-        "official_accounts",
-        "token_secret_ref",
-        existing_type=sa.Text(),
-        type_=sa.String(length=255),
-        existing_nullable=True,
-    )
+    with op.batch_alter_table("official_accounts") as batch_op:
+        batch_op.alter_column(
+            "token_secret_ref",
+            existing_type=sa.Text(),
+            type_=sa.String(length=255),
+            existing_nullable=True,
+        )

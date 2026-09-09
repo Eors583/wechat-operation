@@ -165,11 +165,6 @@ const reconnectSelected = () => {
   void openAuthorize(account)
 }
 
-const openAuthorizationPage = () => {
-  if (authorization.value?.authorizationUrl.startsWith('http'))
-    void platform.openExternal(authorization.value.authorizationUrl)
-}
-
 const finishAuthorize = async (silent = false) => {
   if (authorizing.value) return
   authorizing.value = true
@@ -427,7 +422,7 @@ const disconnect = () => {
         />
         <h2>{{ authorizationError ? '授权入口暂不可用' : '请使用公众号管理员微信扫码' }}</h2>
         <p v-if="authorization">
-          扫码后选择需要接入的公众号，并在微信公众平台确认授权。授权入口约在
+          扫码后将直接进入微信授权确认，请选择需要接入的公众号。授权入口约在
           <strong>{{ Math.ceil(authorization.expiresIn / 60) }} 分钟</strong> 后失效。
         </p>
         <p v-else-if="!authorizationError">正在向微信公众平台申请一次性授权入口…</p>
@@ -440,10 +435,6 @@ const disconnect = () => {
       </div>
       <template #actions
         ><AppButton variant="ghost" label="取消" @click="authDialog = false" /><AppButton
-          v-if="authorization?.authorizationUrl.startsWith('http')"
-          variant="outline"
-          label="打开授权页面"
-          @click="openAuthorizationPage" /><AppButton
           label="已完成授权，刷新状态"
           :loading="authorizing"
           :disabled="!authorization"

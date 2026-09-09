@@ -231,14 +231,15 @@ class FakeWechatOpenPlatformClient:
     async def pre_authorization(self, *, mobile: bool = False, **values: str) -> PreAuthorization:
         callback = values["callback_url"]
         redirect = f"{callback}?state={values['state']}&component_appid={values['component_appid']}"
-        query = urlencode(
-            {
-                "component_appid": values["component_appid"],
-                "pre_auth_code": "pre-auth-code",
-                "redirect_uri": redirect,
-            }
-        )
+        parameters = {
+            "component_appid": values["component_appid"],
+            "pre_auth_code": "pre-auth-code",
+            "redirect_uri": redirect,
+        }
         path = "/safe/bindcomponent" if mobile else "/cgi-bin/componentloginpage"
+        if mobile:
+            parameters.update(action="bindcomponent", no_scan="1")
+        query = urlencode(parameters)
         return PreAuthorization(
             url=f"https://mp.weixin.qq.com{path}?{query}",
             expires_in=600,
@@ -367,23 +368,28 @@ async def test_direct_scan_authorization_binds_account_to_authenticated_owner(
     )
     assert authorization.status_code == 200, authorization.text
     authorization_url = authorization.json()["authorization_url"]
-    assert authorization_url.startswith("http://testserver/callbacks/v1/wechat/entry?")
-    assert "pre_auth_code" not in authorization_url
-    state = parse_qs(urlparse(authorization_url).query)["state"][0]
-    entry = await client.get(authorization_url)
+    assert urlparse(authorization_url).path == "/safe/bindcomponent"
+    authorization_query = parse_qs(urlparse(authorization_url).query)
+    assert authorization_query["pre_auth_code"] == ["pre-auth-code"]
+    assert authorization_query["no_scan"] == ["1"]
+    callback_url = authorization_query["redirect_uri"][0]
+    state = parse_qs(urlparse(callback_url).query)["state"][0]
+    assert parse_qs(urlparse(callback_url).query)["component_appid"] == ["wx-component-appid"]
+    entry_url = f"http://testserver/callbacks/v1/wechat/entry?{urlencode({'state': state})}"
+    entry = await client.get(entry_url)
     assert entry.status_code == 200, entry.text
     assert entry.headers["referrer-policy"] == "origin"
     assert entry.headers["cache-control"] == "no-store"
     assert 'referrerpolicy="origin"' in entry.text
     wechat_url = unescape(entry.text.split('href="')[1].split('"')[0])
-    callback_url = parse_qs(urlparse(wechat_url).query)["redirect_uri"][0]
-    assert parse_qs(urlparse(callback_url).query)["state"] == [state]
+    legacy_callback_url = parse_qs(urlparse(wechat_url).query)["redirect_uri"][0]
+    assert parse_qs(urlparse(legacy_callback_url).query)["state"] == [state]
     assert urlparse(wechat_url).path == "/cgi-bin/componentloginpage"
-    mobile = await client.get(authorization_url, headers={"User-Agent": "MicroMessenger/8.0"})
+    mobile = await client.get(entry_url, headers={"User-Agent": "MicroMessenger/8.0"})
     assert "/safe/bindcomponent?" in mobile.text
-    wrong_host = await client.get(authorization_url.replace("testserver", "untrusted.example"))
+    wrong_host = await client.get(entry_url.replace("testserver", "untrusted.example"))
     assert wrong_host.status_code == 303
-    assert wrong_host.headers["location"] == authorization_url
+    assert wrong_host.headers["location"] == entry_url
     invalid = await client.get("/callbacks/v1/wechat/entry", params={"state": "x" * 43})
     assert invalid.status_code == 400
     async with app.state.database.session_maker() as session:
@@ -395,7 +401,7 @@ async def test_direct_scan_authorization_binds_account_to_authenticated_owner(
         assert stored is not None
         stored.expires_at = utcnow() - timedelta(seconds=1)
         await session.commit()
-    expired = await client.get(authorization_url)
+    expired = await client.get(entry_url)
     assert expired.status_code == 400
     async with app.state.database.session_maker() as session:
         stored = await session.scalar(
@@ -426,7 +432,7 @@ async def test_direct_scan_authorization_binds_account_to_authenticated_owner(
     )
     assert callback.status_code == 200, callback.text
     assert "公众号授权已完成" in callback.text
-    consumed = await client.get(authorization_url)
+    consumed = await client.get(entry_url)
     assert consumed.status_code == 400
 
     message_xml = (

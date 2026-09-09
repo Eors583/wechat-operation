@@ -90,3 +90,39 @@ test('V3 official account list stays minimal and opens the four-pane template ed
   await page.waitForTimeout(400)
   await page.screenshot({ path: 'test-results/visual/template-editor-1440.png', fullPage: true })
 })
+
+test('official-account QR opens WeChat authorization directly without an intermediate button', async ({
+  page,
+}) => {
+  await page.route('**/api/v1/official-accounts/authorize-url', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        authorization_url:
+          'https://mp.weixin.qq.com/safe/bindcomponent?component_appid=wx_component_test&pre_auth_code=preauth_test&redirect_uri=https%3A%2F%2Fapi.example.com%2Fcallbacks%2Fv1%2Fwechat%2Fauthorize&action=bindcomponent&no_scan=1#wechat_redirect',
+        expires_in: 600,
+      }),
+    })
+  })
+  await login(page)
+  await page.goto('/official-accounts')
+  await page.getByRole('button', { name: '授权新公众号' }).click()
+
+  await expect(page.getByAltText('微信公众号授权二维码')).toBeVisible()
+  await expect(page.getByText('扫码后将直接进入微信授权确认')).toBeVisible()
+  await expect(page.getByRole('button', { name: '打开授权页面' })).toHaveCount(0)
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 1280, height: 720 },
+    { width: 1024, height: 768 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport)
+    await expectNoGlobalOverflow(page, `公众号直接授权弹窗 ${viewport.width}px`)
+    await page.screenshot({
+      path: `test-results/visual/wechat-direct-authorization-${viewport.width}.png`,
+      animations: 'disabled',
+    })
+  }
+})

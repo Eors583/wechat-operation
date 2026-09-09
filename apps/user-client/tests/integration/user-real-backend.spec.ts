@@ -84,6 +84,8 @@ test('renders a contained one-time official-account authorization QR dialog', as
   await expect(page.getByRole('heading', { name: '授权新公众号' })).toBeVisible()
   await expect(page.getByAltText('微信公众号授权二维码')).toBeVisible()
   await expect(page.getByText('请使用公众号管理员微信扫码')).toBeVisible()
+  await expect(page.getByText('扫码后将直接进入微信授权确认')).toBeVisible()
+  await expect(page.getByRole('button', { name: '打开授权页面' })).toHaveCount(0)
   for (const viewport of [
     { width: 1440, height: 900 },
     { width: 1280, height: 720 },
