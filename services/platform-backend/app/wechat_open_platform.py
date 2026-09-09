@@ -7,6 +7,7 @@ import hmac
 import logging
 import struct
 import time
+import zlib
 from dataclasses import dataclass
 from datetime import UTC, timedelta
 from typing import Any, cast
@@ -35,6 +36,23 @@ from app.providers import (
 WECHAT_API_BASE = "https://api.weixin.qq.com"
 WECHAT_AUTHORIZATION_PAGE = "https://mp.weixin.qq.com/cgi-bin/componentloginpage"
 logger = logging.getLogger(__name__)
+
+
+def _default_wechat_cover() -> WechatCover:
+    width, height = 900, 383
+    scanline = b"\x00" + b"\x17\x8a\x55" * width
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        checksum = zlib.crc32(kind + payload) & 0xFFFFFFFF
+        return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", checksum)
+
+    content = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(scanline * height, level=9))
+        + chunk(b"IEND", b"")
+    )
+    return WechatCover("generated-default", "default-cover.png", "image/png", content)
 
 
 @dataclass(frozen=True, slots=True)
@@ -496,11 +514,7 @@ class DirectWechatProvider:
         digest: str,
         cover: WechatCover | None,
     ) -> WechatResult:
-        if not cover:
-            return WechatResult(
-                status="failed",
-                details={"message": "请先设置文章封面，再存入公众号草稿箱。"},
-            )
+        cover = cover or _default_wechat_cover()
         access_token = self._secrets.resolve(account_ref)
         try:
             thumb_media_id = await self._client.upload_permanent_image(

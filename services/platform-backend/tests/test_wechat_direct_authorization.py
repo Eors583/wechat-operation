@@ -303,19 +303,28 @@ async def test_direct_provider_uploads_cover_before_creating_draft(
     }
 
 
-async def test_direct_provider_rejects_a_draft_without_cover() -> None:
-    provider = DirectWechatProvider(EnvironmentSecretProvider(), FakeDirectDraftClient())  # type: ignore[arg-type]
+async def test_direct_provider_uses_a_generated_cover_when_none_was_selected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("WECHAT_AUTHORIZER_TOKEN", "authorizer-access-token")
+    client = FakeDirectDraftClient()
+    provider = DirectWechatProvider(EnvironmentSecretProvider(), client)  # type: ignore[arg-type]
 
     result = await provider.create_or_update_draft(
-        account_ref="unused",
+        account_ref="env:WECHAT_AUTHORIZER_TOKEN",
         html="<p>正文</p>",
         title="文章标题",
         digest="文章摘要",
         cover=None,
     )
 
-    assert result.status == "failed"
-    assert result.details == {"message": "请先设置文章封面，再存入公众号草稿箱。"}
+    assert result.status == "succeeded"
+    assert result.media_id == "draft-media-id"
+    assert client.cover
+    assert client.cover.filename == "default-cover.png"
+    assert client.cover.mime_type == "image/png"
+    assert client.cover.content.startswith(b"\x89PNG\r\n\x1a\n")
+    assert struct.unpack(">II", client.cover.content[16:24]) == (900, 383)
 
 
 async def test_open_platform_client_uses_material_and_draft_endpoints() -> None:

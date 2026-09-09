@@ -643,7 +643,7 @@ const chooseCover = async () => {
       projectId: article.value.projectId,
       taskId: article.value.taskId,
       saveToLibrary: false,
-      waitForReady: true,
+      waitForReady: false,
     })
     if (!uploaded.assetId) throw new Error('封面上传成功，但没有返回可用的资源编号。')
     coverAssetId.value = uploaded.assetId
