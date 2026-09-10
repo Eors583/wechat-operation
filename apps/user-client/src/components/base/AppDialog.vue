@@ -9,8 +9,15 @@ withDefaults(
     persistent?: boolean
     fullScreenMobile?: boolean
     compact?: boolean
+    headerless?: boolean
   }>(),
-  { width: '720px', persistent: false, fullScreenMobile: true, compact: false },
+  {
+    width: '720px',
+    persistent: false,
+    fullScreenMobile: true,
+    compact: false,
+    headerless: false,
+  },
 )
 
 defineEmits<{ 'update:modelValue': [value: boolean] }>()
@@ -28,7 +35,7 @@ const $q = useQuasar()
       :class="['app-dialog', { 'app-dialog--compact': compact }]"
       :style="{ '--dialog-width': width }"
     >
-      <q-card-section class="app-dialog__header">
+      <q-card-section v-if="!headerless" class="app-dialog__header">
         <h2>{{ title }}</h2>
         <q-btn
           flat
@@ -39,7 +46,17 @@ const $q = useQuasar()
           @click="$emit('update:modelValue', false)"
         />
       </q-card-section>
-      <q-separator />
+      <q-btn
+        v-else
+        class="app-dialog__close"
+        flat
+        round
+        dense
+        icon="close"
+        aria-label="关闭"
+        @click="$emit('update:modelValue', false)"
+      />
+      <q-separator v-if="!headerless" />
       <div class="app-dialog__body"><slot /></div>
       <q-separator v-if="$slots.actions" />
       <q-card-actions v-if="$slots.actions" class="app-dialog__actions"
@@ -51,6 +68,7 @@ const $q = useQuasar()
 
 <style scoped lang="scss">
 .app-dialog {
+  position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(var(--dialog-width), calc(100vw - 32px));
@@ -80,6 +98,14 @@ const $q = useQuasar()
     min-width: 0;
     min-height: 0;
     overflow: auto;
+  }
+
+  &__close {
+    position: absolute;
+    z-index: 1;
+    top: 10px;
+    right: 12px;
+    color: var(--app-text-secondary);
   }
 
   &__actions {

@@ -238,52 +238,57 @@ const remove = () => {
       />
     </div>
 
-    <AppDialog v-if="selected" v-model="detailDialog" title="技能详情" width="820px">
+    <AppDialog
+      v-if="selected"
+      v-model="detailDialog"
+      title="技能详情"
+      width="580px"
+      compact
+      headerless
+    >
       <div class="skill-detail">
         <div class="skill-detail__hero">
-          <div>
+          <div class="skill-detail__icon">
             <q-icon
               :name="selected.scope === 'official' ? 'description' : 'edit_note'"
-              size="38px"
+              size="32px"
             />
           </div>
           <h2>{{ selected.name }}</h2>
           <p>{{ selected.description }}</p>
         </div>
-        <section>
+        <section v-if="selected.examples.length" class="skill-detail__section">
           <h3>示例指令</h3>
           <div class="skill-detail__examples">
-            <q-card v-for="example in selected.examples" :key="example" flat bordered
-              ><q-card-section
-                ><q-icon name="chat_bubble_outline" />{{ example }}</q-card-section
-              ></q-card
-            >
+            <q-card v-for="example in selected.examples" :key="example" flat bordered>
+              <q-card-section>
+                <q-icon name="chat_bubble_outline" size="17px" />
+                <span>{{ example }}</span>
+              </q-card-section>
+            </q-card>
           </div>
         </section>
-        <q-list bordered separator
-          ><q-item
-            ><q-item-section
-              ><q-item-label caption>技能类型</q-item-label
-              ><q-item-label>{{
-                selected.scope === 'official' ? '官方技能' : '我的技能'
-              }}</q-item-label></q-item-section
-            ></q-item
-          ><q-item
-            ><q-item-section
-              ><q-item-label caption>适用场景</q-item-label
-              ><q-item-label class="wrap-anywhere">{{
-                selected.scenes
-              }}</q-item-label></q-item-section
-            ></q-item
-          ><q-item
-            ><q-item-section
-              ><q-item-label caption>写作要求</q-item-label
-              ><q-item-label class="wrap-anywhere">{{
-                selected.requirements
-              }}</q-item-label></q-item-section
-            ></q-item
-          ></q-list
-        >
+        <section class="skill-detail__section">
+          <h3>详情</h3>
+          <dl class="skill-detail__facts">
+            <div>
+              <dt>技能类型</dt>
+              <dd>{{ selected.scope === 'official' ? '官方技能' : '我的技能' }}</dd>
+            </div>
+            <div>
+              <dt>技能分类</dt>
+              <dd>{{ selected.category }}</dd>
+            </div>
+            <div>
+              <dt>适用场景</dt>
+              <dd>{{ selected.scenes }}</dd>
+            </div>
+            <div>
+              <dt>写作要求</dt>
+              <dd>{{ selected.requirements }}</dd>
+            </div>
+          </dl>
+        </section>
       </div>
       <template #actions>
         <AppButton
@@ -384,51 +389,99 @@ const remove = () => {
 
 .skill-detail {
   display: grid;
-  gap: 24px;
+  gap: 22px;
   min-width: 0;
-  padding: 24px;
+  padding: 44px 24px 24px;
 }
 .skill-detail__hero {
   display: grid;
   place-items: center;
+  min-width: 0;
   text-align: center;
 }
-.skill-detail__hero > div {
+.skill-detail__icon {
   display: grid;
   place-items: center;
-  width: 76px;
-  height: 76px;
+  width: 62px;
+  height: 62px;
   color: var(--app-action-primary);
   background: var(--app-action-soft);
-  border-radius: 16px;
+  border-radius: 13px;
 }
 .skill-detail__hero h2 {
-  margin: 14px 0 0;
-  font-size: 24px;
+  margin: 11px 0 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 .skill-detail__hero p {
-  max-width: 650px;
-  margin: 6px 0 0;
+  max-width: 490px;
+  margin: 4px 0 0;
   color: var(--app-text-secondary);
+  font-size: 12px;
+  line-height: 1.7;
   overflow-wrap: anywhere;
 }
 .skill-detail h3 {
-  margin: 0 0 12px;
+  margin: 0 0 9px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
 }
 .skill-detail__examples {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 12px;
+  min-width: 0;
+}
+.skill-detail__examples .q-card {
+  min-width: 0;
+  border-color: var(--app-border-default);
+  border-radius: 8px;
 }
 .skill-detail__examples .q-card__section {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 10px;
+  align-items: start;
+  gap: 9px;
+  min-height: 68px;
+  padding: 13px;
+  color: var(--app-text-primary);
+  font-size: 12px;
+  line-height: 1.65;
   overflow-wrap: anywhere;
 }
-.skill-detail .q-list {
-  border-color: var(--app-border-default);
-  border-radius: 10px;
+.skill-detail__examples .q-icon {
+  margin-top: 2px;
+  color: var(--app-text-secondary);
+}
+.skill-detail__facts {
+  min-width: 0;
+  margin: 0;
+  padding: 0 13px;
+  border: 1px solid var(--app-border-default);
+  border-radius: 8px;
+}
+.skill-detail__facts > div {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 0;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.skill-detail__facts > div + div {
+  border-top: 1px solid var(--app-border-default);
+}
+.skill-detail__facts dt {
+  color: var(--app-text-muted);
+}
+.skill-detail__facts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--app-text-primary);
+  overflow-wrap: anywhere;
 }
 
 .skill-form {
@@ -456,6 +509,12 @@ const remove = () => {
   .skills-grid,
   .skill-detail__examples {
     grid-template-columns: 1fr;
+  }
+  .skill-detail {
+    padding: 44px 18px 20px;
+  }
+  .skill-detail__facts > div {
+    grid-template-columns: 72px minmax(0, 1fr);
   }
   .skills-filter .q-tabs :deep(.q-tab__label) {
     font-size: 12px;
