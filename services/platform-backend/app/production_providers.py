@@ -287,7 +287,7 @@ class OpenAICompatibleModelProvider:
             "article_revision": 16_384,
             "fast_task": 4_096,
             "content_check": 256,
-            "memory_summary": 512,
+            "memory_summary": 4096 if context.get("private_user_preferences") else 512,
             "vision": 2_048,
             "layout_extraction": 4_096,
         }.get(purpose)

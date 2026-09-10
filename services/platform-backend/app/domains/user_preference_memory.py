@@ -29,7 +29,7 @@ INSTRUCTIONS = """
 返回 JSON {"preferences":[{"key":"稳定的偏好维度", "value":"简短偏好",
 "message_id":"来源消息ID", "evidence":"该消息中的连续原文"}]}。
 每条必须有可核对的用户原文；没有可靠长期偏好就返回空数组。
-更新已有维度复用其 key，新要求替代同维度旧要求，最多10条，每条 value 不超过200字。
+更新已有维度复用其 key，新要求替代同维度旧要求，最多5条，每条 value 和 evidence 不超过100字。
 不要返回任务摘要、写作风格、保存说明或完整历史档案。
 """
 
@@ -139,6 +139,7 @@ async def summarize_preferences(
         purpose="memory_summary",
         prompt=INSTRUCTIONS,
         context={
+            "private_user_preferences": True,
             "items": [{"key": k, "value": v["value"]} for k, v in existing.items()],
             "user_messages": [{"id": k, "text": v[0]} for k, v in messages.items()],
         },
