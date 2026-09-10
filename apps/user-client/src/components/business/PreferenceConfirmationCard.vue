@@ -30,12 +30,6 @@ defineEmits<{ decide: [command: string] }>()
         :disabled="disabled"
         @click="$emit('decide', `仅本次使用用户偏好建议：${proposal.value}`)"
       />
-      <AppButton
-        label="不再建议此项"
-        variant="ghost"
-        :disabled="disabled"
-        @click="$emit('decide', `不再建议用户偏好：${proposal.value}`)"
-      />
     </q-card-actions>
   </q-card>
 </template>
