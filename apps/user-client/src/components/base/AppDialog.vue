@@ -8,8 +8,9 @@ withDefaults(
     width?: string
     persistent?: boolean
     fullScreenMobile?: boolean
+    compact?: boolean
   }>(),
-  { width: '720px', persistent: false, fullScreenMobile: true },
+  { width: '720px', persistent: false, fullScreenMobile: true, compact: false },
 )
 
 defineEmits<{ 'update:modelValue': [value: boolean] }>()
@@ -23,7 +24,10 @@ const $q = useQuasar()
     :maximized="fullScreenMobile && $q.screen.lt.sm"
     @update:model-value="$emit('update:modelValue', $event)"
   >
-    <q-card class="app-dialog" :style="{ '--dialog-width': width }">
+    <q-card
+      :class="['app-dialog', { 'app-dialog--compact': compact }]"
+      :style="{ '--dialog-width': width }"
+    >
       <q-card-section class="app-dialog__header">
         <h2>{{ title }}</h2>
         <q-btn
@@ -82,6 +86,18 @@ const $q = useQuasar()
     justify-content: flex-end;
     gap: 10px;
     padding: 16px 24px max(16px, env(safe-area-inset-bottom));
+  }
+
+  &--compact &__header {
+    padding: 14px 20px;
+
+    h2 {
+      font-size: 17px;
+    }
+  }
+
+  &--compact &__actions {
+    padding: 12px 20px max(12px, env(safe-area-inset-bottom));
   }
 }
 

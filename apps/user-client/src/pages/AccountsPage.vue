@@ -100,6 +100,23 @@ const statusInfo = (status: OfficialAccount['status']) =>
   })[status]
 const capabilityLabel = (capability: string) =>
   ({ draft: '写入草稿箱', publish: '发布文章', assets: '管理素材' })[capability] ?? capability
+const capabilityDetail = (capability: string) =>
+  ({
+    draft: { label: '草稿箱', description: '可将文章写入公众号草稿箱' },
+    publish: { label: '文章发布', description: '可发布已确认的公众号文章' },
+    assets: { label: '素材管理', description: '可读取并管理公众号素材' },
+  })[capability] ?? { label: capability, description: '已获得公众号授权' }
+const detailStatusLabel = (status: OfficialAccount['status']) =>
+  ({ connected: '授权正常', reconnect: '需要重新授权', unsupported: '能力受限' })[status]
+const formatDetailTime = (value: string) =>
+  new Date(value).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
 
 const showDetail = (account: OfficialAccount) => {
   selected.value = account
@@ -336,56 +353,62 @@ const disconnect = () => {
       </div>
     </section>
 
-    <AppDialog v-if="selected" v-model="detailDialog" title="公众号详情" width="760px">
+    <AppDialog
+      v-if="selected"
+      v-model="detailDialog"
+      title="公众号详情"
+      width="600px"
+      compact
+    >
       <div class="account-detail">
         <div class="account-detail__hero">
-          <q-avatar size="62px" :style="{ background: selected.avatarColor, color: '#fff' }">{{
+          <q-avatar size="46px" :style="{ background: selected.avatarColor, color: '#fff' }">{{
             selected.avatarText
           }}</q-avatar>
-          <div>
-            <h2>{{ selected.name }}</h2>
-            <q-badge :color="statusInfo(selected.status).color" outline>{{
-              statusInfo(selected.status).label
-            }}</q-badge>
+          <div class="account-detail__identity">
+            <div class="account-detail__name">
+              <h2>{{ selected.name }}</h2>
+              <q-badge :color="statusInfo(selected.status).color">{{
+                detailStatusLabel(selected.status)
+              }}</q-badge>
+            </div>
+            <small>ID：{{ selected.id }}</small>
           </div>
         </div>
-        <q-list bordered separator
-          ><q-item
-            ><q-item-section
-              ><q-item-label caption>公众号名称</q-item-label
-              ><q-item-label>{{ selected.name }}</q-item-label></q-item-section
-            ><q-item-section
-              ><q-item-label caption>授权状态</q-item-label
-              ><q-item-label>{{ statusInfo(selected.status).label }}</q-item-label></q-item-section
-            ></q-item
-          ><q-item
-            ><q-item-section
-              ><q-item-label caption>授权时间</q-item-label
-              ><q-item-label>{{
-                new Date(selected.authorizedAt).toLocaleString('zh-CN')
-              }}</q-item-label></q-item-section
-            ><q-item-section
-              ><q-item-label caption>最近同步</q-item-label
-              ><q-item-label>{{
-                new Date(selected.lastSyncedAt).toLocaleString('zh-CN')
-              }}</q-item-label></q-item-section
-            ></q-item
-          ></q-list
-        >
-        <section>
-          <h3>可用能力</h3>
+        <q-separator />
+        <section class="account-detail__section">
+          <h3>基本信息</h3>
+          <dl class="account-detail__facts">
+            <div><dt>公众号名称</dt><dd>{{ selected.name }}</dd></div>
+            <div>
+              <dt>授权状态</dt>
+              <dd :class="`text-${statusInfo(selected.status).color}`">
+                {{ detailStatusLabel(selected.status) }}
+              </dd>
+            </div>
+            <div><dt>账号 ID</dt><dd>{{ selected.id }}</dd></div>
+            <div><dt>授权时间</dt><dd>{{ formatDetailTime(selected.authorizedAt) }}</dd></div>
+            <div><dt>最近同步</dt><dd>{{ formatDetailTime(selected.lastSyncedAt) }}</dd></div>
+          </dl>
+        </section>
+        <section class="account-detail__section">
+          <h3>已授权能力</h3>
           <div class="account-detail__capabilities">
-            <q-chip
+            <div
               v-for="capability in selected.capabilities"
               :key="capability"
-              icon="check_circle"
-              color="positive"
-              text-color="white"
-              >{{ capabilityLabel(capability) }}</q-chip
+              class="account-detail__capability"
             >
+              <q-icon name="check_circle" color="positive" size="17px" />
+              <div>
+                <strong>{{ capabilityDetail(capability).label }}</strong>
+                <small>{{ capabilityDetail(capability).description }}</small>
+              </div>
+              <q-badge color="positive">已授权</q-badge>
+            </div>
           </div>
-          <p>能力状态由微信平台同步；用户界面不展示技术令牌或接口名称。</p>
         </section>
+        <p class="account-detail__note">授权状态由微信公众平台同步更新。</p>
       </div>
       <template #actions
         ><AppButton variant="danger" label="解除连接" @click="disconnect" /><AppButton
@@ -504,48 +527,125 @@ const disconnect = () => {
 
 .account-detail {
   display: grid;
-  gap: 22px;
+  gap: 18px;
   min-width: 0;
-  padding: 24px;
+  padding: 20px;
+  font-size: 12px;
 }
 .account-detail__hero {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   min-width: 0;
 }
-.account-detail__hero > div {
+.account-detail__identity {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.account-detail__name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   min-width: 0;
 }
 .account-detail h2 {
-  margin: 0 0 6px;
+  margin: 0;
   overflow-wrap: anywhere;
+  font-size: 15px;
+  line-height: 1.4;
 }
 .account-detail h3 {
-  margin: 0 0 10px;
+  margin: 0 0 9px;
+  font-size: 12px;
+  line-height: 1.5;
 }
-.account-detail .q-list {
-  min-width: 0;
-  border-color: var(--app-border-default);
-  border-radius: 10px;
+.account-detail__identity small,
+.account-detail__capability small,
+.account-detail__note {
+  color: var(--app-text-secondary);
 }
-.account-detail .q-item {
-  min-width: 0;
-}
-.account-detail :deep(.q-item__label) {
+.account-detail__identity small {
   overflow-wrap: anywhere;
-  white-space: normal;
+  font-size: 11px;
+}
+.account-detail :deep(.q-badge) {
+  padding: 3px 7px;
+  font-size: 10px;
+  line-height: 1.2;
+  border-radius: 4px;
+}
+.account-detail__section {
+  min-width: 0;
+}
+.account-detail__facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+  margin: 0;
+  padding: 4px 14px;
+  border: 1px solid var(--app-border-default);
+  border-radius: 6px;
+}
+.account-detail__facts > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  min-height: 42px;
+}
+.account-detail__facts > div:nth-child(n + 3) {
+  border-top: 1px solid var(--app-border-default);
+}
+.account-detail__facts dt {
+  color: var(--app-text-secondary);
+}
+.account-detail__facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
 }
 .account-detail__capabilities {
+  display: grid;
+  min-width: 0;
+  border: 1px solid var(--app-border-default);
+  border-radius: 6px;
+  overflow: clip;
+}
+.account-detail__capability {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  min-height: 42px;
+  padding: 7px 14px;
+  border-bottom: 1px solid var(--app-border-default);
+}
+.account-detail__capability:last-child {
+  border-bottom: 0;
+}
+.account-detail__capability > div {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: baseline;
+  gap: 16px;
   min-width: 0;
 }
-.account-detail section > p {
-  margin: 8px 0 0;
-  color: var(--app-text-secondary);
+.account-detail__capability strong {
+  flex: 0 0 68px;
+  font-size: 12px;
+}
+.account-detail__capability small {
+  min-width: 0;
   overflow-wrap: anywhere;
+  font-size: 10px;
+}
+.account-detail__note {
+  margin: -2px 0 0;
+  font-size: 10px;
 }
 
 .authorize-dialog {
@@ -623,10 +723,15 @@ const disconnect = () => {
     border: 0;
     box-shadow: none;
   }
-  .account-detail .q-item {
-    align-items: stretch;
-    flex-direction: column;
-    gap: 12px;
+  .account-detail__facts {
+    grid-template-columns: 1fr;
+  }
+  .account-detail__facts > div:nth-child(n + 2) {
+    border-top: 1px solid var(--app-border-default);
+  }
+  .account-detail__capability > div {
+    display: grid;
+    gap: 2px;
   }
 }
 </style>
