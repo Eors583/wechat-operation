@@ -214,7 +214,6 @@ const deleteAccount = async () => {
         <header>
           <div>
             <h2>界面主题</h2>
-            <p>主题在页面挂载前应用，避免首次渲染闪烁。</p>
           </div>
         </header>
         <div class="theme-options">
