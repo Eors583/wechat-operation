@@ -412,6 +412,49 @@ async def private_preferences(
     ]
 
 
+async def apply_writer_preference(
+    session: AsyncSession, *, task: Task, source_id: str, check: object
+) -> bool:
+    """A writer may propose a confirmation, but cannot authorize active memory."""
+    if not isinstance(check, dict) or type(check.get("should_ask")) is not bool:
+        return False
+    source = await session.get(Message, source_id, populate_existing=True)
+    if not source or source.task_id != task.id or source.role != "user":
+        return False
+    if memory_command(source.plain_text):
+        return True
+    if check["should_ask"]:
+        key, value, evidence = (check.get(field) for field in ("key", "value", "evidence"))
+        if (
+            not all(isinstance(v, str) for v in (key, value, evidence))
+            or not re.fullmatch(r"[a-z][a-z0-9_]{1,63}", key)
+            or not 1 <= len(value.strip()) <= 200
+            or not 1 <= len(evidence.strip()) <= 400
+            or evidence not in source.plain_text
+            or not any(
+                evidence.strip("。！？!?；;\n ") in sentence
+                for sentence in feedback_sentences(source.plain_text)
+                if not LOCAL.search(sentence)
+            )
+            or not feedback_sentences(value)
+        ):
+            return False
+        await session.scalar(select(User).where(User.id == task.owner_id).with_for_update())
+        memory = await session.get(UserPreferenceMemory, task.owner_id, populate_existing=True)
+        await propose_memory(
+            session,
+            task=task,
+            source=source,
+            items=list(memory.items) if memory else [],
+            key=key,
+            value=value.strip(),
+            evidence=evidence,
+            explicit=True,
+        )
+    source.content_json = {**(source.content_json or {}), "preference_review": "completed"}
+    return True
+
+
 async def summarize_preferences(
     session: AsyncSession,
     *,

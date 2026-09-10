@@ -33,8 +33,14 @@ from app.domains.preference_learning import (
     is_preference_only,
     parse_memory,
 )
+from app.domains.preference_output import (
+    PreferenceStreamFilter,
+    output_instruction,
+    separate_preference_output,
+)
 from app.domains.user_preference_memory import (
     PRIORITY,
+    apply_writer_preference,
     enqueue_preference_summary,
     private_preferences,
 )
@@ -1515,14 +1521,8 @@ async def create_ai_run(
             business_type="ai_run_reserve",
             business_id=run.id,
         )
-    if not existing_message:
-        await enqueue_preference_summary(
-            session,
-            owner_id=owner_id,
-            task_id=task.id,
-            reason="user_turn",
-            source_message_id=message.id,
-        )
+    if not existing_message and not quick_action:
+        message.content_json = {**message.content_json, "preference_review": "inline"}
     await append_run_event(
         session, run_id=run.id, event_type="run.accepted", payload={"run_id": run.id}
     )
@@ -2231,6 +2231,7 @@ async def process_ai_run(
     long_context_cache: dict[str, str] = {}
     streamed_text = ""
     stream_buffer = ""
+    writer_preference: object = None
 
     async def stream_reply(fragment: str) -> None:
         nonlocal streamed_text, stream_buffer
@@ -2253,8 +2254,13 @@ async def process_ai_run(
         snapshot: dict[str, Any],
         compact: bool = True,
         stream: bool = False,
+        preference_mode: str | None = None,
     ) -> ModelResult:
+        nonlocal writer_preference
         await ensure_not_cancelled()
+        if preference_mode:
+            prompt += "\n\n" + output_instruction(preference_mode)
+            context = {**context, "preference_check_format": preference_mode}
         if "user_preferences" in context:
             prompt += "\n\n" + PRIORITY
         if compact and requires_local_compaction(snapshot):
@@ -2286,6 +2292,13 @@ async def process_ai_run(
                 progress=reading_progress,
                 cache=long_context_cache,
             )
+        preference_stream = PreferenceStreamFilter()
+
+        async def stream_visible(fragment: str) -> None:
+            visible = preference_stream.feed(fragment) if preference_mode == "text" else fragment
+            if visible:
+                await stream_reply(visible)
+
         try:
             routed = await generate_with_frozen_route(
                 snapshot=snapshot,
@@ -2296,7 +2309,7 @@ async def process_ai_run(
                 context=context,
                 default_timeout_seconds=model_timeout_seconds,
                 session=session,
-                on_text=stream_reply if stream else None,
+                on_text=stream_visible if stream else None,
             )
         except ModelRouteExhausted as exc:
             offset = len(execution_attempts)
@@ -2323,6 +2336,14 @@ async def process_ai_run(
                     "attempted_deployments": [attempt.deployment_id for attempt in routed.attempts],
                 },
             )
+        if preference_mode:
+            if stream and preference_mode == "text":
+                tail = preference_stream.finish()
+                if tail:
+                    await stream_reply(tail)
+            visible_result, check = separate_preference_output(routed.result)
+            writer_preference = check
+            return visible_result
         return routed.result
 
     completed_action_reply = ""
@@ -2464,6 +2485,7 @@ async def process_ai_run(
         original_block = blocks[local_target]
         replacement = await execute_model_call(
             purpose="article_revision",
+            preference_mode="text",
             snapshot=run.model_route_snapshot,
             prompt=(
                 "只返回指定位置的替换纯文本，不加标题标签、解释或代码围栏。"
@@ -2596,6 +2618,9 @@ async def process_ai_run(
         route_purpose = str(run.context_snapshot.get("route_purpose") or "article_generation")
         result = await execute_model_call(
             purpose=route_purpose,
+            preference_mode=("json" if run.run_type in {"article_generation", "titles"} else "text")
+            if not conversation_action and not style_action(user_input)
+            else None,
             prompt="\n\n".join(directives),
             context=model_context,
             snapshot=run.model_route_snapshot,
@@ -2973,6 +2998,21 @@ async def process_ai_run(
         )
     await ensure_not_cancelled()
     run.status = "completed"
+    if not conversation_action:
+        preference_handled = await apply_writer_preference(
+            session,
+            task=task,
+            source_id=str(model_context["source_message_id"]),
+            check=writer_preference,
+        )
+        if not preference_handled:
+            await enqueue_preference_summary(
+                session,
+                owner_id=run.owner_id,
+                task_id=task.id,
+                reason="user_turn",
+                source_message_id=str(model_context["source_message_id"]),
+            )
     # The frozen reservation is the final charge for this AI run.
     run.quota_reserved = 0
     run.completed_at = utcnow()

@@ -17,6 +17,7 @@ import httpx
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
+from app.domains.preference_output import MARKER
 from app.model_files import upload_manus_file
 from app.providers import (
     CompletedUploadPart,
@@ -281,6 +282,18 @@ class OpenAICompatibleModelProvider:
                 "instructions. Use their full content to answer the user; "
                 "do not claim files were not supplied."
             )
+        preference_format = context.get("preference_check_format")
+        if preference_format == "json":
+            instructions += (
+                " Include the optional preference_check field at the JSON root as specified "
+                "in the prompt, separate from all article content."
+            )
+        elif preference_format == "text":
+            instructions += (
+                " After the complete requested text, append the preference_check JSON inside "
+                "<preference_check>...</preference_check> as specified in the prompt. "
+                "The application removes this metadata before displaying the text."
+            )
         headers = {"Authorization": f"Bearer {self._api_key}"}
         default_output_limit = {
             "intent_detection": 128,
@@ -429,7 +442,9 @@ class OpenAICompatibleModelProvider:
                             if response.is_error:
                                 await response.aread()
                             response.raise_for_status()
-                            body = await self._read_stream(response)
+                            body = await self._read_stream(
+                                response, optional_preference_tail=preference_format == "text"
+                            )
                     else:
                         response = await client.post(url, headers=headers, json=payload)
                         response.raise_for_status()
@@ -457,6 +472,11 @@ class OpenAICompatibleModelProvider:
                 choices
                 and isinstance(choices[0], dict)
                 and choices[0].get("finish_reason") == "length"
+                and not (
+                    preference_format == "text"
+                    and MARKER in self._chat_output_text(body)
+                    and self._chat_output_text(body).split(MARKER, 1)[0].strip()
+                )
             ):
                 raise ModelContractViolation(
                     "Model output reached its token limit before completion",
@@ -480,7 +500,9 @@ class OpenAICompatibleModelProvider:
             ),
         )
 
-    async def _read_stream(self, response: httpx.Response) -> dict[str, Any]:
+    async def _read_stream(
+        self, response: httpx.Response, *, optional_preference_tail: bool = False
+    ) -> dict[str, Any]:
         fragments: list[str] = []
         body: dict[str, Any] = {}
         finished = False
@@ -493,6 +515,28 @@ class OpenAICompatibleModelProvider:
             if not raw:
                 continue
             event = _object(json.loads(raw), service="Model provider stream")
+            tail_only = (
+                optional_preference_tail
+                and (
+                    event.get("type") == "response.incomplete"
+                    or any(
+                        choice.get("finish_reason") == "length"
+                        for choice in (event.get("choices") or [])
+                        if isinstance(choice, dict)
+                    )
+                )
+                and MARKER in "".join(fragments)
+                and bool("".join(fragments).split(MARKER, 1)[0].strip())
+            )
+            if (
+                event.get("type") == "response.incomplete"
+                and tail_only
+                and (event.get("response", {}).get("incomplete_details") or {}).get("reason")
+                == "max_output_tokens"
+            ):
+                body = _object(event.get("response"), service="Model response")
+                finished = True
+                break
             if event.get("error") or event.get("type") in {
                 "error",
                 "response.failed",
@@ -515,9 +559,9 @@ class OpenAICompatibleModelProvider:
                 if choices:
                     choice = choices[0]
                     reason = choice.get("finish_reason")
-                    if reason and reason != "stop":
+                    if reason and reason != "stop" and not (reason == "length" and tail_only):
                         raise ProviderUnavailable("Model stream was truncated or rejected")
-                    finished = finished or reason == "stop"
+                    finished = finished or reason == "stop" or (reason == "length" and tail_only)
                     delta = (choice.get("delta") or {}).get("content") or ""
             if isinstance(delta, str) and delta:
                 fragments.append(delta)
