@@ -237,7 +237,6 @@ const deleteAccount = async () => {
         <header>
           <div>
             <h2>我的写作风格</h2>
-            <p>按最近使用顺序分批展示；AI 初稿和参考资料的写法不会自动成为偏好。</p>
           </div>
           <AppButton
             variant="outline"
