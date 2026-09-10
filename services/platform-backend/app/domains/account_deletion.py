@@ -33,6 +33,7 @@ from app.models import (
     TaskMemorySummary,
     User,
     UserPreference,
+    UserPreferenceMemory,
     WechatAuthorizationState,
     WechatOperation,
     utcnow,
@@ -272,6 +273,9 @@ async def purge_account(
         update(UserPreference)
         .where(UserPreference.user_id == user.id)
         .values(value="", status="revoked", revoked_at=utcnow())
+    )
+    await session.execute(
+        update(UserPreferenceMemory).where(UserPreferenceMemory.user_id == user.id).values(items=[])
     )
     user.email = None
     user.phone = None

@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 from datetime import timedelta
-from decimal import Decimal
 from typing import Annotated, Any, Literal
 from urllib.parse import quote, urlparse
 
@@ -45,7 +44,6 @@ from app.domains.article import (
     save_article_version,
     soft_delete_article,
     upsert_article_library_item,
-    upsert_article_preference_candidate,
 )
 from app.domains.common import (
     begin_idempotency,
@@ -78,6 +76,7 @@ from app.domains.layout import (
     validate_source_url,
 )
 from app.domains.revision import create_article_revision
+from app.domains.user_preference_memory import enqueue_preference_summary
 from app.domains.wechat import (
     confirm_render,
     create_wechat_operation,
@@ -1559,6 +1558,10 @@ async def update_article_content(
         created_by_type="user",
         created_by_id=user.id,
     )
+    if payload.source == "manual":
+        await enqueue_preference_summary(
+            session, owner_id=user.id, task_id=article.source_task_id, reason="save_content"
+        )
     body = {"article": model_dict(article), "version": model_dict(version)}
     complete_idempotency(attempt, body)
     await session.commit()
@@ -1622,12 +1625,8 @@ async def save_local_draft(
     item = await upsert_article_library_item(
         session, article=article, version=version, status="local_draft"
     )
-    await upsert_article_preference_candidate(
-        session,
-        article=article,
-        version=version,
-        source_type="saved_local_article",
-        confidence=Decimal("0.3000"),
+    await enqueue_preference_summary(
+        session, owner_id=user.id, task_id=article.source_task_id, reason="save_local"
     )
     create_job(
         session,
@@ -2124,7 +2123,11 @@ async def list_preferences(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    conditions = [UserPreference.user_id == user.id, UserPreference.status != "revoked"]
+    conditions = [
+        UserPreference.user_id == user.id,
+        UserPreference.status != "revoked",
+        UserPreference.preference_type == "writing_style",
+    ]
     if project_id:
         conditions.append(UserPreference.project_id == project_id)
     decoded = decode_cursor(cursor)

@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from decimal import Decimal
 from typing import Any
 from urllib.parse import urlparse
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.preference_learning import learn_preferences
 from app.errors import ApiError
 from app.models import (
     Article,
@@ -17,9 +15,7 @@ from app.models import (
     ArticleRender,
     ArticleVersion,
     LibraryItem,
-    Message,
     Task,
-    UserPreference,
     utcnow,
 )
 
@@ -476,76 +472,6 @@ async def upsert_article_library_item(
         item.search_text = f"{article.title}\n{version.plain_text}"
         item.deleted_at = None
     return item
-
-
-async def upsert_article_preference_candidate(
-    session: AsyncSession,
-    *,
-    article: Article,
-    version: ArticleVersion,
-    source_type: str,
-    confidence: Decimal,
-) -> UserPreference | None:
-    """Learn only from a user-changed final article, never from the AI draft itself."""
-
-    character_count = len(version.plain_text.strip())
-    if not character_count:
-        return None
-    initial = await session.scalar(
-        select(ArticleVersion)
-        .where(ArticleVersion.article_id == article.id)
-        .order_by(ArticleVersion.version_no)
-        .limit(1)
-    )
-    if not initial or initial.content_hash == version.content_hash:
-        return None
-    preference = await session.scalar(
-        select(UserPreference).where(
-            UserPreference.user_id == article.owner_id,
-            UserPreference.preference_type == "article_length",
-            UserPreference.source_id == article.id,
-        )
-    )
-    if preference and preference.status != "candidate":
-        return preference
-    rounded_count = max(100, ((character_count + 49) // 100) * 100)
-    if not preference:
-        preference = UserPreference(
-            user_id=article.owner_id,
-            preference_type="article_length",
-            value=f"文章篇幅约 {rounded_count} 字",
-            scope="project" if article.project_id else "personal",
-            project_id=article.project_id,
-            confidence=confidence,
-            source_type=source_type,
-            source_id=article.id,
-            status="candidate",
-        )
-        session.add(preference)
-    else:
-        preference.value = f"文章篇幅约 {rounded_count} 字"
-        preference.scope = "project" if article.project_id else "personal"
-        preference.project_id = article.project_id
-        preference.confidence = confidence
-        preference.source_type = source_type
-
-    if article.source_task_id:
-        messages = list(
-            (
-                await session.scalars(
-                    select(Message)
-                    .where(
-                        Message.task_id == article.source_task_id,
-                        Message.role == "user",
-                        Message.created_at >= initial.created_at,
-                    )
-                    .order_by(Message.created_at)
-                )
-            ).all()
-        )
-        for message in messages:
-            await learn_preferences(session, owner_id=article.owner_id, message_id=message.id)
-    return preference
 
 
 async def soft_delete_article(session: AsyncSession, *, owner_id: str, article_id: str) -> Article:

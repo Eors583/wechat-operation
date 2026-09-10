@@ -41,7 +41,11 @@ async def owned_preference(
 ) -> UserPreference:
     row = await session.scalar(
         select(UserPreference)
-        .where(UserPreference.user_id == owner_id, UserPreference.id == preference_id)
+        .where(
+            UserPreference.user_id == owner_id,
+            UserPreference.id == preference_id,
+            UserPreference.preference_type == "writing_style",
+        )
         .with_for_update()
     )
     if row is None:
@@ -202,6 +206,7 @@ async def plan_action(
                 .where(
                     UserPreference.user_id == task.owner_id,
                     UserPreference.status != "revoked",
+                    UserPreference.preference_type == "writing_style",
                 )
                 .order_by(UserPreference.updated_at.desc(), UserPreference.id)
             )
@@ -275,6 +280,7 @@ async def execute_action(
                     .where(
                         UserPreference.user_id == task.owner_id,
                         UserPreference.status != "revoked",
+                        UserPreference.preference_type == "writing_style",
                     )
                     .order_by(UserPreference.updated_at.desc(), UserPreference.id)
                 )
@@ -301,7 +307,7 @@ async def execute_action(
         )
         return (
             "已开启" if task.use_preferences else "已关闭"
-        ) + "当前任务的偏好使用与学习。", metadata
+        ) + "当前任务的写作风格。", metadata
     if operation in {"describe", "save", "update"}:
         value = (
             action.get("value")

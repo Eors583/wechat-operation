@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from datetime import UTC
-from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.user_preference_memory import enqueue_preference_summary
 from app.errors import ApiError
 from app.models import (
     Article,
@@ -36,7 +36,6 @@ from .article import (
     current_article_version,
     owned_article,
     upsert_article_library_item,
-    upsert_article_preference_candidate,
 )
 from .common import create_job, emit_outbox
 
@@ -138,13 +137,6 @@ async def confirm_render(
         checksum=render.checksum,
     )
     session.add(confirmation)
-    await upsert_article_preference_candidate(
-        session,
-        article=article,
-        version=current,
-        source_type="confirmed_article",
-        confidence=Decimal("0.4500"),
-    )
     await session.flush()
     return confirmation
 
@@ -271,6 +263,9 @@ async def create_wechat_operation(
     )
     session.add(operation)
     await session.flush()
+    await enqueue_preference_summary(
+        session, owner_id=owner_id, task_id=article.source_task_id, reason=operation_type
+    )
     await sync_article_operation_status(session, operation=operation, article=article)
     create_job(
         session,

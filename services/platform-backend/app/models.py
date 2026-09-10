@@ -800,6 +800,15 @@ class UserPreference(Base, IdMixin, TimestampMixin):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class UserPreferenceMemory(Base, TimestampMixin):
+    __tablename__ = "user_preference_memories"
+
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+
+
 class TaskMemorySummary(Base, IdMixin):
     __tablename__ = "task_memory_summaries"
     __table_args__ = (UniqueConstraint("task_id", "message_range", name="uq_task_memory_range"),)

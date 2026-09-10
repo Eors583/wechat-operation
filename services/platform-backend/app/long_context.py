@@ -13,6 +13,7 @@ from app.errors import ApiError
 MAX_SOURCE_CHARACTERS = 2_000_000
 MAX_SUMMARY_CALLS = 160
 _METADATA_KEEP_FIELDS = {
+    "user_preferences": None,
     "untrusted_documents": {
         "title",
         "source_url",

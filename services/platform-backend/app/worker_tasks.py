@@ -21,8 +21,10 @@ from app.domains.files import process_document
 from app.domains.layout import process_layout_extraction
 from app.domains.quota import apply_quota_change
 from app.domains.revision import process_article_revision
+from app.domains.user_preference_memory import summarize_preferences
 from app.domains.wechat import process_wechat_operation, reconcile_wechat_operation
 from app.external_knowledge import LexiangKnowledgeProvider
+from app.model_gateway import ModelRouteExhausted
 from app.models import (
     AccountDeletionRequest,
     Article,
@@ -135,6 +137,49 @@ async def _process_ai_memory(run_id: str, message_id: str | None = None) -> dict
                 "run_id": run_id,
                 "status": "updated" if summary else "skipped",
             }
+            remember_inbox_message(session, consumer=consumer, message_id=message_id, result=result)
+            await session.commit()
+            return result
+    finally:
+        await database.dispose()
+
+
+@celery.task(
+    name="app.worker_tasks.process_user_preferences_task",
+    autoretry_for=(ProviderUnavailable, ModelRouteExhausted),
+    retry_backoff=True,
+    max_retries=3,
+)
+def process_user_preferences_task(task_id: str, message_id: str) -> dict[str, Any]:
+    return _run(_process_user_preferences(task_id, message_id))
+
+
+async def _process_user_preferences(task_id: str, message_id: str) -> dict[str, Any]:
+    config = Settings.from_env()
+    database = Database(config)
+    secrets = _configured_secrets(config)
+    providers = build_providers(config, secrets)
+    try:
+        async with database.session_maker() as session:
+            event = await session.scalar(
+                select(OutboxEvent).where(OutboxEvent.id == message_id).with_for_update()
+            )
+            if (
+                not event
+                or event.event_type != "user.preferences.summarize"
+                or event.payload.get("task_id") != task_id
+            ):
+                return {"status": "skipped"}
+            consumer = "process_user_preferences"
+            processed = await processed_inbox_message(
+                session, consumer=consumer, message_id=message_id
+            )
+            if processed:
+                return processed.result
+            await summarize_preferences(
+                session, event=event, model=providers.model, secrets=secrets, settings=config
+            )
+            result = {"status": "completed"}
             remember_inbox_message(session, consumer=consumer, message_id=message_id, result=result)
             await session.commit()
             return result
@@ -774,6 +819,7 @@ async def _enqueue_due_external_knowledge_syncs() -> dict[str, Any]:
 
 
 EVENT_TASKS: dict[str, tuple[str, str]] = {
+    "user.preferences.summarize": ("app.worker_tasks.process_user_preferences_task", "task_id"),
     "ai.run.requested": ("app.worker_tasks.process_ai_run_task", "run_id"),
     "ai.run.memory.requested": ("app.worker_tasks.process_ai_run_memory_task", "run_id"),
     "article.revision.requested": (

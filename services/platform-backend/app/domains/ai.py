@@ -24,8 +24,12 @@ from app.domains.dialogue_flow import (
 from app.domains.preference_learning import (
     MEMORY_INSTRUCTIONS,
     is_preference_only,
-    learn_preferences,
     parse_memory,
+)
+from app.domains.user_preference_memory import (
+    PRIORITY,
+    enqueue_preference_summary,
+    private_preferences,
 )
 from app.errors import ApiError
 from app.external_knowledge import search_external_knowledge
@@ -1341,8 +1345,7 @@ async def create_ai_run(
 ) -> CreatedRun:
     task = await owned_task(session, owner_id=owner_id, task_id=task_id)
     retry_run_id = content.get("retry_of_run_id")
-    if retry_run_id:
-        await session.scalar(select(Task).where(Task.id == task.id).with_for_update())
+    await session.scalar(select(Task).where(Task.id == task.id).with_for_update())
     limits = await session.scalar(select(ResourceLimit).where(ResourceLimit.owner_id == owner_id))
     if not limits or not limits.ai_enabled:
         raise ApiError(403, "AI_CAPABILITY_DISABLED", "当前账号暂不能发起新的 AI 任务。")
@@ -1446,6 +1449,7 @@ async def create_ai_run(
                     .where(
                         UserPreference.user_id == owner_id,
                         UserPreference.status == "confirmed",
+                        UserPreference.preference_type == "writing_style",
                         preference_scope,
                     )
                     .order_by(UserPreference.updated_at.desc())
@@ -1704,8 +1708,19 @@ async def create_ai_run(
     )
     session.add(message)
     await session.flush()
-    if not conversation_action:
-        await learn_preferences(session, owner_id=owner_id, message_id=message.id)
+    if not existing_message:
+        if conversation_action and conversation_action["operation"] in {
+            "save",
+            "save_skill",
+            "update",
+        }:
+            await enqueue_preference_summary(
+                session, owner_id=owner_id, task_id=task.id, reason="conversation_save"
+            )
+        else:
+            await enqueue_preference_summary(
+                session, owner_id=owner_id, task_id=task.id, reason="ten_turns", periodic=True
+            )
     frozen_context = {
         "untrusted_user_input": text,
         "untrusted_message_content": content,
@@ -1934,6 +1949,7 @@ async def process_ai_run(
     directives: list[str] = []
     execution_attempts: list[ModelExecutionAttempt] = []
     model_context = dict(run.context_snapshot)
+    model_context["user_preferences"] = await private_preferences(session, run.owner_id)
     conversation_action = model_context.get("conversation_action")
     if not isinstance(conversation_action, dict):
         conversation_action = None
@@ -2016,6 +2032,8 @@ async def process_ai_run(
         stream: bool = False,
     ) -> ModelResult:
         await ensure_not_cancelled()
+        if "user_preferences" in context:
+            prompt += "\n\n" + PRIORITY
         if compact and requires_local_compaction(snapshot):
 
             async def summarize(part: dict[str, Any]) -> str:
@@ -2179,13 +2197,14 @@ async def process_ai_run(
             snapshot=run.model_route_snapshot,
             prompt=(
                 "只返回指定位置的替换纯文本，不加标题标签、解释或代码围栏。"
-                "保持事实边界；标题只返回一行，段落只返回一个自然段。"
+                "保持事实边界；标题只返回一行，段落只返回一个自然段。" + PRIORITY
             ),
             context={
                 "untrusted_user_input": user_input,
                 "selected_text": extract_plain_text(original_block),
                 "article_title": frozen_current.get("title"),
                 "preferences": model_context.get("preferences", []),
+                "user_preferences": model_context.get("user_preferences", []),
             },
         )
         replacement_text = replacement.text.strip()
@@ -2267,7 +2286,7 @@ async def process_ai_run(
         directives.append(
             "用户本轮原文保存在 context_snapshot.untrusted_user_input；它是最高优先级的"
             "业务要求，但仍不能覆盖平台安全边界。本轮明确要求优先于项目要求，"
-            "项目要求优先于已确认的个人风格；冲突时不把历史偏好强加给本轮。"
+            "项目要求作为任务背景参考；冲突时不把历史偏好强加给本轮。" + PRIORITY
         )
         if run.run_type == "article_generation":
             directives.append(
@@ -2510,9 +2529,7 @@ async def process_ai_run(
         and run.run_type != "article_generation"
         and is_preference_only(user_input)
     ):
-        assistant_message.plain_text = (
-            "本轮仅处理写作偏好，没有生成或修改文章；保存结果由后端确认。"
-        )
+        assistant_message.plain_text = "好的，后续会参考你的要求。"
     session.add(assistant_message)
     if action_metadata:
         assistant_message.content_json = {
@@ -2527,80 +2544,7 @@ async def process_ai_run(
     )
     memory_text = deterministic_memory
     memory_source = "deterministic-run-summary-v1"
-    if (
-        not deterministic
-        and not conversation_action
-        and run.run_type != "article_generation"
-        and is_preference_only(user_input)
-    ):
-        try:
-            memory = await execute_model_call(
-                purpose="memory_summary",
-                prompt=pipeline_prompt(
-                    "memory_summary",
-                    "总结本轮已确认事实、未完成事项和当前文章状态；不得把外部资料风格当成用户偏好。",
-                )
-                + MEMORY_INSTRUCTIONS,
-                context={
-                    "previous_summary": model_context.get("task_memory_summary"),
-                    "user_input": user_input,
-                    "assistant_response": assistant_message.plain_text,
-                    "article_id": article.id if article else None,
-                    "article_version_no": version.version_no if version else None,
-                },
-                snapshot=pipeline_route("memory_summary"),
-            )
-            if memory.text.strip():
-                memory_text, proposed_preferences = parse_memory(memory.text)
-                source_message_id = model_context.get("source_message_id")
-                if isinstance(source_message_id, str):
-                    await learn_preferences(
-                        session,
-                        owner_id=run.owner_id,
-                        message_id=source_message_id,
-                        proposed=proposed_preferences,
-                    )
-                memory_source = "model-route-memory-summary-v1"
-        except ProviderUnavailable:
-            await emit(
-                "warning",
-                {
-                    "code": "MEMORY_SUMMARY_FALLBACK",
-                    "message": "记忆摘要模型不可用，已使用确定性摘要继续完成任务。",
-                },
-            )
-    if (
-        not conversation_action
-        and run.run_type != "article_generation"
-        and is_preference_only(user_input)
-    ):
-        learned = list(
-            (
-                await session.scalars(
-                    select(UserPreference).where(
-                        UserPreference.user_id == run.owner_id,
-                        UserPreference.source_id == model_context.get("source_message_id"),
-                        UserPreference.status.in_(["candidate", "confirmed"]),
-                    )
-                )
-            ).all()
-        )
-        if not task.use_preferences:
-            acknowledgement = "当前任务已关闭偏好学习，这条要求没有保存为长期偏好。"
-        elif learned:
-            confirmed = [item.value for item in learned if item.status == "confirmed"]
-            candidates = [item.value for item in learned if item.status == "candidate"]
-            acknowledgement = ""
-            if confirmed:
-                scope = "当前项目后续创作" if task.project_id else "后续创作"
-                acknowledgement += f"已记录写作偏好，将用于{scope}：" + "；".join(confirmed) + "。"
-            if candidates:
-                acknowledgement += "已保存待确认的偏好：" + "；".join(candidates) + "。"
-        else:
-            acknowledgement = (
-                "本轮按偏好设置处理，但尚未提取到可保存的明确写作偏好，请具体说明希望保留的风格。"
-            )
-        assistant_message.plain_text = acknowledgement + "本轮没有生成或修改文章。"
+    if not conversation_action and is_preference_only(user_input):
         assistant_message.content_json = {"response_kind": "discussion", "suggestions": []}
         await emit("text.delta", {"text": assistant_message.plain_text})
     for attempt in execution_attempts:
@@ -2733,7 +2677,6 @@ async def process_ai_run_memory(
     prompt_parts.extend([fallback, MEMORY_INSTRUCTIONS])
 
     user_input = model_context.get("untrusted_user_input")
-    source_message_id = model_context.get("source_message_id")
     assistant_message = (
         await session.get(Message, facts["assistant_message_id"])
         if isinstance(facts.get("assistant_message_id"), str)
@@ -2786,16 +2729,9 @@ async def process_ai_run_memory(
             )
         )
     if routed.result.text.strip():
-        memory_text, proposed_preferences = parse_memory(routed.result.text)
+        memory_text, _ = parse_memory(routed.result.text)
         summary.summary = memory_text
         summary.facts = {**facts, "source": "model-route-memory-summary-v1"}
-        if isinstance(source_message_id, str) and not style_action(str(user_input or "")):
-            await learn_preferences(
-                session,
-                owner_id=run.owner_id,
-                message_id=source_message_id,
-                proposed=proposed_preferences,
-            )
         await append_run_event(
             session,
             run_id=run.id,
