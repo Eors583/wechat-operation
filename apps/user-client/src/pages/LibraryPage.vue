@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watchEffect } from 'vue'
 import { useRouter } from 'vue-router'
 import { useInfiniteQuery } from '@tanstack/vue-query'
 import type { QTableColumn } from 'quasar'
@@ -20,7 +20,9 @@ const $q = useQuasar()
 const type = ref<LibraryItemType | 'all'>('all')
 const projectId = ref<string | 'all' | 'unclassified'>('all')
 const search = ref('')
+const fileFormat = ref('all')
 const clearFilters = () => {
+  fileFormat.value = 'all'
   projectId.value = 'all'
   type.value = 'all'
   search.value = ''
@@ -69,6 +71,67 @@ const rows = computed(() => [
 ])
 const projectName = (id: string | null) =>
   projects.value.find((item) => item.id === id)?.name ?? '未分类'
+const selectedProjectName = computed(() =>
+  projectId.value === 'all' ? '全部项目' : projectName(projectId.value),
+)
+const projectCards = computed(() => [
+  { id: 'all', name: '全部项目' },
+  { id: 'unclassified', name: '未分类' },
+  ...projects.value,
+])
+const formatLabel = (item: LibraryItem) => {
+  if (item.type === 'article') return '公众号文章'
+  const extension = item.fileType ?? ''
+  const labels: Record<string, string> = {
+    PDF: 'PDF',
+    PPT: 'PPT',
+    PPTX: 'PPT',
+    DOC: 'Word',
+    DOCX: 'Word',
+    XLS: 'Excel',
+    XLSX: 'Excel',
+    TXT: '文本',
+    MD: 'Markdown',
+    CSV: 'CSV',
+    HTML: 'HTML',
+    PNG: '图片',
+    JPG: '图片',
+    JPEG: '图片',
+    MP3: '音频',
+    M4A: '音频',
+    MP4: '视频',
+  }
+  return labels[extension] ?? '文件'
+}
+const visibleRows = computed(() =>
+  rows.value.filter((item) => fileFormat.value === 'all' || formatLabel(item) === fileFormat.value),
+)
+watchEffect(() => {
+  if (
+    fileFormat.value !== 'all' &&
+    libraryQuery.hasNextPage.value &&
+    !libraryQuery.isFetching.value &&
+    !libraryQuery.isError.value
+  ) {
+    void libraryQuery.fetchNextPage()
+  }
+})
+const formatOptions = [
+  'all',
+  '公众号文章',
+  'PDF',
+  'PPT',
+  'Word',
+  'Excel',
+  '文本',
+  'Markdown',
+  'CSV',
+  'HTML',
+  '图片',
+  '音频',
+  '视频',
+  '文件',
+].map((value) => ({ value, label: value === 'all' ? '全部类型' : value }))
 
 const columns: QTableColumn<LibraryItem>[] = [
   { name: 'title', label: '名称', field: 'title', align: 'left', style: 'width: 28%' },
@@ -80,9 +143,9 @@ const columns: QTableColumn<LibraryItem>[] = [
     style: 'width: 12%',
   },
   {
-    name: 'project',
-    label: '所属项目',
-    field: (row) => projectName(row.projectId),
+    name: 'sourceTask',
+    label: '来源会话',
+    field: (row) => row.sourceTaskTitle ?? '无',
     align: 'left',
     style: 'width: 17%',
   },
@@ -232,30 +295,13 @@ const uploadReferences = async () => {
 
     <section class="library-projects" aria-label="项目筛选">
       <button
-        type="button"
-        :class="{ 'is-active': projectId === 'all' }"
-        :aria-pressed="projectId === 'all'"
-        @click="projectId = 'all'"
-      >
-        <q-icon name="folder_copy" />
-        <span><strong>全部项目</strong><small>包含未分类的文章与资料</small></span>
-      </button>
-      <button
-        type="button"
-        :class="{ 'is-active': projectId === 'unclassified' }"
-        :aria-pressed="projectId === 'unclassified'"
-        @click="projectId = 'unclassified'"
-      >
-        <q-icon name="folder_open" />
-        <span><strong>未分类</strong><small>尚未归入项目的文章与资料</small></span>
-      </button>
-      <button
-        v-for="project in projects.slice(0, 3)"
+        v-for="project in projectCards"
         :key="project.id"
         type="button"
         :class="{ 'is-active': projectId === project.id }"
         :aria-pressed="projectId === project.id"
-        @click="projectId = projectId === project.id ? 'all' : project.id"
+        :title="project.name"
+        @click="projectId = project.id"
       >
         <q-icon name="folder_open" />
         <span
@@ -263,46 +309,38 @@ const uploadReferences = async () => {
           ><small>查看项目中的资料与文章</small></span
         >
       </button>
+      <AppButton
+        v-if="projectsQuery.hasNextPage.value"
+        variant="ghost"
+        label="更多项目"
+        @click="projectsQuery.fetchNextPage()"
+      />
     </section>
 
     <section class="library-toolbar surface-card">
       <div class="library-toolbar__filters">
+        <div class="library-breadcrumb">
+          文章库 / <strong>{{ selectedProjectName }}</strong>
+        </div>
         <q-input
           v-model="search"
           outlined
           dense
           clearable
           debounce="250"
-          placeholder="搜索标题、正文或提取文字"
+          placeholder="搜索当前项目中的文件"
           aria-label="搜索文章库"
           ><template #prepend><q-icon name="search" /></template
         ></q-input>
         <q-select
-          v-model="projectId"
+          v-model="fileFormat"
           outlined
           dense
           emit-value
           map-options
-          label="项目筛选"
-          :options="[
-            { label: '全部项目', value: 'all' },
-            { label: '未分类', value: 'unclassified' },
-            ...projects.map((item) => ({ label: item.name, value: item.id })),
-          ]"
-        >
-          <template #after-options>
-            <q-item v-if="projectsQuery.hasNextPage.value">
-              <q-item-section
-                ><AppButton
-                  variant="ghost"
-                  label="加载更多项目"
-                  :loading="projectsQuery.isFetchingNextPage.value"
-                  full-width
-                  @click.stop="projectsQuery.fetchNextPage()"
-              /></q-item-section>
-            </q-item>
-          </template>
-        </q-select>
+          aria-label="文件类型"
+          :options="formatOptions"
+        />
       </div>
       <q-tabs
         v-model="type"
@@ -323,20 +361,20 @@ const uploadReferences = async () => {
       <AsyncStatePanel
         :loading="libraryQuery.isPending.value"
         :error="libraryQuery.error.value instanceof Error ? libraryQuery.error.value.message : null"
-        :empty="!rows.length"
+        :empty="!visibleRows.length"
         empty-title="没有找到内容"
         empty-description="调整筛选条件，或从 AI 创作页开始新的文章。"
         @retry="libraryQuery.refetch()"
       >
         <template #empty-action>
           <AppButton
-            v-if="projectId !== 'all' || type !== 'all' || search"
+            v-if="projectId !== 'all' || type !== 'all' || search || fileFormat !== 'all'"
             variant="outline"
             label="查看全部内容"
             @click="clearFilters"
           />
         </template>
-        <ResponsiveTable :rows="rows" :columns="columns">
+        <ResponsiveTable :rows="visibleRows" :columns="columns">
           <template #row="{ row, props }">
             <q-tr :props="props">
               <q-td key="title" :props="props"
@@ -363,10 +401,8 @@ const uploadReferences = async () => {
                   >
                 </button></q-td
               >
-              <q-td key="type" :props="props">{{
-                row.type === 'article' ? '公众号文章' : `${row.fileType ?? '资料'} 资料`
-              }}</q-td>
-              <q-td key="project" :props="props">{{ projectName(row.projectId) }}</q-td>
+              <q-td key="type" :props="props">{{ formatLabel(row) }}</q-td>
+              <q-td key="sourceTask" :props="props">{{ row.sourceTaskTitle ?? '无' }}</q-td>
               <q-td key="status" :props="props"
                 ><q-badge :color="statusColor(row.status)" outline>{{
                   statusText(row.status)
@@ -431,7 +467,8 @@ const uploadReferences = async () => {
                 </div></q-card-section
               >
               <q-card-section class="library-card__meta"
-                ><span>{{ projectName(row.projectId) }}</span
+                ><span>{{ formatLabel(row) }}</span
+                ><span>来源会话：{{ row.sourceTaskTitle ?? '无' }}</span
                 ><q-badge :color="statusColor(row.status)" outline>{{
                   statusText(row.status)
                 }}</q-badge
@@ -488,7 +525,7 @@ const uploadReferences = async () => {
 }
 .library-projects {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 1fr));
   gap: 16px;
   min-width: 0;
   margin-bottom: 26px;
@@ -537,7 +574,7 @@ const uploadReferences = async () => {
 
 .library-toolbar {
   min-width: 0;
-  margin-bottom: 14px;
+  margin-bottom: 0;
   padding: 16px 16px 0;
 }
 .library-toolbar__tabs {
@@ -547,9 +584,15 @@ const uploadReferences = async () => {
 }
 .library-toolbar__filters {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(180px, 280px);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(120px, 180px);
   gap: 12px;
   min-width: 0;
+}
+.library-breadcrumb {
+  align-self: center;
+  min-width: 0;
+  color: var(--app-text-secondary);
+  overflow-wrap: anywhere;
 }
 .library-table {
   min-width: 0;

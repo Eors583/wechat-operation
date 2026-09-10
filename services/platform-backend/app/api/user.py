@@ -97,9 +97,11 @@ from app.model_gateway import active_route_snapshot
 from app.models import (
     AIRun,
     AIRunEvent,
+    Article,
     ArticleRevision,
     ArticleVersion,
     Asset,
+    Document,
     DocumentChunk,
     DocumentSection,
     LayoutTemplate,
@@ -1690,7 +1692,42 @@ async def list_library_items(
     has_more = len(rows) > limit
     rows = rows[:limit]
     next_cursor = encode_cursor(rows[-1].updated_at, rows[-1].id) if has_more and rows else None
-    return page_response([model_dict(row) for row in rows], next_cursor)
+    sources: dict[str, tuple[str | None, str | None, str | None]] = {}
+    source_ids = [row.source_id for row in rows]
+    for article in await session.scalars(
+        select(Article).where(Article.id.in_(source_ids), Article.owner_id == user.id)
+    ):
+        sources[article.id] = (article.source_task_id, None, None)
+    for document, asset in await session.execute(
+        select(Document, Asset)
+        .join(Asset, Asset.id == Document.asset_id)
+        .where(Document.id.in_(source_ids), Document.owner_id == user.id, Asset.owner_id == user.id)
+    ):
+        sources[document.id] = (asset.task_id, asset.filename, asset.mime_type)
+    tasks = {
+        task.id: task.title
+        for task in await session.scalars(
+            select(Task).where(
+                Task.id.in_([source[0] for source in sources.values() if source[0]]),
+                Task.owner_id == user.id,
+                Task.deleted_at.is_(None),
+                Task.status != "deleted",
+            )
+        )
+    }
+    items = []
+    for row in rows:
+        task_id, filename, mime_type = sources.get(row.source_id, (None, None, None))
+        items.append(
+            {
+                **model_dict(row),
+                "source_task_id": task_id if task_id in tasks else None,
+                "source_task_title": tasks.get(task_id),
+                "filename": filename,
+                "mime_type": mime_type,
+            }
+        )
+    return page_response(items, next_cursor)
 
 
 @router.get("/library-items/{item_id}", response_model=contract.LibraryItemDetailResponse)

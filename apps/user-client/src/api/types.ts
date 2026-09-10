@@ -221,6 +221,7 @@ export interface ArticleVersion {
 }
 
 export interface LibraryItem {
+  sourceTaskTitle?: string
   id: string
   type: LibraryItemType
   title: string

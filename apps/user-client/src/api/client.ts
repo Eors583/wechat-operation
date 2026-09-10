@@ -1165,14 +1165,18 @@ const mapLibraryItem = (value: unknown): LibraryItem => {
     type,
     title: textValue(source.title, '未命名内容'),
     projectId: optionalText(source.projectId) ?? null,
-    taskId: null,
+    taskId: optionalText(source.sourceTaskId) ?? null,
+    sourceTaskTitle: optionalText(source.sourceTaskTitle),
     status:
       type === 'article'
         ? mapArticleStatus(source.displayStatus)
         : mapFileStatus(source.displayStatus),
     updatedAt: textValue(source.updatedAt, now()),
     summary: textValue(source.summary),
-    fileType: type === 'reference' ? '资料' : undefined,
+    fileType:
+      type === 'reference'
+        ? textValue(source.filename, textValue(source.title)).split('.').pop()?.toUpperCase()
+        : undefined,
     sourceId: textValue(source.sourceId),
   }
 }
