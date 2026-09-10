@@ -334,7 +334,6 @@ onBeforeUnmount(() => editor.value?.destroy())
         :article="{ ...article, versionNo }"
         :title="title"
         :disabled="saving"
-        :save-article="saveNow"
         @choose="chooseTitle"
       />
       <div class="article-panel__scroll">

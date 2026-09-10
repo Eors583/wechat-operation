@@ -1,21 +1,16 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
-import { useQuasar } from 'quasar'
 import { api } from '@/api/client'
 import type { Article } from '@/api/types'
-import { queryClient } from '@/boot/query'
 import AppButton from '@/components/base/AppButton.vue'
 
 const props = defineProps<{
   article: Article
   title: string
   disabled?: boolean
-  saveArticle: () => Promise<Article | null>
 }>()
 defineEmits<{ choose: [title: string] }>()
-const $q = useQuasar()
-const titleGenerating = ref(false)
 const titleOptionsQuery = useQuery({
   queryKey: computed(() => [
     'article-title-options',
@@ -32,7 +27,6 @@ const titleOptionsQuery = useQuery({
     let cursor = bundle.messagesNextCursor
     const visited = new Set<string>()
     const state = {
-      canGenerate: bundle.task.currentArticleId === current.id,
       activeRun: ['accepted', 'running'].includes(bundle.latestAiRun?.status ?? ''),
     }
     while (true) {
@@ -57,34 +51,10 @@ const titleOptionsQuery = useQuery({
     }
   },
 })
-const titleOptions = computed(() => [
-  ...new Set([props.title, ...(titleOptionsQuery.data.value?.titles ?? [])].filter(Boolean)),
-])
-const titleActionsDisabled = computed(() => props.disabled || titleGenerating.value)
-
-const generateTitles = async () => {
-  if (titleActionsDisabled.value || !titleOptionsQuery.data.value?.canGenerate) return
-  titleGenerating.value = true
-  try {
-    const saved = await props.saveArticle()
-    if (!saved) return
-    await api.sendMessage({
-      taskId: saved.taskId,
-      text: '为当前文章生成5个备选标题，忠于文章事实，仅提供标题。',
-      attachments: [],
-      usePreferences: true,
-    })
-    await queryClient.invalidateQueries({ queryKey: ['article-title-options', saved.id] })
-    await queryClient.invalidateQueries({ queryKey: ['task', saved.taskId] })
-  } catch (error) {
-    $q.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '备选标题生成失败',
-    })
-  } finally {
-    titleGenerating.value = false
-  }
-}
+const titleOptions = computed(() => {
+  const titles = titleOptionsQuery.data.value?.titles ?? []
+  return [...new Set((titles.length ? titles : [props.article.title]).filter(Boolean))]
+})
 </script>
 <template>
   <aside class="article-title-options q-pa-md" aria-label="备选标题">
@@ -103,7 +73,7 @@ const generateTitles = async () => {
         type="button"
         :active="option === title"
         :aria-pressed="option === title"
-        :disable="titleActionsDisabled"
+        :disable="disabled"
         class="article-title-options__item q-mb-sm"
         active-class="article-title-options__item--selected"
         @click="$emit('choose', option)"
@@ -116,23 +86,12 @@ const generateTitles = async () => {
       </q-item>
     </q-list>
     <AppButton
-      v-if="article.taskId"
+      v-if="titleOptionsQuery.isError.value"
       variant="outline"
-      :label="
-        titleOptionsQuery.isError.value
-          ? '重新加载'
-          : titleOptions.length > 1
-            ? '换一组标题'
-            : '生成备选标题'
-      "
-      :loading="titleGenerating"
-      :disabled="
-        titleActionsDisabled ||
-        (!titleOptionsQuery.isError.value &&
-          (!titleOptionsQuery.data.value?.canGenerate || titleOptionsQuery.data.value?.activeRun))
-      "
+      label="重新加载"
+      :loading="titleOptionsQuery.isFetching.value"
       full-width
-      @click="titleOptionsQuery.isError.value ? titleOptionsQuery.refetch() : generateTitles()"
+      @click="titleOptionsQuery.refetch()"
     />
   </aside>
 </template>

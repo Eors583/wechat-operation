@@ -1018,7 +1018,6 @@ onBeforeUnmount(() => {
             :article="article"
             :title="title"
             :disabled="titleActionsDisabled"
-            :save-article="saveContent"
             @choose="chooseTitle"
           />
           <section v-show="view === 'edit'" class="editor-pane">
