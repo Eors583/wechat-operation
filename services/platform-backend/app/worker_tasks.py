@@ -8,6 +8,7 @@ from sqlalchemy import select, text
 from app.celery_app import celery
 from app.config import Settings
 from app.database import Database
+from app.dependencies import _wechat_article_api_configs
 from app.domains.account_deletion import purge_account
 from app.domains.ai import (
     fail_ai_run,
@@ -46,6 +47,7 @@ from app.models import (
 from app.provider_factory import build_providers
 from app.providers import EnvironmentSecretProvider, ProviderUnavailable
 from app.retrieval_routing import build_route_aware_retrieval_service
+from app.web_references import SafeHttpWebReferenceProvider
 from app.wechat_open_platform import WechatOpenPlatformClient, ensure_authorizer_access_token
 
 
@@ -101,13 +103,21 @@ async def _process_ai(run_id: str, message_id: str | None = None) -> dict[str, A
                         embedding=providers.embedding,
                         rerank=providers.rerank,
                     )
+                    web_references = providers.web_reference
+                    if (
+                        isinstance(web_references, SafeHttpWebReferenceProvider)
+                        and web_references._transport is None
+                    ):
+                        web_references = SafeHttpWebReferenceProvider(
+                            article_apis=await _wechat_article_api_configs(session, secrets)
+                        )
                     await prepare_ai_run(
                         session,
                         run=pending,
                         settings=config,
                         retrieval=retrieval,
                         secrets=secrets,
-                        web_references=providers.web_reference,
+                        web_references=web_references,
                         storage=providers.storage,
                         model=providers.model,
                     )
