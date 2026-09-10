@@ -29,6 +29,7 @@ import AsyncStatePanel from '@/components/composite/AsyncStatePanel.vue'
 import PromptComposer from '@/components/composite/PromptComposer.vue'
 import GenerationProgress from '@/components/business/GenerationProgress.vue'
 import MessageArticleCard from '@/components/business/MessageArticleCard.vue'
+import PreferenceConfirmationCard from '@/components/business/PreferenceConfirmationCard.vue'
 import { usePublicSettings } from '@/composables/usePublicSettings'
 import { renderSafeMarkdown } from '@/utils/safeMarkdown'
 import { defaultArticleTemplate } from '@/utils/articleDownload'
@@ -47,8 +48,30 @@ const ArticlePreviewPanel = defineAsyncComponent(
 
 const taskQuery = useQuery({
   queryKey: computed(() => ['task', taskId.value]),
-  queryFn: () => api.getTask(taskId.value),
+  queryFn: async () => {
+    const id = taskId.value
+    const result = await api.getTask(id)
+    const cached = queryClient.getQueryData<TaskBundle>(['task', id])
+    if (!cached) return result
+    const latestIds = new Set(result.messages.map((message) => message.id))
+    return {
+      ...result,
+      messages: [
+        ...cached.messages.filter((message) => !latestIds.has(message.id)),
+        ...result.messages,
+      ],
+      messagesNextCursor: cached.messagesNextCursor,
+    }
+  },
   enabled: computed(() => Boolean(taskId.value)),
+  refetchInterval: (query) =>
+    query.state.data?.messages.some(
+      (message) =>
+        message.preferenceReview === 'pending' &&
+        Date.now() - Date.parse(message.createdAt) < 300_000,
+    )
+      ? 3000
+      : false,
 })
 const skillSearch = ref('')
 const skillsQuery = useInfiniteQuery({
@@ -70,6 +93,20 @@ type PromptComposerInstance = {
 const bundle = computed(() => taskQuery.data.value ?? null)
 const task = computed(() => bundle.value?.task ?? null)
 const messages = computed(() => bundle.value?.messages ?? [])
+const preferenceForReply = (message: Message) => {
+  if (
+    message.role !== 'assistant' ||
+    !message.sourceMessageId ||
+    message.responseKind === 'retry_loading'
+  )
+    return undefined
+  const proposal = messages.value.find(
+    (source) => source.id === message.sourceMessageId,
+  )?.preferenceProposal
+  return proposal?.status === 'pending' && Date.parse(proposal.expiresAt) > Date.now()
+    ? proposal
+    : undefined
+}
 const retrySourceId = ref('')
 const rawVisibleMessages = computed(() => [
   ...messages.value,
@@ -929,6 +966,12 @@ const layoutArticle = async () => {
                   v-if="message.articleId && message.responseKind !== 'retry_loading'"
                   :message="message"
                   @preview="openArticle(message)"
+                />
+                <PreferenceConfirmationCard
+                  v-if="preferenceForReply(message)"
+                  :proposal="preferenceForReply(message)!"
+                  :disabled="generating"
+                  @decide="(text) => send({ text, attachments: [] })"
                 />
                 <div
                   v-if="message.suggestions?.length && message.responseKind !== 'retry_loading'"

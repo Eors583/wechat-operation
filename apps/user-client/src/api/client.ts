@@ -790,6 +790,7 @@ const mapAttachment = (value: unknown): Attachment => {
 const mapMessage = (value: unknown) => {
   const source = record(value)
   const content = record(source.contentJson)
+  const proposal = record(content.preferenceProposal ?? content.preference_proposal)
   return {
     id: textValue(source.id),
     clientMessageId: optionalText(source.clientMessageId),
@@ -813,6 +814,16 @@ const mapMessage = (value: unknown) => {
     errorCode: optionalText(content.errorCode ?? content.error_code),
     retryable: typeof content.retryable === 'boolean' ? content.retryable : undefined,
     sourceMessageId: optionalText(content.sourceMessageId ?? content.source_message_id),
+    preferenceReview: optionalText(content.preferenceReview ?? content.preference_review),
+    preferenceProposal:
+      typeof proposal.value === 'string' && typeof proposal.status === 'string'
+        ? {
+            value: proposal.value,
+            status: proposal.status,
+            previousValue: optionalText(proposal.previousValue ?? proposal.previous_value),
+            expiresAt: textValue(proposal.expiresAt ?? proposal.expires_at),
+          }
+        : undefined,
   }
 }
 

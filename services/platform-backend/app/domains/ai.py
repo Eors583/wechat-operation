@@ -1441,6 +1441,11 @@ async def create_ai_run(
         raise ApiError(409, "RETRY_MESSAGE_MISSING", "找不到原消息，请刷新对话后重试。")
     if not text.strip() or len(text) > 2_000_000:
         raise ApiError(422, "AI_INPUT_INVALID", "请输入有效且不超过限制的内容。")
+    content = {
+        key: value
+        for key, value in content.items()
+        if key not in {"preference_review", "preference_proposal"}
+    }
     await conversation_file_ids(session, task_id=task.id, content=content)
     base_article = (
         await session.get(Article, task.current_article_id) if task.current_article_id else None
@@ -1512,7 +1517,11 @@ async def create_ai_run(
         )
     if not existing_message:
         await enqueue_preference_summary(
-            session, owner_id=owner_id, task_id=task.id, reason="ten_turns", periodic=True
+            session,
+            owner_id=owner_id,
+            task_id=task.id,
+            reason="user_turn",
+            source_message_id=message.id,
         )
     await append_run_event(
         session, run_id=run.id, event_type="run.accepted", payload={"run_id": run.id}
@@ -1565,7 +1574,12 @@ async def prepare_ai_run(
         raise ApiError(409, "ARTICLE_CHANGED", "排队期间文章版本已变化，请基于当前版本重新操作。")
     if not message or message.task_id != task.id:
         raise ApiError(404, "MESSAGE_NOT_FOUND", "消息不存在。")
-    text, content = message.plain_text, dict(message.content_json)
+    text = message.plain_text
+    content = {
+        key: value
+        for key, value in message.content_json.items()
+        if key not in {"preference_review", "preference_proposal"}
+    }
     model_deployment_id = run.context_snapshot.get("requested_model_deployment_id")
     requested_skill_id = run.context_snapshot.get("requested_skill_id")
     requested_skill_ids = run.context_snapshot.get(
@@ -1702,7 +1716,7 @@ async def prepare_ai_run(
     file_ids = await conversation_file_ids(session, task_id=task.id, content=content)
     deterministic = None if file_ids else _deterministic_response(run_type)
     if conversation_action and not needs_model(conversation_action):
-        deterministic = ("正在处理写作风格请求。", [])
+        deterministic = ("正在处理请求。", [])
         file_ids = []
     route_purpose = "article_generation" if run_type == "article_generation" else "fast_task"
     route_snapshot: dict[str, Any] = (
@@ -2164,7 +2178,7 @@ async def process_ai_run(
         conversation_action = None
     action_metadata: dict[str, Any] | None = None
     if conversation_action and not needs_model(conversation_action):
-        deterministic = ("正在处理写作风格请求。", [])
+        deterministic = ("正在处理请求。", [])
     frozen_current = model_context.get("current_article")
     local_document = frozen_current.get("content") if isinstance(frozen_current, dict) else None
     local_target = (
@@ -2897,7 +2911,7 @@ async def process_ai_run(
         and run.run_type != "article_generation"
         and is_preference_only(user_input)
     ):
-        assistant_message.plain_text = "好的，后续会参考你的要求。"
+        assistant_message.plain_text = "本轮会按你的要求处理。"
     session.add(assistant_message)
     if action_metadata:
         assistant_message.content_json = {

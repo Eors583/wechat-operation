@@ -321,7 +321,7 @@ async def execute_action(
 ) -> tuple[str, dict[str, Any]]:
     operation = action["operation"]
     metadata = {"operation": operation}
-    if operation in {"remember_preference", "forget_preference"}:
+    if operation in {"remember_preference", "forget_preference", "decide_preference"}:
         reply = await apply_explicit_memory(session, task=task, source_id=source_id, action=action)
         return reply, metadata
     if operation == "save_project":

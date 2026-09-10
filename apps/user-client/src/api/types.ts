@@ -171,6 +171,13 @@ export interface Message {
   errorCode?: string
   retryable?: boolean
   sourceMessageId?: string
+  preferenceReview?: string
+  preferenceProposal?: {
+    value: string
+    previousValue?: string
+    status: string
+    expiresAt: string
+  }
 }
 
 export interface TaskAIRunSummary {
