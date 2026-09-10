@@ -534,13 +534,7 @@ def classify_run_type(
         return "outline"
     if re.search(r"(?:总结|摘要|概括|提炼要点)", normalized):
         return "summary"
-    explicit_article = bool(
-        re.search(
-            r"(?:写|撰写|创作(?!组)|生成|完成|产出).{0,60}(?:文章|推文|公众号内容)"
-            r"|写成(?:一|1)?篇|整理成文章|生成全文|继续生成|完整成文",
-            normalized,
-        )
-    )
+    explicit_article = explicit_article_request(normalized)
     reference_rewrite = (has_reference_links or bool(extract_message_links(text))) and bool(
         re.search(r"改写|重写|润色|扩写|缩写", normalized)
     )
