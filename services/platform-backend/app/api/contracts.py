@@ -403,7 +403,13 @@ ArticleVersionResource = orm_contract(
 LibraryItemResource = orm_contract(
     "LibraryItemResource",
     LibraryItem,
-    overrides={"display_status": (LibraryDisplayStatus, ...)},
+    overrides={
+        "display_status": (LibraryDisplayStatus, ...),
+        "source_task_id": (str | None, None),
+        "source_task_title": (str | None, None),
+        "filename": (str | None, None),
+        "mime_type": (str | None, None),
+    },
 )
 SkillResource = orm_contract("SkillResource", Skill)
 SkillVersionResource = orm_contract("SkillVersionResource", SkillVersion)
