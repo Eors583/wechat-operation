@@ -160,6 +160,7 @@ export interface Message {
   content: string
   createdAt: string
   attachments?: Attachment[]
+  skillIds?: string[]
   articleId?: string
   articleVersionNo?: number
   titleCandidates?: string[]
@@ -348,6 +349,7 @@ export interface SendMessageInput {
   projectId?: string | null
   text: string
   skillId?: string | null
+  skillIds?: string[]
   modelDeploymentId?: string | null
   usePreferences: boolean
   attachments: Attachment[]
@@ -518,7 +520,8 @@ export interface UserApi {
   updateLibraryItemTitle(id: string, title: string): Promise<LibraryItem>
   deleteLibraryItem(id: string): Promise<void>
   reparseDocument(id: string): Promise<void>
-  listSkillsPage(cursor?: string, limit?: number): Promise<SkillPage>
+  listSkillsPage(cursor?: string, limit?: number, query?: string): Promise<SkillPage>
+  getSkill(id: string): Promise<Skill>
   saveSkill(input: SkillInput): Promise<Skill>
   setSkillEnabled(id: string, enabled: boolean): Promise<Skill>
   deleteSkill(id: string): Promise<void>

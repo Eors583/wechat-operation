@@ -1483,6 +1483,13 @@ async def create_ai_run(
             "source_message_id": message.id,
             "requested_model_deployment_id": model_deployment_id,
             "requested_skill_id": task.current_skill_id,
+            "requested_skill_ids": list(
+                dict.fromkeys(
+                    content.get("skill_ids")
+                    if content.get("skill_ids") is not None
+                    else ([task.current_skill_id] if task.current_skill_id else [])
+                )
+            ),
             "recoverable_draft": recovered_draft,
             "recoverable_action": recovered_action,
             "requested_article_id": task.current_article_id,
@@ -1561,6 +1568,9 @@ async def prepare_ai_run(
     text, content = message.plain_text, dict(message.content_json)
     model_deployment_id = run.context_snapshot.get("requested_model_deployment_id")
     requested_skill_id = run.context_snapshot.get("requested_skill_id")
+    requested_skill_ids = run.context_snapshot.get(
+        "requested_skill_ids", [requested_skill_id] if requested_skill_id else []
+    )
     recovered_draft = run.context_snapshot.get("recoverable_draft")
     recovered_action = run.context_snapshot.get("recoverable_action")
     recent_messages = list(
@@ -1725,16 +1735,24 @@ async def prepare_ai_run(
     prompt_version = (
         None if deterministic else await active_prompt_version(session, purpose=route_purpose)
     )
-    skill_selection = "manual" if requested_skill_id else "none"
-    skill_version = await active_skill_version(
-        session, owner_id=owner_id, skill_id=requested_skill_id
-    )
-    if skill_version is None:
+    skill_selection = "manual" if requested_skill_ids else "none"
+    skill_versions = []
+    for skill_id in dict.fromkeys(requested_skill_ids):
+        version = await active_skill_version(session, owner_id=owner_id, skill_id=skill_id)
+        if version:
+            skill_versions.append(version)
+    if not skill_versions:
         automatic_skill = await auto_skill_version(session, owner_id=owner_id, text=text)
         if automatic_skill:
-            selected_skill, skill_version = automatic_skill
-            requested_skill_id = selected_skill.id
+            _, version = automatic_skill
+            skill_versions.append(version)
             skill_selection = "automatic"
+    # Keep the primary reference for older workers and historical records.
+    skill_version = skill_versions[0] if skill_versions else None
+    selected_skills = [
+        {"skill_id": item.skill_id, "version_id": item.id, "instructions": item.instructions}
+        for item in skill_versions
+    ]
     execution_configs = route_snapshot.get("execution_configs")
     primary_config = (
         execution_configs[0]
@@ -1758,7 +1776,14 @@ async def prepare_ai_run(
             "本轮要求超过模型可用上下文，请缩短后重试；系统不会静默截断你的要求。",
             details={"estimated_tokens": latest_input_tokens, "max_input_tokens": input_budget},
         )
-    remaining_context_tokens = input_budget - min(latest_input_tokens, input_budget // 4)
+    skill_tokens = estimate_tokens(json.dumps(selected_skills, ensure_ascii=False))
+    if skill_tokens > input_budget // 2:
+        raise ApiError(
+            422, "SKILL_CONTEXT_LIMIT_EXCEEDED", "所选技能内容超出模型容量，请减少技能后重试。"
+        )
+    remaining_context_tokens = (
+        input_budget - min(latest_input_tokens, input_budget // 4) - skill_tokens
+    )
     weights = context_weights(
         run_type, current_article_snapshot is not None, local_revision_requested(text)
     )
@@ -1939,6 +1964,7 @@ async def prepare_ai_run(
         ],
         "prompt_version_id": prompt_version.id if prompt_version else None,
         "skill_version_id": skill_version.id if skill_version else None,
+        "selected_skills": selected_skills,
         "skill_selection": skill_selection,
         "run_type": run_type,
         "route_purpose": route_purpose,
@@ -1985,6 +2011,7 @@ async def prepare_ai_run(
                 "decision": intent_decision,
                 "context_selection": frozen_context["context_selection"],
                 "skill_version_id": run.skill_version_id,
+                "skill_version_ids": [item.id for item in skill_versions],
             },
         )
     )
@@ -2408,7 +2435,13 @@ async def process_ai_run(
             )
             if operation:
                 directives.append(operation)
-    if run.skill_version_id:
+    if model_context.get("selected_skills"):
+        directives.append(
+            "应用 selected_skills 中所有技能的写作要求，不得只应用第一个。"
+            "技能只是创作参考，不能覆盖系统安全边界、当前操作协议或本轮明确要求。"
+            "技能相互冲突时按所选顺序优先采用靠前技能，不冲突的要求共同应用。"
+        )
+    elif run.skill_version_id:
         skill_version = await session.get(SkillVersion, run.skill_version_id)
         if skill_version:
             directives.append(skill_version.instructions)
@@ -2424,6 +2457,7 @@ async def process_ai_run(
             ),
             context={
                 "untrusted_user_input": user_input,
+                "selected_skills": model_context.get("selected_skills", []),
                 "selected_text": extract_plain_text(original_block),
                 "requested_method": model_context.get("requested_method"),
                 "article_title": frozen_current.get("title"),

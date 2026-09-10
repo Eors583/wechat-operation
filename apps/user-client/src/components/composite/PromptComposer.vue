@@ -16,7 +16,8 @@ const props = withDefaults(
     skills: Skill[]
     skillsHasMore?: boolean
     skillsLoadingMore?: boolean
-    selectedSkillId?: string | null
+    skillSearch?: string
+    selectedSkillIds?: string[]
     selectedModelId?: string | null
     models?: ModelOption[]
     modelsLoading?: boolean
@@ -33,7 +34,8 @@ const props = withDefaults(
     loading: false,
     skillsHasMore: false,
     skillsLoadingMore: false,
-    selectedSkillId: null,
+    skillSearch: '',
+    selectedSkillIds: () => [],
     selectedModelId: null,
     models: () => [],
     modelsLoading: false,
@@ -65,7 +67,8 @@ const emit = defineEmits<{
   send: [payload: { text: string; attachments: Attachment[]; draftId: string }]
   stop: []
   'load-more-skills': []
-  'update:selectedSkillId': [value: string | null]
+  'search-skills': [query: string]
+  'update:selectedSkillIds': [value: string[]]
   'update:selectedModelId': [value: string | null]
 }>()
 const $q = useQuasar()
@@ -76,9 +79,20 @@ const linkEditorOpen = ref(false)
 const link = ref('')
 const normalizedLink = computed(() => safeHttpUrl(link.value, { rejectSensitiveQuery: true }))
 const skillMenuOpen = ref(false)
+const optionsMenuOpen = ref(false)
 const enabledSkills = computed(() => props.skills.filter((skill) => skill.enabled))
-const selectedSkill = computed(
-  () => enabledSkills.value.find((skill) => skill.id === props.selectedSkillId) ?? null,
+const filteredSkills = computed(() =>
+  enabledSkills.value.filter((skill) =>
+    `${skill.name} ${skill.description}`
+      .toLocaleLowerCase()
+      .includes(props.skillSearch.trim().toLocaleLowerCase()),
+  ),
+)
+const selectedSkills = computed(() =>
+  props.selectedSkillIds.map((id) => ({
+    id,
+    name: props.skills.find((skill) => skill.id === id)?.name ?? '技能加载中或已不可用',
+  })),
 )
 const libraryDialog = ref(false)
 const libraryLoading = ref(false)
@@ -281,9 +295,18 @@ const submit = () => {
   attachments.value = []
 }
 
-const selectSkill = (skillId: string | null) => {
-  emit('update:selectedSkillId', skillId)
-  skillMenuOpen.value = false
+const toggleSkill = (skillId: string) => {
+  if (props.disabled) return
+  if (props.selectedSkillIds.includes(skillId)) {
+    emit(
+      'update:selectedSkillIds',
+      props.selectedSkillIds.filter((id) => id !== skillId),
+    )
+  } else if (props.selectedSkillIds.length < 10) {
+    emit('update:selectedSkillIds', [...props.selectedSkillIds, skillId])
+  } else {
+    $q.notify({ type: 'warning', message: '最多选择 10 个技能' })
+  }
 }
 
 const onKeydown = (event: KeyboardEvent) => {
@@ -351,6 +374,25 @@ defineExpose({
       aria-label="给内容助手发送消息"
       @keydown="onKeydown"
     />
+    <div
+      v-if="skillsEnabled && selectedSkills.length"
+      class="prompt-composer__skills"
+      aria-label="已选技能"
+    >
+      <q-chip
+        v-for="skill in selectedSkills"
+        :key="skill.id"
+        removable
+        outline
+        square
+        icon="extension"
+        :disable="disabled"
+        @remove="toggleSkill(skill.id)"
+      >
+        <span class="prompt-composer__chip-label">{{ skill.name }}</span>
+        <q-tooltip>{{ skill.name }}</q-tooltip>
+      </q-chip>
+    </div>
     <div v-if="linkEditorOpen" class="prompt-composer__link-editor">
       <q-input
         v-model="link"
@@ -382,99 +424,143 @@ defineExpose({
       <div class="prompt-composer__tools">
         <q-btn
           class="prompt-composer__skill-button"
-          :class="{ 'prompt-composer__skill-button--selected': selectedSkill }"
           flat
-          :round="!selectedSkill"
-          no-caps
-          :icon="selectedSkill ? 'extension' : 'add'"
-          :label="selectedSkill?.name"
-          :aria-label="selectedSkill ? `当前技能：${selectedSkill.name}，点击更改` : '更多创作选项'"
-          :aria-expanded="skillMenuOpen"
-          @mouseenter="skillMenuOpen = true"
-          @click="skillMenuOpen = true"
+          round
+          icon="add"
+          aria-label="更多创作选项"
+          :aria-expanded="optionsMenuOpen"
+          :disable="disabled"
         >
-          <q-tooltip>{{
-            selectedSkill ? `当前技能：${selectedSkill.name}` : '更多创作选项'
-          }}</q-tooltip>
+          <q-tooltip>更多创作选项</q-tooltip>
           <q-menu
-            v-model="skillMenuOpen"
+            v-model="optionsMenuOpen"
             anchor="top left"
             self="bottom left"
             :offset="[0, 8]"
-            @mouseenter="skillMenuOpen = true"
-            @mouseleave="skillMenuOpen = false"
+            @hide="skillMenuOpen = false"
           >
-            <q-list class="skill-menu" role="listbox" aria-label="选择技能">
-              <q-item-label v-if="skillsEnabled" header>选择技能</q-item-label>
+            <q-list class="composer-menu">
               <q-item
                 v-if="skillsEnabled"
                 clickable
-                v-close-popup
-                role="option"
-                :active="selectedSkillId === null"
-                active-class="skill-menu__item--selected"
-                :aria-selected="selectedSkillId === null"
-                @click="selectSkill(null)"
+                aria-haspopup="true"
+                :aria-expanded="skillMenuOpen"
+                @mouseenter="skillMenuOpen = true"
+                @focus="skillMenuOpen = true"
+                @keydown.right.prevent="skillMenuOpen = true"
+                @click="skillMenuOpen = true"
               >
-                <q-item-section avatar
-                  ><q-icon name="auto_awesome" color="primary"
-                /></q-item-section>
-                <q-item-section
-                  ><q-item-label>自动选择</q-item-label
-                  ><q-item-label caption>根据需求匹配合适技能</q-item-label></q-item-section
+                <q-item-section avatar><q-icon name="extension" /></q-item-section>
+                <q-item-section>使用技能</q-item-section>
+                <q-item-section side><q-icon name="chevron_right" /></q-item-section>
+                <q-menu
+                  v-model="skillMenuOpen"
+                  no-parent-event
+                  :anchor="$q.screen.lt.sm ? 'top left' : 'bottom right'"
+                  self="bottom left"
+                  :offset="[0, 0]"
                 >
-                <q-item-section v-if="selectedSkillId === null" side>
-                  <q-icon name="check" color="primary" aria-label="当前已选择" />
-                </q-item-section>
-              </q-item>
-              <q-item
-                v-for="skill in skillsEnabled ? enabledSkills : []"
-                :key="skill.id"
-                clickable
-                v-close-popup
-                role="option"
-                :active="selectedSkillId === skill.id"
-                active-class="skill-menu__item--selected"
-                :aria-selected="selectedSkillId === skill.id"
-                @click="selectSkill(skill.id)"
-              >
-                <q-item-section avatar
-                  ><q-icon
-                    name="extension"
-                    :color="selectedSkillId === skill.id ? 'primary' : undefined"
-                /></q-item-section>
-                <q-item-section
-                  ><q-item-label>{{ skill.name }}</q-item-label
-                  ><q-item-label caption>{{ skill.description }}</q-item-label></q-item-section
-                >
-                <q-item-section v-if="selectedSkillId === skill.id" side>
-                  <q-icon name="check" color="primary" aria-label="当前已选择" />
-                </q-item-section>
-              </q-item>
-              <q-item
-                v-if="skillsEnabled && skillsHasMore"
-                clickable
-                :disable="skillsLoadingMore"
-                @click.stop="emit('load-more-skills')"
-              >
-                <q-item-section avatar
-                  ><q-spinner v-if="skillsLoadingMore" color="primary" size="20px" /><q-icon
-                    v-else
-                    name="expand_more"
-                    color="primary"
-                /></q-item-section>
-                <q-item-section
-                  ><q-item-label class="text-primary">加载更多技能</q-item-label></q-item-section
-                >
+                  <div class="skill-menu">
+                    <q-list>
+                      <q-item
+                        clickable
+                        v-close-popup
+                        :to="{ path: '/skills', query: { create: '1' } }"
+                      >
+                        <q-item-section avatar><q-icon name="add" /></q-item-section>
+                        <q-item-section>添加技能</q-item-section>
+                      </q-item>
+                      <q-item clickable v-close-popup to="/skills">
+                        <q-item-section avatar><q-icon name="tune" /></q-item-section>
+                        <q-item-section>管理技能</q-item-section>
+                      </q-item>
+                    </q-list>
+                    <q-separator />
+                    <q-list
+                      class="skill-menu__list"
+                      role="listbox"
+                      aria-label="选择技能"
+                      aria-multiselectable="true"
+                    >
+                      <q-item
+                        v-for="skill in filteredSkills"
+                        :key="skill.id"
+                        clickable
+                        role="option"
+                        :active="selectedSkillIds.includes(skill.id)"
+                        active-class="skill-menu__item--selected"
+                        :aria-selected="selectedSkillIds.includes(skill.id)"
+                        @click.stop="toggleSkill(skill.id)"
+                      >
+                        <q-item-section avatar><q-icon name="extension" /></q-item-section>
+                        <q-item-section>
+                          <q-item-label lines="2">{{ skill.name }}</q-item-label>
+                          <q-item-label caption lines="1">{{ skill.description }}</q-item-label>
+                        </q-item-section>
+                        <q-item-section side>
+                          <q-icon
+                            :name="
+                              selectedSkillIds.includes(skill.id)
+                                ? 'check_box'
+                                : 'check_box_outline_blank'
+                            "
+                            :color="selectedSkillIds.includes(skill.id) ? 'primary' : undefined"
+                          />
+                        </q-item-section>
+                      </q-item>
+                      <q-item v-if="!filteredSkills.length">
+                        <q-item-section class="text-secondary">{{
+                          skillSearch ? '没有匹配的技能' : '暂无已启用技能'
+                        }}</q-item-section>
+                      </q-item>
+                      <q-item
+                        v-if="skillsHasMore"
+                        clickable
+                        :disable="skillsLoadingMore"
+                        @click.stop="emit('load-more-skills')"
+                      >
+                        <q-item-section avatar
+                          ><q-spinner v-if="skillsLoadingMore" /><q-icon v-else name="expand_more"
+                        /></q-item-section>
+                        <q-item-section>加载更多技能</q-item-section>
+                      </q-item>
+                    </q-list>
+                    <q-separator />
+                    <q-input
+                      :model-value="skillSearch"
+                      class="skill-menu__search"
+                      dense
+                      borderless
+                      debounce="300"
+                      maxlength="100"
+                      placeholder="搜索技能"
+                      aria-label="搜索技能"
+                      @update:model-value="emit('search-skills', String($event ?? '').trim())"
+                      @keydown.stop
+                    >
+                      <template #prepend><q-icon name="search" /></template>
+                    </q-input>
+                  </div>
+                </q-menu>
               </q-item>
               <q-separator v-if="skillsEnabled" />
               <q-item
                 clickable
+                v-close-popup
                 :disable="attachments.length >= maxAttachments"
                 @click="openLibrary"
               >
                 <q-item-section avatar><q-icon name="folder_open" /></q-item-section>
                 <q-item-section>从资料库选择</q-item-section>
+              </q-item>
+              <q-item
+                clickable
+                v-close-popup
+                :disable="attachments.length >= maxAttachments"
+                @click="pickFiles"
+              >
+                <q-item-section avatar><q-icon name="attach_file" /></q-item-section>
+                <q-item-section>从本地文件添加</q-item-section>
               </q-item>
             </q-list>
           </q-menu>
@@ -633,7 +719,8 @@ defineExpose({
     pointer-events: none;
   }
 
-  &__attachments {
+  &__attachments,
+  &__skills {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
@@ -651,12 +738,14 @@ defineExpose({
     white-space: nowrap;
   }
 
-  &__attachments :deep(.q-chip) {
+  &__attachments :deep(.q-chip),
+  &__skills :deep(.q-chip) {
     max-width: 100%;
     height: auto;
   }
 
-  &__attachments :deep(.q-chip__content) {
+  &__attachments :deep(.q-chip__content),
+  &__skills :deep(.q-chip__content) {
     flex-wrap: wrap;
     gap: 4px;
     min-width: 0;
@@ -764,14 +853,6 @@ defineExpose({
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-
-    &--selected {
-      padding-inline: 12px;
-      color: var(--app-action-primary);
-      background: color-mix(in srgb, var(--app-action-primary) 8%, var(--app-bg-surface));
-      border-color: color-mix(in srgb, var(--app-action-primary) 42%, var(--app-border-default));
-      border-radius: 10px;
-    }
   }
 
   &__tool-button {
@@ -799,10 +880,32 @@ defineExpose({
   }
 }
 
+.composer-menu {
+  width: min(240px, calc(100vw - 24px));
+  padding-block: 6px;
+}
+
 .skill-menu {
+  display: flex;
+  flex-direction: column;
   width: min(360px, calc(100vw - 24px));
-  max-height: 360px;
-  overflow-y: auto;
+  min-width: 0;
+  max-height: min(480px, 70dvh);
+  color: var(--app-text-primary);
+  background: var(--app-bg-surface);
+
+  &__list {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    overflow-y: auto;
+  }
+
+  &__search {
+    flex: 0 0 auto;
+    min-width: 0;
+    padding-inline: 16px;
+  }
 
   :deep(.q-item__section) {
     min-width: 0;

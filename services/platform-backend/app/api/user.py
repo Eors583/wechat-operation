@@ -712,6 +712,9 @@ class MessageContent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     retry_of_run_id: str | None = Field(default=None, min_length=1, max_length=36)
+    skill_ids: list[Annotated[str, Field(min_length=1, max_length=36)]] | None = Field(
+        default=None, max_length=10
+    )
     document_ids: list[str] = Field(default_factory=list, max_length=20)
     links: list[str] = Field(default_factory=list, max_length=20)
     attachments: list[MessageAttachment] = Field(default_factory=list, max_length=20)

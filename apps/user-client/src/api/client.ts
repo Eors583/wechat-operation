@@ -800,6 +800,7 @@ const mapMessage = (value: unknown) => {
     attachments: Array.isArray(content.attachments)
       ? content.attachments.map(mapAttachment)
       : undefined,
+    skillIds: Array.isArray(content.skillIds) ? stringList(content.skillIds) : undefined,
     articleId: optionalText(content.articleId),
     articleVersionNo: typeof content.versionNo === 'number' ? content.versionNo : undefined,
     titleCandidates: Array.isArray(content.titleCandidates)
@@ -2405,7 +2406,7 @@ export const remoteApi: UserApi = {
       taskId: input.taskId ?? null,
       projectId: input.projectId ?? null,
       text: input.text,
-      skillId: input.skillId ?? null,
+      skillIds: input.skillIds ?? (input.skillId ? [input.skillId] : []),
       modelDeploymentId: input.modelDeploymentId ?? null,
       usePreferences: input.usePreferences,
       attachments: serializedAttachments,
@@ -2416,6 +2417,7 @@ export const remoteApi: UserApi = {
       text: input.text,
       content: {
         ...(input.retryOfRunId ? { retryOfRunId: input.retryOfRunId } : {}),
+        skillIds: input.skillIds ?? (input.skillId ? [input.skillId] : []),
         attachments: serializedAttachments,
         documentIds: attachments
           .map((item) => item.documentId)
@@ -2435,7 +2437,7 @@ export const remoteApi: UserApi = {
           signal: input.signal,
           params: { path: { task_id: input.taskId } },
           body: apiBody<'TaskPatch'>({
-            currentSkillId: input.skillId ?? null,
+            currentSkillId: input.skillIds?.[0] ?? input.skillId ?? null,
             usePreferences: input.usePreferences,
           }),
         }),
@@ -2446,7 +2448,7 @@ export const remoteApi: UserApi = {
       path = '/tasks'
       body = {
         projectId: input.projectId ?? null,
-        currentSkillId: input.skillId ?? null,
+        currentSkillId: input.skillIds?.[0] ?? input.skillId ?? null,
         modelDeploymentId: input.modelDeploymentId ?? null,
         usePreferences: input.usePreferences,
         firstMessage: message,
@@ -3020,11 +3022,18 @@ export const remoteApi: UserApi = {
     )
     await waitForDocument(id)
   },
-  async listSkillsPage(cursor, limit = 50) {
+  async listSkillsPage(cursor, limit = 50, query) {
     const payload = await openApiData(
-      openApi.GET('/api/v1/skills', { params: { query: { cursor, limit } } }),
+      openApi.GET('/api/v1/skills', { params: { query: { cursor, limit, query } } }),
     )
     return { items: itemList(payload).map(mapSkill), nextCursor: nextPageCursor(payload, cursor) }
+  },
+  async getSkill(id) {
+    return mapSkill(
+      await openApiData(
+        openApi.GET('/api/v1/skills/{skill_id}', { params: { path: { skill_id: id } } }),
+      ),
+    )
   },
   async saveSkill(input: SkillInput) {
     const payload = {

@@ -3709,6 +3709,10 @@ export interface components {
             readonly document_ids?: readonly string[];
             /** Links */
             readonly links?: readonly string[];
+            /** Retry Of Run Id */
+            readonly retry_of_run_id?: string | null;
+            /** Skill Ids */
+            readonly skill_ids?: readonly string[] | null;
             /** Source */
             readonly source?: string | null;
         };

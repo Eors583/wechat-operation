@@ -50,9 +50,10 @@ const taskQuery = useQuery({
   queryFn: () => api.getTask(taskId.value),
   enabled: computed(() => Boolean(taskId.value)),
 })
+const skillSearch = ref('')
 const skillsQuery = useInfiniteQuery({
-  queryKey: ['skills'],
-  queryFn: ({ pageParam }) => api.listSkillsPage(pageParam),
+  queryKey: computed(() => ['skills', 'composer', skillSearch.value]),
+  queryFn: ({ pageParam }) => api.listSkillsPage(pageParam, 50, skillSearch.value || undefined),
   initialPageParam: undefined as string | undefined,
   getNextPageParam: (lastPage) => lastPage.nextCursor,
 })
@@ -148,7 +149,7 @@ const attachmentProgressLabel = (item: AttachmentUploadProgress) =>
         ? '解析中'
         : '已就绪'
   }`
-const skills = computed(() => [
+const loadedSkills = computed(() => [
   ...new Map(
     (skillsQuery.data.value?.pages.flatMap((page) => page.items) ?? []).map((skill) => [
       skill.id,
@@ -179,7 +180,30 @@ const previewTemplate = computed(
   () => previewTemplates.value.find((template) => template.id === previewTemplateId.value) ?? null,
 )
 const selectedProjectId = ref<string | null>(null)
-const selectedSkillId = ref<string | null>(null)
+const selectedSkillIds = ref<string[]>([])
+const missingSkillIds = computed(() =>
+  selectedSkillIds.value.filter((id) => !loadedSkills.value.some((skill) => skill.id === id)),
+)
+const selectedSkillsQuery = useQuery({
+  queryKey: computed(() => ['selected-skills', missingSkillIds.value]),
+  enabled: computed(() => missingSkillIds.value.length > 0),
+  queryFn: () =>
+    Promise.all(
+      missingSkillIds.value.map((id) =>
+        api.getSkill(id).catch((error: unknown) => {
+          if (error instanceof ApiError && error.status === 404) return null
+          throw error
+        }),
+      ),
+    ),
+})
+const skills = computed(() => [
+  ...new Map(
+    [...(selectedSkillsQuery.data.value ?? []), ...loadedSkills.value]
+      .filter((skill) => skill !== null)
+      .map((skill) => [skill.id, skill]),
+  ).values(),
+])
 const selectedModelId = ref<string | null>(null)
 const selectedModelAvailable = computed(
   () =>
@@ -283,7 +307,9 @@ watch(
   task,
   (value) => {
     if (!value || initializedTaskSettings === value.id) return
-    selectedSkillId.value = value.currentSkillId
+    const latestUserMessage = [...messages.value].reverse().find((item) => item.role === 'user')
+    selectedSkillIds.value =
+      latestUserMessage?.skillIds ?? (value.currentSkillId ? [value.currentSkillId] : [])
     initializedTaskSettings = value.id
   },
   { immediate: true },
@@ -307,7 +333,7 @@ watch(taskId, (value) => {
   if (value) return
   initializedTaskSettings = ''
   selectedProjectId.value = null
-  selectedSkillId.value = null
+  selectedSkillIds.value = []
 })
 const modelPreferenceKey = (ownerId: string) => `wechat-ai-selected-model:${ownerId}`
 const selectModel = (modelId: string | null) => {
@@ -422,6 +448,7 @@ const send = async (payload: {
     content: payload.text,
     createdAt: new Date().toISOString(),
     attachments: payload.attachments,
+    skillIds: [...selectedSkillIds.value],
   }
   activeUploadMessageId.value = pendingMessage.id
   const originRoute = route.fullPath
@@ -446,7 +473,7 @@ const send = async (payload: {
       taskId: taskId.value || undefined,
       projectId: taskId.value ? (task.value?.projectId ?? null) : selectedProjectId.value,
       text: payload.text,
-      skillId: selectedSkillId.value,
+      skillIds: pendingMessage.skillIds ?? selectedSkillIds.value,
       modelDeploymentId: selectedModelId.value,
       usePreferences: true,
       attachments: payload.attachments,
@@ -991,9 +1018,10 @@ const layoutArticle = async () => {
           <div class="workspace__composer safe-bottom">
             <PromptComposer
               ref="taskComposer"
-              v-model:selected-skill-id="selectedSkillId"
+              v-model:selected-skill-ids="selectedSkillIds"
               :selected-model-id="selectedModelId"
               :skills="skills"
+              :skill-search="skillSearch"
               :models="modelOptionsQuery.data.value ?? []"
               :models-loading="modelOptionsQuery.isFetching.value"
               :skills-has-more="skillsQuery.hasNextPage.value"
@@ -1012,6 +1040,7 @@ const layoutArticle = async () => {
                 publicSettings.features.featureFlags.visual_understanding !== false
               "
               @load-more-skills="skillsQuery.fetchNextPage()"
+              @search-skills="skillSearch = $event"
               @update:selected-model-id="selectModel"
               @send="send"
               @stop="stop"
@@ -1028,9 +1057,10 @@ const layoutArticle = async () => {
         <p>描述你的需求，内容助手会帮你整理资料并完成文章</p>
         <PromptComposer
           ref="blankComposer"
-          v-model:selected-skill-id="selectedSkillId"
+          v-model:selected-skill-ids="selectedSkillIds"
           :selected-model-id="selectedModelId"
           :skills="skills"
+          :skill-search="skillSearch"
           :models="modelOptionsQuery.data.value ?? []"
           :models-loading="modelOptionsQuery.isFetching.value"
           :skills-has-more="skillsQuery.hasNextPage.value"
@@ -1047,6 +1077,7 @@ const layoutArticle = async () => {
             publicSettings.features.featureFlags.visual_understanding !== false
           "
           @load-more-skills="skillsQuery.fetchNextPage()"
+          @search-skills="skillSearch = $event"
           @update:selected-model-id="selectModel"
           @send="send"
           @stop="stop"

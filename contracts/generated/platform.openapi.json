@@ -29493,6 +29493,23 @@
             ],
             "title": "Retry Of Run Id"
           },
+          "skill_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string",
+                  "maxLength": 36,
+                  "minLength": 1
+                },
+                "type": "array",
+                "maxItems": 10
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Ids"
+          },
           "document_ids": {
             "items": {
               "type": "string"

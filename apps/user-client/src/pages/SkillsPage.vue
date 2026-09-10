@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useInfiniteQuery } from '@tanstack/vue-query'
 import { useQuasar } from 'quasar'
 import { api } from '@/api/client'
@@ -13,6 +14,8 @@ import SkillCard from '@/components/business/SkillCard.vue'
 import { usePublicSettings } from '@/composables/usePublicSettings'
 
 const $q = useQuasar()
+const route = useRoute()
+const router = useRouter()
 const { settings: publicSettings } = usePublicSettings()
 const personalSkillsEnabled = computed(
   () => publicSettings.value.features.featureFlags.personal_skills !== false,
@@ -85,6 +88,18 @@ const editSelected = () => {
   detailDialog.value = false
   openEdit(selected.value)
 }
+
+watch(
+  () => route.query.create,
+  (create) => {
+    if (create !== '1' || !personalSkillsEnabled.value) return
+    openEdit()
+    const query = { ...route.query }
+    delete query.create
+    void router.replace({ query })
+  },
+  { immediate: true },
+)
 
 const toggle = async (skill: Skill, enabled: boolean) => {
   if (skill.scope === 'personal' && !personalSkillsEnabled.value) {
