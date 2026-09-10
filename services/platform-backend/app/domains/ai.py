@@ -111,7 +111,9 @@ RunEventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 def article_output_contract() -> str:
     return (
         "只返回一个 JSON 对象，不要使用 Markdown 代码围栏。根对象必须且只能包含"
-        " assistant_message 和 article 两个字段：assistant_message 是可为空的简短对话说明，"
+        " assistant_message、article 和 title_candidates 三个字段。title_candidates 是5个不同角度、"
+        "不虚构事实的备选标题字符串，每个不超过120字符；article 的首个一级标题使用其中一个。"
+        "备选标题不得写进正文。assistant_message 是可为空的简短对话说明，"
         "只显示在对话中；article 是正式文章的机器边界，必须是根节点为 type=doc、含 content"
         " 数组的完整 Tiptap 文档。应用只会把 article 字段放入文章预览，绝不能把"
         " assistant_message、分析过程、资料说明或完成说明写进 article。article 的内容必须是"
@@ -179,12 +181,37 @@ def article_repair_route(route_snapshot: dict[str, Any]) -> dict[str, Any]:
 def generated_article_message(content: dict[str, Any]) -> str:
     if "article" not in content:
         return ""
-    if set(content) != {"assistant_message", "article"}:
+    if set(content) - {"assistant_message", "article", "title_candidates"} or not {
+        "assistant_message",
+        "article",
+    } <= set(content):
         raise ApiError(422, "ARTICLE_CONTENT_INVALID", "模型文章输出边界字段不完整。")
     message = content.get("assistant_message")
     if not isinstance(message, str):
         raise ApiError(422, "ARTICLE_CONTENT_INVALID", "模型对话说明格式无效。")
     return message.strip()
+
+
+def generated_title_candidates(result: ModelResult) -> list[str]:
+    content = result.structured
+    if "title_candidates" not in content:
+        try:
+            parsed = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", result.text.strip()))
+            content = parsed if isinstance(parsed, dict) else {}
+        except ValueError:
+            return []
+    values = content.get("title_candidates")
+    if not isinstance(values, list):
+        return []
+    return list(
+        dict.fromkeys(
+            value.strip()
+            for value in values
+            if isinstance(value, str)
+            and 1 <= len(value.strip()) <= 120
+            and "\n" not in value.strip()
+        )
+    )[:8]
 
 
 def generated_article_content(content: dict[str, Any]) -> dict[str, Any]:
@@ -2437,7 +2464,12 @@ async def process_ai_run(
             "交付内容必须直接包含实际正文，不得只返回完成说明或本地文件下载路径。"
         )
         if run.run_type != "article_generation":
-            if conversation_action and conversation_action["operation"] == "save_skill":
+            if run.run_type == "titles" and not conversation_action:
+                directives.append(
+                    '只返回 JSON {"title_candidates":["标题1","标题2","标题3","标题4","标题5"]}。'
+                    "标题采用不同切入角度，忠于当前文章事实，每个不超过120字符，不修改文章正文。"
+                )
+            elif conversation_action and conversation_action["operation"] == "save_skill":
                 directives.append(
                     "本轮提炼可复用的技能，不是个人写作风格。输出 # 标题、空行、适用场景、"
                     "执行步骤与约束，总计不超过2000字符；不生成文章，不声称保存。"
@@ -2502,7 +2534,7 @@ async def process_ai_run(
             context=model_context,
             snapshot=run.model_route_snapshot,
             stream=(
-                run.run_type != "article_generation"
+                run.run_type not in {"article_generation", "titles"}
                 and not is_preference_only(user_input)
                 and not style_action(user_input)
                 and not conversation_action
@@ -2511,6 +2543,13 @@ async def process_ai_run(
     await stage("validating_output")
     result = readable_model_result(result)
     article_message = ""
+    title_candidates = generated_title_candidates(result)
+    if run.run_type == "titles" and not conversation_action:
+        if not title_candidates:
+            raise ApiError(422, "TITLE_CANDIDATES_INVALID", "未生成可用的备选标题。")
+        result = dataclass_replace(
+            result, text="\n\n".join(f"{i}. {value}" for i, value in enumerate(title_candidates, 1))
+        )
     if run.run_type == "article_generation" and local_target is None:
         try:
             article_message = generated_article_message(result.structured)
@@ -2621,6 +2660,11 @@ async def process_ai_run(
             validate_publish_ready_article(canonical_output, model_context)
             result = revised
         canonical_output = strip_unrequested_article_byline(canonical_output, model_context)
+        title_candidates = generated_title_candidates(result) or title_candidates
+        if title_candidates:
+            titles_allowed, _ = await safety.check_text("\n".join(title_candidates))
+            if not titles_allowed:
+                title_candidates = []
         grounding = source_findings(canonical_output, model_context)
         if grounding["unmatched"] and re.search(
             r"仅(?:根据|依据|使用)|只(?:根据|依据|使用)|不得新增事实|不要新增事实", user_input
@@ -2649,7 +2693,7 @@ async def process_ai_run(
             details={"reason": reason},
         )
     await ensure_not_cancelled()
-    if run.run_type == "article_generation" or (
+    if run.run_type in {"article_generation", "titles"} or (
         conversation_action
         and conversation_action.get("operation")
         in {"save_local", "save_template", "wechat_draft", "wechat_publish"}
@@ -2766,7 +2810,11 @@ async def process_ai_run(
         assistant_message = Message(
             task_id=task.id,
             role="assistant",
-            content_json={"article_id": article.id, "version_no": version.version_no},
+            content_json={
+                "article_id": article.id,
+                "version_no": version.version_no,
+                **({"title_candidates": title_candidates} if local_target is None else {}),
+            },
             plain_text=article_message or "文章已生成，可以打开预览并继续修改。",
         )
     else:
@@ -2780,6 +2828,14 @@ async def process_ai_run(
             content_json={"response_kind": run.run_type, "suggestions": suggestions},
             plain_text=result.text,
         )
+        if run.run_type == "titles" and not conversation_action:
+            baseline = model_context.get("current_article") or {}
+            assistant_message.content_json = {
+                **assistant_message.content_json,
+                "title_candidates": title_candidates,
+                "title_article_id": baseline.get("article_id"),
+                "version_no": baseline.get("version_no"),
+            }
     if (
         not conversation_action
         and run.run_type != "article_generation"

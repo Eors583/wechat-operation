@@ -263,7 +263,9 @@ class OpenAICompatibleModelProvider:
         user_input = f"{prompt}\n\n<context_snapshot>{context_json}</context_snapshot>"
         article_output = _requires_article_output(purpose, context)
         instructions = (
-            "Return one valid JSON object with exactly two fields: assistant_message and article. "
+            "Return one valid JSON object with assistant_message, article and title_candidates. "
+            "title_candidates is an array of five distinct factual article titles, each at most "
+            "120 characters. Keep candidate titles outside the article body. "
             "assistant_message is conversation text only; article is the complete Tiptap document "
             "with type=doc and a content array. Do not wrap JSON in Markdown fences."
             if article_output

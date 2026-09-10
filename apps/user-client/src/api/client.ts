@@ -802,6 +802,10 @@ const mapMessage = (value: unknown) => {
       : undefined,
     articleId: optionalText(content.articleId),
     articleVersionNo: typeof content.versionNo === 'number' ? content.versionNo : undefined,
+    titleCandidates: Array.isArray(content.titleCandidates)
+      ? stringList(content.titleCandidates)
+      : undefined,
+    titleArticleId: optionalText(content.titleArticleId ?? content.articleId),
     suggestions: stringList(content.suggestions),
     responseKind: optionalText(content.responseKind ?? content.response_kind),
     aiRunId: optionalText(content.aiRunId ?? content.ai_run_id),

@@ -162,6 +162,8 @@ export interface Message {
   attachments?: Attachment[]
   articleId?: string
   articleVersionNo?: number
+  titleCandidates?: string[]
+  titleArticleId?: string
   suggestions?: string[]
   responseKind?: string
   aiRunId?: string
