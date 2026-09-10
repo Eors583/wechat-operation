@@ -9,6 +9,7 @@ import { templatePreviewCssVariables } from '@/utils/templatePreviewStyles'
 import { createDefaultStyles } from '@/api/styleDefaults'
 import { tableExtensions } from '@/editor/tableExtensions'
 import ArticleTableMenu from '@/components/business/ArticleTableMenu.vue'
+import ArticleTitleChoices from '@/components/business/ArticleTitleChoices.vue'
 import Link from '@tiptap/extension-link'
 import Image from '@tiptap/extension-image'
 import { moduleParagraph } from '@/editor/moduleParagraph'
@@ -135,61 +136,14 @@ const persistLocalDraft = () => {
 }
 
 const article = computed(() => articleQuery.data.value ?? null)
-const titleGenerating = ref(false)
 const titleSelecting = ref(false)
-const titleOptionsQuery = useQuery({
-  queryKey: computed(() => [
-    'article-title-options',
-    articleId.value,
-    article.value?.taskId,
-    versionNo.value,
-  ]),
-  enabled: computed(() => Boolean(article.value?.taskId)),
-  refetchInterval: (query) => (query.state.data?.activeRun ? 3000 : false),
-  queryFn: async () => {
-    const current = article.value!
-    const bundle = await api.getTask(current.taskId)
-    let messages = bundle.messages
-    let cursor = bundle.messagesNextCursor
-    const visited = new Set<string>()
-    const state = {
-      canGenerate: bundle.task.currentArticleId === current.id,
-      activeRun: ['accepted', 'running'].includes(bundle.latestAiRun?.status ?? ''),
-    }
-    while (true) {
-      const match = messages
-        .filter(
-          (message) =>
-            message.titleArticleId === current.id &&
-            message.titleCandidates !== undefined &&
-            (message.articleVersionNo ?? 0) <= current.versionNo,
-        )
-        .sort(
-          (left, right) =>
-            (right.articleVersionNo ?? 0) - (left.articleVersionNo ?? 0) ||
-            right.createdAt.localeCompare(left.createdAt),
-        )[0]
-      if (match) return { ...state, titles: match.titleCandidates ?? [] }
-      if (!cursor || visited.has(cursor)) return { ...state, titles: [] as string[] }
-      visited.add(cursor)
-      const page = await api.listTaskMessages(current.taskId, cursor)
-      messages = page.items
-      cursor = page.nextCursor
-    }
-  },
-})
-const titleOptions = computed(() => [
-  ...new Set([title.value, ...(titleOptionsQuery.data.value?.titles ?? [])].filter(Boolean)),
-])
 const titleActionsDisabled = computed(
   () =>
-    titleGenerating.value ||
     titleSelecting.value ||
     saveConflict.value ||
     Boolean(pendingOutcome.value) ||
     outcomeLoading.value,
 )
-
 const chooseTitle = async (value: string) => {
   if (titleActionsDisabled.value || value === title.value || !editor.value) return
   titleSelecting.value = true
@@ -212,30 +166,6 @@ const chooseTitle = async (value: string) => {
   }
 }
 
-const generateTitles = async () => {
-  if (titleActionsDisabled.value || !article.value || !titleOptionsQuery.data.value?.canGenerate)
-    return
-  titleGenerating.value = true
-  try {
-    const saved = await saveContent()
-    if (!saved) return
-    await api.sendMessage({
-      taskId: saved.taskId,
-      text: '为当前文章生成5个备选标题，忠于文章事实，仅提供标题。',
-      attachments: [],
-      usePreferences: true,
-    })
-    await titleOptionsQuery.refetch()
-    await queryClient.invalidateQueries({ queryKey: ['task', saved.taskId] })
-  } catch (error) {
-    $q.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '备选标题生成失败',
-    })
-  } finally {
-    titleGenerating.value = false
-  }
-}
 const pendingOutcomeText = computed(() => {
   const pending = pendingOutcome.value
   if (!pending) return ''
@@ -1083,57 +1013,14 @@ onBeforeUnmount(() => {
         </header>
 
         <main class="article-workbench__main">
-          <aside class="article-title-options q-pa-md" aria-label="备选标题">
-            <h2 class="text-subtitle1 q-ma-none q-mb-sm">备选标题</h2>
-            <q-spinner
-              v-if="titleOptionsQuery.isPending.value && article?.taskId"
-              color="primary"
-              aria-label="加载备选标题"
-            />
-            <q-list class="article-title-options__list" role="group" aria-label="选择文章标题">
-              <q-item
-                v-for="(option, index) in titleOptions"
-                :key="option"
-                clickable
-                tag="button"
-                type="button"
-                :active="option === title"
-                :aria-pressed="option === title"
-                :disable="titleActionsDisabled"
-                class="article-title-options__item q-mb-sm"
-                active-class="article-title-options__item--selected"
-                @click="chooseTitle(option)"
-              >
-                <q-item-section side>{{ index + 1 }}</q-item-section>
-                <q-item-section class="article-title-options__label">{{ option }}</q-item-section>
-                <q-item-section v-if="option === title" side
-                  ><q-icon name="check" color="primary" size="18px"
-                /></q-item-section>
-              </q-item>
-            </q-list>
-            <AppButton
-              v-if="article?.taskId"
-              variant="outline"
-              :label="
-                titleOptionsQuery.isError.value
-                  ? '重新加载'
-                  : titleOptions.length > 1
-                    ? '换一组标题'
-                    : '生成备选标题'
-              "
-              :loading="titleGenerating"
-              :disabled="
-                titleActionsDisabled ||
-                (!titleOptionsQuery.isError.value &&
-                  (!titleOptionsQuery.data.value?.canGenerate ||
-                    titleOptionsQuery.data.value?.activeRun))
-              "
-              full-width
-              @click="
-                titleOptionsQuery.isError.value ? titleOptionsQuery.refetch() : generateTitles()
-              "
-            />
-          </aside>
+          <ArticleTitleChoices
+            v-if="article"
+            :article="article"
+            :title="title"
+            :disabled="titleActionsDisabled"
+            :save-article="saveContent"
+            @choose="chooseTitle"
+          />
           <section v-show="view === 'edit'" class="editor-pane">
             <div class="editor-toolbar" role="toolbar" aria-label="文章编辑工具栏">
               <ArticleTableMenu :editor="editor" />
@@ -1564,32 +1451,6 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.article-title-options {
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  background: var(--app-bg-surface);
-  border-right: 1px solid var(--app-border-default);
-}
-.article-title-options__list,
-.article-title-options__label {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.article-title-options__item {
-  width: 100%;
-  min-width: 0;
-  border: 1px solid var(--app-border-default);
-  border-radius: $generic-border-radius;
-  color: var(--app-text-primary);
-  background: var(--app-bg-surface);
-  text-align: left;
-  font: inherit;
-}
-.article-title-options__item--selected {
-  border-color: var(--app-action-primary);
-  background: var(--app-action-soft);
-}
 .article-title .q-input {
   flex: 1 1 auto;
   min-width: 0;

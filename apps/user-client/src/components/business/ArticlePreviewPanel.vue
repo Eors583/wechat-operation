@@ -14,6 +14,7 @@ import { templatePreviewCssVariables } from '@/utils/templatePreviewStyles'
 import { separateArticleTitle } from '@/utils/articleTitle'
 import { tableExtensions } from '@/editor/tableExtensions'
 import ArticleTableMenu from './ArticleTableMenu.vue'
+import ArticleTitleChoices from './ArticleTitleChoices.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -93,10 +94,11 @@ watch(
 )
 
 const saveNow = async () => {
-  if (props.readOnly || !editor.value || !dirty.value || saving.value) return
+  if (props.readOnly || !editor.value || saving.value) return null
+  if (!dirty.value) return { ...props.article, versionNo: versionNo.value, title: title.value }
   if (!title.value.trim() || title.value.trim().length > 120) {
     $q.notify({ type: 'negative', message: '请填写 1—120 字的文章标题。' })
-    return
+    return null
   }
   saving.value = true
   saveState.value = 'saving'
@@ -120,15 +122,24 @@ const saveNow = async () => {
       queryClient.invalidateQueries({ queryKey: ['task', props.article.taskId] }),
     ])
     $q.notify({ type: 'positive', message: '文章修改已保存。' })
+    return saved
   } catch (error) {
     saveState.value = 'failed'
     $q.notify({
       type: 'negative',
       message: error instanceof Error ? error.message : '文章修改保存失败。',
     })
+    return null
   } finally {
     saving.value = false
   }
+}
+
+const chooseTitle = async (value: string) => {
+  if (props.readOnly || saving.value || value === title.value) return
+  title.value = value
+  markDirty()
+  await saveNow()
 }
 
 const setLink = () => {
@@ -317,31 +328,41 @@ onBeforeUnmount(() => editor.value?.destroy())
       />
       <q-btn flat round dense icon="sentiment_satisfied" aria-label="表情占位" disable />
     </div>
-    <div class="article-panel__scroll">
-      <div
-        :style="previewCssVariables"
-        :class="[
-          'article-panel__document',
-          { 'article-panel__document--with-marker': hasHeadingMarker },
-        ]"
-      >
-        <header class="article-panel__heading">
-          <q-input
-            v-model="title"
-            class="article-panel__title"
-            type="textarea"
-            autogrow
-            borderless
-            stack-label
-            label="文章标题"
-            aria-label="文章标题"
-            maxlength="120"
-            :disable="saving"
-            :readonly="readOnly"
-            @update:model-value="markDirty"
-          />
-        </header>
-        <EditorContent :editor="editor" />
+    <div class="article-panel__body" :class="{ 'article-panel__body--readonly': readOnly }">
+      <ArticleTitleChoices
+        v-if="!readOnly"
+        :article="{ ...article, versionNo }"
+        :title="title"
+        :disabled="saving"
+        :save-article="saveNow"
+        @choose="chooseTitle"
+      />
+      <div class="article-panel__scroll">
+        <div
+          :style="previewCssVariables"
+          :class="[
+            'article-panel__document',
+            { 'article-panel__document--with-marker': hasHeadingMarker },
+          ]"
+        >
+          <header class="article-panel__heading">
+            <q-input
+              v-model="title"
+              class="article-panel__title"
+              type="textarea"
+              autogrow
+              borderless
+              stack-label
+              label="文章标题"
+              aria-label="文章标题"
+              maxlength="120"
+              :disable="saving"
+              :readonly="readOnly"
+              @update:model-value="markDirty"
+            />
+          </header>
+          <EditorContent :editor="editor" />
+        </div>
       </div>
     </div>
   </section>
@@ -368,6 +389,17 @@ onBeforeUnmount(() => editor.value?.destroy())
   min-width: 0;
   min-height: 0;
   height: min(72vh, 760px);
+
+  &__body {
+    display: grid;
+    grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+    min-width: 0;
+    min-height: 0;
+  }
+
+  &__body--readonly {
+    grid-template-columns: minmax(0, 1fr);
+  }
 
   &__toolbar {
     display: flex;
@@ -532,6 +564,11 @@ onBeforeUnmount(() => editor.value?.destroy())
 @media (max-width: 599px) {
   .article-panel {
     height: min(74vh, 720px);
+
+    &__body:not(.article-panel__body--readonly) {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: minmax(0, 0.45fr) minmax(0, 1fr);
+    }
 
     &__document {
       padding: 24px 18px;
