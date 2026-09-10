@@ -30,12 +30,28 @@ const modelTypeOptions: Array<{ label: string; value: ModelConfiguration['model_
 
 const tab = ref<Tab>('models')
 const models = ref<ModelConfiguration[]>([])
-const layoutRoutes = ref<ModelRoute[]>([])
+const routePurpose = ref<'layout_extraction' | 'rerank'>('rerank')
+const routeLabel = computed(() =>
+  routePurpose.value === 'rerank' ? '资料重排序' : '排版学习智能体',
+)
+const allRoutes = ref<ModelRoute[]>([])
+const layoutRoutes = computed(() =>
+  allRoutes.value.filter((route) => route.purpose === routePurpose.value),
+)
 const selectedLayoutRouteId = ref('')
 const savingLayoutRoute = ref(false)
 const testingLayoutRoute = ref(false)
 const publishingLayoutRoute = ref(false)
 const disablingLayoutRoute = ref(false)
+const loadingRoutes = ref(false)
+const routeBusy = computed(
+  () =>
+    savingLayoutRoute.value ||
+    testingLayoutRoute.value ||
+    publishingLayoutRoute.value ||
+    disablingLayoutRoute.value ||
+    loadingRoutes.value,
+)
 const creditCost = ref(1)
 const creditSaving = ref(false)
 const testingId = ref<string | null>(null)
@@ -61,11 +77,14 @@ const modelForm = reactive<ModelConfiguration>(emptyModelConfiguration())
 const layoutRouteForm = reactive<ModelRoute>(emptyLayoutRoute())
 const availableLayoutModels = computed(() =>
   models.value.filter(
-    (model) => model.status === 'available' && ['chat', 'vision'].includes(model.model_type),
+    (model) => model.status === 'available' && routeModelTypes.value.includes(model.model_type),
   ),
 )
 const layoutModelOptions = computed(() =>
-  models.value.filter((model) => ['chat', 'vision'].includes(model.model_type)),
+  models.value.filter((model) => routeModelTypes.value.includes(model.model_type)),
+)
+const routeModelTypes = computed(() =>
+  routePurpose.value === 'rerank' ? ['rerank'] : ['chat', 'vision'],
 )
 const selectedLayoutRoute = computed(
   () => layoutRoutes.value.find((route) => route.id === selectedLayoutRouteId.value) ?? null,
@@ -73,9 +92,19 @@ const selectedLayoutRoute = computed(
 const selectedLayoutModel = computed(
   () => models.value.find((model) => model.id === layoutRouteForm.primary_deployment_id) ?? null,
 )
+const routeHasUnsavedChanges = computed(
+  () =>
+    !selectedLayoutRoute.value ||
+    JSON.stringify(layoutRouteForm) !== JSON.stringify(selectedLayoutRoute.value),
+)
 const layoutRouteReady = computed(
   () =>
-    Boolean(layoutRouteForm.primary_deployment_id) &&
+    availableLayoutModels.value.some(
+      (model) => model.id === layoutRouteForm.primary_deployment_id,
+    ) &&
+    layoutRouteForm.fallback_deployment_ids.every((id) =>
+      availableLayoutModels.value.some((model) => model.id === id),
+    ) &&
     !layoutRouteForm.fallback_deployment_ids.includes(layoutRouteForm.primary_deployment_id) &&
     layoutRouteForm.timeout_ms >= 10_000 &&
     layoutRouteForm.timeout_ms <= 300_000 &&
@@ -86,7 +115,7 @@ const layoutRouteReady = computed(
 onMounted(async () => {
   const [configuration, routes, credits] = await Promise.allSettled([
     adminRepository.modelConfigurations(),
-    adminRepository.modelRoutes('layout_extraction'),
+    adminRepository.modelRoutes(),
     adminRepository.loadAiRunCreditCost(),
   ])
   if (configuration.status === 'fulfilled') models.value = configuration.value
@@ -95,14 +124,10 @@ onMounted(async () => {
       configuration.reason instanceof Error ? configuration.reason.message : '模型配置加载失败。',
     )
   if (routes.status === 'fulfilled') {
-    layoutRoutes.value = routes.value
-    const preferred =
-      routes.value.find((route) => route.status === 'published') ?? routes.value[0] ?? null
-    if (preferred) selectLayoutRoute(preferred.id)
+    allRoutes.value = routes.value
+    selectRoutePurpose()
   } else
-    ElMessage.error(
-      routes.reason instanceof Error ? routes.reason.message : '排版智能体配置加载失败。',
-    )
+    ElMessage.error(routes.reason instanceof Error ? routes.reason.message : '模型路由加载失败。')
   if (credits.status === 'fulfilled') creditCost.value = credits.value
   else
     ElMessage.error(credits.reason instanceof Error ? credits.reason.message : '积分配置加载失败。')
@@ -111,8 +136,8 @@ onMounted(async () => {
 function emptyLayoutRoute(): ModelRoute {
   return {
     id: '',
-    purpose: 'layout_extraction',
-    display_name: '排版学习智能体',
+    purpose: routePurpose.value,
+    display_name: routeLabel.value,
     version: 0,
     primary_deployment_id: '',
     fallback_deployment_ids: [],
@@ -120,6 +145,26 @@ function emptyLayoutRoute(): ModelRoute {
     max_attempts: 2,
     status: 'draft',
     updated_at: '',
+  }
+}
+
+function selectRoutePurpose(): void {
+  selectedLayoutRouteId.value = ''
+  Object.assign(layoutRouteForm, emptyLayoutRoute())
+  const preferred =
+    layoutRoutes.value.find((route) => route.status === 'published') ?? layoutRoutes.value[0]
+  if (preferred) selectLayoutRoute(preferred.id)
+}
+
+async function configureRerank(): Promise<void> {
+  routePurpose.value = 'rerank'
+  selectRoutePurpose()
+  tab.value = 'layout-agent'
+  try {
+    await reloadLayoutRoutes()
+    selectRoutePurpose()
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '路由加载失败。')
   }
 }
 
@@ -154,34 +199,39 @@ function keepFallbacksDistinct(): void {
 }
 
 async function reloadLayoutRoutes(preferredId?: string): Promise<void> {
-  layoutRoutes.value = await adminRepository.modelRoutes('layout_extraction')
-  const preferred =
-    layoutRoutes.value.find((route) => route.id === preferredId) ?? layoutRoutes.value[0] ?? null
-  if (preferred) selectLayoutRoute(preferred.id)
-  else newLayoutRouteDraft()
+  loadingRoutes.value = true
+  try {
+    allRoutes.value = await adminRepository.modelRoutes()
+    const preferred =
+      layoutRoutes.value.find((route) => route.id === preferredId) ?? layoutRoutes.value[0] ?? null
+    if (preferred) selectLayoutRoute(preferred.id)
+    else newLayoutRouteDraft()
+  } finally {
+    loadingRoutes.value = false
+  }
 }
 
 async function saveLayoutRoute(): Promise<void> {
-  if (!layoutRouteReady.value) return
+  if (!layoutRouteReady.value || routeBusy.value) return
   savingLayoutRoute.value = true
   try {
     await adminRepository.saveRouteDraft({
       ...cloneData(layoutRouteForm),
       id: '',
-      purpose: 'layout_extraction',
+      purpose: routePurpose.value,
       status: 'draft',
     })
     await reloadLayoutRoutes()
-    ElMessage.success('排版智能体路由草稿已保存；测试通过后才能发布。')
+    ElMessage.success('路由草稿已保存；测试通过后可发布。')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '排版智能体路由保存失败。')
+    ElMessage.error(error instanceof Error ? error.message : '路由保存失败。')
   } finally {
     savingLayoutRoute.value = false
   }
 }
 
 async function testLayoutRoute(): Promise<void> {
-  if (!selectedLayoutRoute.value) return
+  if (!selectedLayoutRoute.value || routeHasUnsavedChanges.value || routeBusy.value) return
   testingLayoutRoute.value = true
   try {
     const routeId = selectedLayoutRoute.value.id
@@ -189,22 +239,28 @@ async function testLayoutRoute(): Promise<void> {
     await reloadLayoutRoutes(routeId)
     ElMessage[result.passed ? 'success' : 'warning'](result.message)
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '排版智能体固定案例测试失败。')
+    ElMessage.error(error instanceof Error ? error.message : '路由连接测试失败。')
   } finally {
     testingLayoutRoute.value = false
   }
 }
 
 async function publishLayoutRoute(): Promise<void> {
-  if (!selectedLayoutRoute.value || selectedLayoutRoute.value.status !== 'testing') return
+  if (
+    !selectedLayoutRoute.value ||
+    selectedLayoutRoute.value.status !== 'testing' ||
+    routeHasUnsavedChanges.value ||
+    routeBusy.value
+  )
+    return
   publishingLayoutRoute.value = true
   try {
     const routeId = selectedLayoutRoute.value.id
     await adminRepository.publishRoute(routeId)
     await reloadLayoutRoutes(routeId)
-    ElMessage.success('排版智能体模型路由已发布，只影响新的模板提取任务。')
+    ElMessage.success(`${routeLabel.value}路由已发布。`)
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '排版智能体路由发布失败。')
+    ElMessage.error(error instanceof Error ? error.message : '路由发布失败。')
   } finally {
     publishingLayoutRoute.value = false
   }
@@ -217,9 +273,9 @@ async function disableLayoutRoute(): Promise<void> {
     const routeId = selectedLayoutRoute.value.id
     await adminRepository.disableRoute(routeId)
     await reloadLayoutRoutes(routeId)
-    ElMessage.success('排版智能体路由已停用；运行中的任务继续使用冻结配置。')
+    ElMessage.success('路由已停用。')
   } catch (error) {
-    ElMessage.error(error instanceof Error ? error.message : '排版智能体路由停用失败。')
+    ElMessage.error(error instanceof Error ? error.message : '路由停用失败。')
   } finally {
     disablingLayoutRoute.value = false
   }
@@ -227,8 +283,8 @@ async function disableLayoutRoute(): Promise<void> {
 
 function requestLayoutRoutePublish(): void {
   if (!selectedLayoutRoute.value) return
-  confirmDialog.title = '发布排版智能体路由'
-  confirmDialog.description = `发布“${selectedLayoutRoute.value.display_name}”v${selectedLayoutRoute.value.version} 后，新的链接排版提取将使用该冻结模型链；运行中的任务不切换。`
+  confirmDialog.title = `发布${routeLabel.value}路由`
+  confirmDialog.description = `发布“${selectedLayoutRoute.value.display_name}”v${selectedLayoutRoute.value.version}，用于后续${routeLabel.value}请求。`
   confirmDialog.tone = 'primary'
   confirmDialog.confirmLabel = '确认发布'
   confirmDialog.action = () => void publishLayoutRoute()
@@ -237,8 +293,8 @@ function requestLayoutRoutePublish(): void {
 
 function requestLayoutRouteDisable(): void {
   if (!selectedLayoutRoute.value) return
-  confirmDialog.title = '停用排版智能体路由'
-  confirmDialog.description = `停用“${selectedLayoutRoute.value.display_name}”v${selectedLayoutRoute.value.version} 后，新模板无法使用这条模型路由；运行中的任务继续使用冻结配置。`
+  confirmDialog.title = `停用${routeLabel.value}路由`
+  confirmDialog.description = `停用“${selectedLayoutRoute.value.display_name}”v${selectedLayoutRoute.value.version} 后，${routeLabel.value}将不可用，直到发布新路由。`
   confirmDialog.tone = 'warning'
   confirmDialog.confirmLabel = '确认停用'
   confirmDialog.action = () => void disableLayoutRoute()
@@ -433,6 +489,7 @@ async function deleteModel(item: ModelConfiguration): Promise<void> {
   try {
     await adminRepository.deleteModelConfiguration(item.id)
     models.value = await adminRepository.modelConfigurations()
+    await reloadLayoutRoutes()
     ElMessage.success(`“${item.name}”已删除。`)
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : '模型删除失败。')
@@ -524,9 +581,16 @@ async function saveCreditCost(): Promise<void> {
                 </div>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="190" fixed="right" align="right">
+            <el-table-column label="操作" width="270" fixed="right" align="right">
               <template #default="{ row }">
                 <div class="table-actions">
+                  <el-button
+                    v-if="row.model_type === 'rerank'"
+                    link
+                    :disabled="routeBusy"
+                    @click="configureRerank"
+                    >配置路由</el-button
+                  >
                   <el-button link :loading="testingId === row.id" @click="testModel(row)"
                     ><AppIcon name="science" />测试</el-button
                   >
@@ -563,24 +627,34 @@ async function saveCreditCost(): Promise<void> {
         </DataTableShell>
       </el-tab-pane>
 
-      <el-tab-pane name="layout-agent" label="排版智能体">
+      <el-tab-pane name="layout-agent" label="模型路由">
         <section class="layout-agent-grid">
           <el-card shadow="never" class="surface-card layout-agent-card">
             <template #header>
               <div class="layout-agent-heading">
                 <div>
-                  <h2>排版学习智能体模型路由</h2>
-                  <p>
-                    为公众号链接解析选择主模型和有序备用模型。路由固定为
-                    <code>layout_extraction</code>。
-                  </p>
+                  <h2>{{ routeLabel }}模型路由</h2>
+                  <p>选择主模型和备用模型，保存、测试后发布生效。</p>
                 </div>
                 <StatusBadge :status="selectedLayoutRoute?.status ?? 'draft'" />
               </div>
             </template>
 
             <div class="layout-agent-form">
+              <el-form label-position="top">
+                <el-form-item label="用途">
+                  <el-select
+                    v-model="routePurpose"
+                    :disabled="routeBusy"
+                    @change="selectRoutePurpose"
+                  >
+                    <el-option label="资料重排序" value="rerank" />
+                    <el-option label="排版学习智能体" value="layout_extraction" />
+                  </el-select>
+                </el-form-item>
+              </el-form>
               <el-alert
+                v-if="routePurpose === 'layout_extraction'"
                 type="info"
                 :closable="false"
                 show-icon
@@ -592,16 +666,24 @@ async function saveCreditCost(): Promise<void> {
                 type="warning"
                 :closable="false"
                 show-icon
-                title="还没有已发布的对话或视觉模型。请先在“模型配置”中添加、测试并发布模型。"
+                :title="`还没有可用的${routePurpose === 'rerank' ? '重排' : '对话或视觉'}模型，请先在模型配置中添加并启用。`"
               />
 
-              <el-form label-position="top">
+              <el-alert
+                v-if="!layoutRoutes.some((route) => route.status === 'published')"
+                type="warning"
+                :closable="false"
+                show-icon
+                :title="`${routeLabel}尚未配置生效路由。`"
+              />
+
+              <el-form label-position="top" :disabled="routeBusy">
                 <el-form-item label="配置名称">
                   <el-input
                     v-model.trim="layoutRouteForm.display_name"
                     maxlength="120"
                     show-word-limit
-                    placeholder="例如：公众号排版学习智能体"
+                    :placeholder="routeLabel"
                   />
                 </el-form-item>
 
@@ -623,7 +705,11 @@ async function saveCreditCost(): Promise<void> {
                 </el-form-item>
 
                 <el-alert
-                  v-if="selectedLayoutModel && selectedLayoutModel.model_type !== 'vision'"
+                  v-if="
+                    routePurpose === 'layout_extraction' &&
+                    selectedLayoutModel &&
+                    selectedLayoutModel.model_type !== 'vision'
+                  "
                   type="warning"
                   :closable="false"
                   show-icon
@@ -675,20 +761,25 @@ async function saveCreditCost(): Promise<void> {
               </el-form>
 
               <div class="layout-agent-actions">
-                <el-button @click="newLayoutRouteDraft">
+                <el-button :disabled="routeBusy" @click="newLayoutRouteDraft">
                   <AppIcon name="add" />新建路由草稿
                 </el-button>
                 <el-button
                   type="primary"
                   :loading="savingLayoutRoute"
-                  :disabled="!layoutRouteReady"
+                  :disabled="!layoutRouteReady || routeBusy"
                   @click="saveLayoutRoute"
                 >
                   <AppIcon name="save" />保存新草稿版本
                 </el-button>
                 <el-button
                   :loading="testingLayoutRoute"
-                  :disabled="!selectedLayoutRoute || selectedLayoutRoute.status === 'published'"
+                  :disabled="
+                    !selectedLayoutRoute ||
+                    selectedLayoutRoute.status === 'published' ||
+                    routeHasUnsavedChanges ||
+                    routeBusy
+                  "
                   @click="testLayoutRoute"
                 >
                   <AppIcon name="science" />测试已保存版本
@@ -697,6 +788,7 @@ async function saveCreditCost(): Promise<void> {
                   v-if="selectedLayoutRoute?.status === 'testing'"
                   type="success"
                   :loading="publishingLayoutRoute"
+                  :disabled="routeHasUnsavedChanges || routeBusy"
                   @click="requestLayoutRoutePublish"
                 >
                   <AppIcon name="publish" />发布路由
@@ -705,6 +797,7 @@ async function saveCreditCost(): Promise<void> {
                   v-if="selectedLayoutRoute?.status === 'published'"
                   type="warning"
                   :loading="disablingLayoutRoute"
+                  :disabled="routeBusy"
                   @click="requestLayoutRouteDisable"
                 >
                   <AppIcon name="pause" />停用路由
@@ -729,6 +822,7 @@ async function saveCreditCost(): Promise<void> {
                 :key="route.id"
                 type="button"
                 class="layout-route-item"
+                :disabled="routeBusy"
                 :class="{ 'layout-route-item--active': route.id === selectedLayoutRouteId }"
                 @click="selectLayoutRoute(route.id)"
               >
