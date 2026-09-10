@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { useInfiniteQuery } from '@tanstack/vue-query'
 import { useQuasar } from 'quasar'
 import { api } from '@/api/client'
@@ -10,12 +9,9 @@ import AppButton from '@/components/base/AppButton.vue'
 import AppDialog from '@/components/base/AppDialog.vue'
 import AsyncStatePanel from '@/components/composite/AsyncStatePanel.vue'
 import PageHeader from '@/components/composite/PageHeader.vue'
-import { useAuthStore } from '@/stores/auth'
 import { useThemeStore } from '@/stores/theme'
 
-const auth = useAuthStore()
 const theme = useThemeStore()
-const router = useRouter()
 const $q = useQuasar()
 const preferencesQuery = useInfiniteQuery({
   queryKey: ['preferences'],
@@ -117,17 +113,6 @@ const removePreference = (preference: Preference) => {
     await queryClient.invalidateQueries({ queryKey: ['preferences'] })
   })
 }
-
-const logout = async () => {
-  try {
-    await auth.logout()
-  } catch {
-    $q.notify({ type: 'warning', message: '本机账号数据已清除，但服务端撤销状态尚未确认。' })
-  } finally {
-    queryClient.clear()
-    await router.replace('/login')
-  }
-}
 </script>
 
 <template>
@@ -138,30 +123,6 @@ const logout = async () => {
     />
 
     <div class="settings-grid">
-      <section class="settings-section surface-card">
-        <header>
-          <div>
-            <h2>账号信息</h2>
-            <p>当前登录账号与可用积分</p>
-          </div>
-        </header>
-        <div class="profile-card">
-          <q-avatar size="64px" color="primary" text-color="white">{{
-            auth.user?.name.slice(0, 1)
-          }}</q-avatar>
-          <div>
-            <strong>{{ auth.user?.name }}</strong
-            ><span>{{ auth.user?.role }}</span
-            ><small>{{ auth.user?.phone }} · {{ auth.user?.email }}</small>
-          </div>
-          <q-chip color="positive" text-color="white">{{ auth.user?.points }} 积分</q-chip>
-        </div>
-        <q-separator />
-        <div class="settings-section__actions">
-          <AppButton variant="outline" label="退出登录" @click="logout" />
-        </div>
-      </section>
-
       <section class="settings-section surface-card">
         <header>
           <div>
@@ -357,34 +318,6 @@ const logout = async () => {
   color: var(--app-text-secondary);
   overflow-wrap: anywhere;
 }
-.settings-section__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 18px;
-}
-
-.profile-card {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-  padding-bottom: 20px;
-}
-.profile-card > div {
-  display: grid;
-  min-width: 0;
-}
-.profile-card strong {
-  font-size: 18px;
-}
-.profile-card span,
-.profile-card small {
-  color: var(--app-text-secondary);
-  overflow-wrap: anywhere;
-}
 
 .theme-options {
   display: grid;
@@ -491,13 +424,6 @@ const logout = async () => {
   .settings-section > header {
     align-items: stretch;
     flex-direction: column;
-  }
-  .profile-card {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-  .profile-card > .q-chip {
-    grid-column: 1 / -1;
-    justify-self: start;
   }
   .preferences-list .q-item {
     align-items: flex-start;
