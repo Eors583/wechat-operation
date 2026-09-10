@@ -14,7 +14,12 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
-from app.domains.context_selection import clean_delivery_blocks, context_weights, source_findings
+from app.domains.context_selection import (
+    clean_delivery_blocks,
+    context_weights,
+    enforce_article_body_boundary,
+    source_findings,
+)
 from app.domains.conversation_actions import execute_action, needs_model, plan_action
 from app.domains.dialogue_flow import (
     explicit_article_request,
@@ -113,7 +118,9 @@ def article_output_contract() -> str:
         "只返回一个 JSON 对象，不要使用 Markdown 代码围栏。根对象必须且只能包含"
         " assistant_message、article 和 title_candidates 三个字段。title_candidates 是5个不同角度、"
         "不虚构事实的备选标题字符串，每个不超过120字符；article 的首个一级标题使用其中一个。"
-        "备选标题不得写进正文。assistant_message 是可为空的简短对话说明，"
+        "备选标题只能放在 title_candidates，不得在 article 内重复输出，不得添加‘标题备选’"
+        "‘标题建议’等章节。写作说明、标题选择理由和发布建议只能放在 assistant_message。"
+        "assistant_message 是可为空的简短对话说明，"
         "只显示在对话中；article 是正式文章的机器边界，必须是根节点为 type=doc、含 content"
         " 数组的完整 Tiptap 文档。应用只会把 article 字段放入文章预览，绝不能把"
         " assistant_message、分析过程、资料说明或完成说明写进 article。article 的内容必须是"
@@ -189,6 +196,16 @@ def generated_article_message(content: dict[str, Any]) -> str:
     message = content.get("assistant_message")
     if not isinstance(message, str):
         raise ApiError(422, "ARTICLE_CONTENT_INVALID", "模型对话说明格式无效。")
+    titles = content.get("title_candidates", [])
+    if (
+        not isinstance(titles, list)
+        or len(titles) > 8
+        or any(
+            not isinstance(title, str) or not 1 <= len(title.strip()) <= 120 or "\n" in title
+            for title in titles
+        )
+    ):
+        raise ApiError(422, "ARTICLE_CONTENT_INVALID", "备选标题必须是独立的短标题字符串数组。")
     return message.strip()
 
 
@@ -220,6 +237,7 @@ def generated_article_content(content: dict[str, Any]) -> dict[str, Any]:
     Only plain paragraph wrappers are eligible. Code blocks and JSON quoted inside
     an otherwise normal article are intentionally left alone.
     """
+    title_candidates = content.get("title_candidates")
     if "article" in content:
         generated_article_message(content)
         article = content.get("article")
@@ -230,7 +248,7 @@ def generated_article_content(content: dict[str, Any]) -> dict[str, Any]:
         document = canonical_article_content(content)
         blocks = document.get("content", [])
         if not blocks or any(node["type"] != "paragraph" for node in blocks):
-            return document
+            return enforce_article_body_boundary(document, title_candidates)
         candidate = extract_plain_text(document).strip()
         if candidate.startswith("```") and candidate.endswith("```"):
             candidate = candidate.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
@@ -242,7 +260,7 @@ def generated_article_content(content: dict[str, Any]) -> dict[str, Any]:
                     raise ApiError(
                         422, "ARTICLE_CONTENT_INVALID", "模型把损坏的文章 JSON 当作正文返回。"
                     ) from None
-                return document
+                return enforce_article_body_boundary(document, title_candidates)
             if isinstance(parsed, str):
                 candidate = parsed.strip()
                 continue
@@ -250,7 +268,7 @@ def generated_article_content(content: dict[str, Any]) -> dict[str, Any]:
         else:
             raise ApiError(422, "ARTICLE_CONTENT_INVALID", "文章内容重复编码层数过多。")
         if not isinstance(parsed, dict) or parsed.get("type") != "doc":
-            return document
+            return enforce_article_body_boundary(document, title_candidates)
         content = parsed
     raise ApiError(422, "ARTICLE_CONTENT_INVALID", "文章内容嵌套层数过多。")
 
@@ -2568,7 +2586,9 @@ async def process_ai_run(
                 purpose="article_generation",
                 prompt=(
                     article_output_contract()
-                    + "只修复 invalid_article_json 的格式，保留全部原文，不添加解释或新内容。"
+                    + "修复 invalid_article_json 的格式及正文边界，保留全部正式正文；将备选标题"
+                    "移入 title_candidates，将交付说明移入 assistant_message，不得留在 article，"
+                    "不添加新事实。"
                 ),
                 context={
                     "invalid_article_json": result.structured,
@@ -2725,6 +2745,8 @@ async def process_ai_run(
             )
             if current_version_no != baseline.get("version_no"):
                 raise ApiError(409, "AI_ARTICLE_CHANGED", "文章版本已变化，本轮未覆盖新内容。")
+    if run.run_type == "article_generation":
+        enforce_article_body_boundary(result.structured, title_candidates)
     if conversation_action:
         action_text, action_metadata = await execute_action(
             session,

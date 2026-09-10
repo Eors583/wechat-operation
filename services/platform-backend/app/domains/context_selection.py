@@ -4,6 +4,51 @@ import re
 from typing import Any
 
 from app.domains.article import extract_plain_text
+from app.errors import ApiError
+
+
+def enforce_article_body_boundary(
+    document: dict[str, Any], title_candidates: Any = None
+) -> dict[str, Any]:
+    """Reject generated delivery metadata, including when repeated inside article JSON."""
+    titles = (
+        {value.strip() for value in title_candidates if isinstance(value, str) and value.strip()}
+        if isinstance(title_candidates, list)
+        else set()
+    )
+
+    def inspect(node: dict[str, Any]) -> None:
+        kind = node.get("type")
+        if kind in {"heading", "paragraph"}:
+            label = re.sub(r"\s+", "", extract_plain_text(node))
+            label = re.sub(r"^(?:第?[0-9一二三四五六七八九十]+[章节、.．：:)）-]*)", "", label)
+            label = label.strip("#*：:。()（）【】[]")
+            if re.fullmatch(
+                r"(?:\d+个)?(?:标题备选|备选标题|标题候选|候选标题|标题建议|标题推荐|推荐标题|"
+                r"备选题目|标题选择理由|写作说明|创作说明|交付说明|排版建议|发布建议|字数统计)"
+                r"(?:[（(]?\d+个[）)]?)?",
+                label,
+            ):
+                raise ApiError(
+                    422,
+                    "ARTICLE_BODY_METADATA",
+                    "正文混入标题备选或交付说明，请将辅助内容移出 article。",
+                )
+        children = node.get("content", [])
+        if kind in {"orderedList", "bulletList"} and titles:
+            repeated = sum(extract_plain_text(child).strip() in titles for child in children)
+            if repeated >= 2:
+                raise ApiError(
+                    422,
+                    "ARTICLE_BODY_METADATA",
+                    "正文重复列出了备选标题，请仅放入 title_candidates。",
+                )
+        for child in children:
+            if isinstance(child, dict):
+                inspect(child)
+
+    inspect(document)
+    return document
 
 
 def context_weights(run_type: str, has_article: bool, local: bool) -> dict[str, float]:
