@@ -6,15 +6,43 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.article import owned_article, save_local_article
+from app.domains.layout import DEFAULT_STYLE_TOKENS, save_layout_template
 from app.domains.personal_skills import create_personal_skill
+from app.domains.user_preference_memory import apply_explicit_memory, memory_command
+from app.domains.wechat import confirm_render, create_wechat_operation
+from app.domains.workspace import set_project_requirements
 from app.errors import ApiError
-from app.models import AuditLog, Message, Skill, Task, UserPreference, utcnow
+from app.models import (
+    ArticleRender,
+    AuditLog,
+    LayoutTemplateVersion,
+    Message,
+    Skill,
+    Task,
+    UserPreference,
+    utcnow,
+)
 
 
 def needs_model(action: dict[str, Any]) -> bool:
-    return action["operation"] in {"describe", "update"} or (
-        action["operation"] in {"save", "save_skill"} and not action.get("value")
+    return (
+        bool(action.get("then_article"))
+        or action["operation"] in {"describe", "update"}
+        or (action["operation"] in {"save", "save_skill"} and not action.get("value"))
     )
+
+
+def executable_command(text: str) -> str | None:
+    """Only an unquoted current request authorizes a business mutation."""
+    command = re.sub(r"```[\s\S]*?```|“[^”]*”|\"[^\"]*\"|《[^》]*》", "", text).strip()
+    if len(command) > 1000 or re.search(
+        r"例如|比如|假设|他说|她说|原文|引用|如何|怎么|为什么|能否|能不能|是否|可以吗"
+        r"|(?:不要|不用|别|先不|暂不).{0,4}(?:保存|存|发表|发布|记录|更新)",
+        command,
+    ):
+        return None
+    return command
 
 
 async def create_preference(
@@ -86,11 +114,49 @@ async def plan_action(
 ) -> dict[str, Any] | None:
     """Only the current user message grants authority; previous metadata resolves references."""
     text = text.strip()
-    command = re.sub(r"[《“\"][^》”\"]+[》”\"]", "", text)
+    private_action = memory_command(text)
+    if private_action:
+        return private_action
+    command = re.sub(r"```[\s\S]*?```|[《“\"][^》”\"]+[》”\"]", "", text)
     previous = next((m for m in recent if m.role == "assistant"), None)
     prior = previous.content_json.get("conversation_action", {}) if previous else {}
     if not isinstance(prior, dict):
         prior = {}
+    authorized = executable_command(text)
+    if not authorized:
+        return None
+    if authorized:
+        writes = re.findall(
+            r"(?:保存|另存|存入|存到|设为).{0,12}?(技能|写作风格|模板|项目要求|草稿箱|文章库)",
+            authorized,
+        )
+        if len(set(writes)) > 1:
+            return {"operation": "help", "reply": "请每次指定一个保存目标，避免把内容存错位置。"}
+        if re.search(r"(?:保存|另存|设为).{0,12}(?:排版)?模板", authorized):
+            named = re.search(r"(?:命名为|叫)[《“\"]([^》”\"]+)[》”\"]", text)
+            return {"operation": "save_template", "name": named[1] if named else "对话保存的排版"}
+        if re.search(r"(?:保存|存入|存到|放入|放到).{0,12}(?:本地草稿|文章库)", authorized) or (
+            prior.get("operation") not in {"describe", "save", "save_skill"}
+            and re.fullmatch(
+                r"(?:请|帮我)?(?:先)?保存(?:这篇文章|当前文章|文章|下来|一下)?[。！]?", authorized
+            )
+        ):
+            return {"operation": "save_local"}
+        if re.search(r"(?:存入|存到|保存|放入|放到).{0,12}(?:公众号)?草稿箱", authorized):
+            return {"operation": "wechat_draft", "target_text": text}
+        if re.fullmatch(
+            r"(?:请|帮我)?(?:直接|立即|确认)?(?:发表|发布)(?:这篇文章|当前文章|文章)?"
+            r"(?:到.+)?[。！]?",
+            authorized,
+        ):
+            return {"operation": "wechat_publish", "target_text": text}
+        if re.search(r"(?:保存|设为|更新|记为).{0,12}项目要求", authorized):
+            value = (
+                text.split("：", 1)[1]
+                if "：" in text
+                else (previous.plain_text if previous else "")
+            )
+            return {"operation": "save_project", "value": value}
     style = bool(
         re.search(
             r"写作风格|写作偏好|行文风格|(?:总结|提炼|归纳|保存|查看|修改|删除).*风格", command
@@ -150,13 +216,20 @@ async def plan_action(
                 if previous and previous.content_json.get("response_kind") != "ai_error"
                 else None
             )
-        if not value or re.search(r"(?:重新|再).{0,4}(?:总结|提炼|归纳)", command):
+        summarize = bool(re.search(r"(?:总结|提炼|归纳)(?!的)", command))
+        if summarize:
+            value = None
+        if not value and not summarize:
             return {
                 "operation": "help",
                 "reply": "请先给出要保存的技能内容，或先让我总结，再保存成技能。",
             }
         action = {"operation": "save_skill", "value": value}
-        if prior.get("operation") == "save_skill" and prior.get("skill_id"):
+        if re.search(
+            r"(?:再|然后|并).{0,15}(?:修改|改写|重写|生成|写).{0,10}(?:文章|正文)", command
+        ):
+            action["then_article"] = True
+        if not summarize and prior.get("operation") == "save_skill" and prior.get("skill_id"):
             action["skill_id"] = prior["skill_id"]
         return action
     if re.search(r"(?:开启|打开|启用|关闭|关掉|停用).*(?:偏好学习|使用偏好|偏好使用)", text):
@@ -246,6 +319,111 @@ async def execute_action(
 ) -> tuple[str, dict[str, Any]]:
     operation = action["operation"]
     metadata = {"operation": operation}
+    if operation in {"remember_preference", "forget_preference"}:
+        reply = await apply_explicit_memory(session, task=task, source_id=source_id, action=action)
+        return reply, metadata
+    if operation == "save_project":
+        value = str(action.get("value") or "").strip()
+        if not task.project_id or not 1 <= len(value) <= 10000:
+            return "请在项目对话中指定要保存的项目要求。", metadata
+        await set_project_requirements(
+            session,
+            owner_id=task.owner_id,
+            project_id=task.project_id,
+            value=value,
+            source_id=source_id,
+        )
+        return "已更新当前项目的写作要求。", metadata
+    if operation == "save_template":
+        render = await session.scalar(
+            select(ArticleRender)
+            .where(
+                ArticleRender.owner_id == task.owner_id,
+                ArticleRender.article_id == task.current_article_id,
+                ArticleRender.stale_at.is_(None),
+                ArticleRender.compatibility_status == "passed",
+            )
+            .order_by(ArticleRender.created_at.desc())
+            .limit(1)
+        )
+        if not render:
+            return "请先生成当前文章的排版预览。", metadata
+        version = (
+            await session.get(LayoutTemplateVersion, render.template_version_id)
+            if render.template_version_id
+            else None
+        )
+        template, _ = await save_layout_template(
+            session,
+            owner_id=task.owner_id,
+            name=action["name"],
+            official_account_id=render.official_account_id,
+            style_tokens=version.style_tokens if version else DEFAULT_STYLE_TOKENS,
+        )
+        metadata["template_id"] = template.id
+        return f"已保存排版模板《{template.name}》。", metadata
+    if operation in {"save_local", "wechat_draft", "wechat_publish"}:
+        if not task.current_article_id:
+            return "当前对话还没有文章。", metadata
+        article = await owned_article(
+            session, owner_id=task.owner_id, article_id=task.current_article_id
+        )
+        if operation == "save_local":
+            article, _ = await save_local_article(
+                session, owner_id=task.owner_id, article_id=article.id
+            )
+            metadata["article_id"] = article.id
+            return "已存入本地草稿。", metadata
+        renders = list(
+            (
+                await session.scalars(
+                    select(ArticleRender)
+                    .where(
+                        ArticleRender.article_id == article.id,
+                        ArticleRender.owner_id == task.owner_id,
+                        ArticleRender.stale_at.is_(None),
+                        ArticleRender.compatibility_status == "passed",
+                        ArticleRender.official_account_id.is_not(None),
+                    )
+                    .order_by(ArticleRender.created_at.desc())
+                )
+            ).all()
+        )
+        if not renders or len({r.official_account_id for r in renders}) != 1:
+            return "请先为这篇文章选择目标公众号并生成排版预览。", metadata
+        render = renders[0]
+        # A named destination must match the selected account; never silently use another one.
+        from app.domains.wechat import owned_official_account
+
+        account = await owned_official_account(
+            session, owner_id=task.owner_id, account_id=render.official_account_id
+        )
+        named = re.search(r"(?:到|入)[《“\"]([^》”\"]+)[》”\"]", action.get("target_text", ""))
+        if named and named[1] != account.name:
+            return "指定公众号与文章预览中的目标不一致，请先切换目标公众号。", metadata
+        target = re.search(r"(?:到|入)(.+)$", str(action.get("target_text") or ""))
+        if (
+            target
+            and account.name not in target[1]
+            and target[1].strip("。！ ")
+            not in {"草稿箱", "公众号草稿箱", "公众号", "当前公众号", "这个公众号"}
+        ):
+            return "请先在排版预览中选择你指定的公众号。", metadata
+        kind = "draft" if operation == "wechat_draft" else "publish"
+        await confirm_render(session, owner_id=task.owner_id, render_id=render.id, action=kind)
+        queued = await create_wechat_operation(
+            session,
+            owner_id=task.owner_id,
+            render_id=render.id,
+            operation_type=kind,
+            idempotency_key=f"dialogue:{source_id}:{kind}",
+        )
+        metadata["wechat_operation_id"] = queued.id
+        return (
+            "已提交公众号草稿写入。"
+            if kind == "draft"
+            else "已提交发表，结果以公众号处理状态为准。"
+        ), metadata
     if operation == "save_skill":
         value = str(action.get("value") or generated).strip()
         code = f"dialogue-{source_id}"
@@ -305,9 +483,7 @@ async def execute_action(
                 details={"enabled": action["enabled"]},
             )
         )
-        return (
-            "已开启" if task.use_preferences else "已关闭"
-        ) + "当前任务的写作风格。", metadata
+        return ("已开启" if task.use_preferences else "已关闭") + "当前任务的写作风格。", metadata
     if operation in {"describe", "save", "update"}:
         value = (
             action.get("value")

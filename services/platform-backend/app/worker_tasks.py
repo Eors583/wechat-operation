@@ -12,6 +12,7 @@ from app.domains.account_deletion import purge_account
 from app.domains.ai import (
     fail_ai_run,
     persist_live_run_event,
+    prepare_ai_run,
     process_ai_run,
     process_ai_run_memory,
 )
@@ -27,6 +28,7 @@ from app.external_knowledge import LexiangKnowledgeProvider
 from app.model_gateway import ModelRouteExhausted
 from app.models import (
     AccountDeletionRequest,
+    AIRun,
     Article,
     ArticleRevision,
     ArticleVersion,
@@ -83,6 +85,33 @@ async def _process_ai(run_id: str, message_id: str | None = None) -> dict[str, A
                         payload=payload,
                     )
 
+                if session.get_bind().dialect.name == "postgresql":
+                    await session.execute(
+                        text("SELECT pg_advisory_xact_lock(hashtext(:run_id))"),
+                        {"run_id": run_id},
+                    )
+                pending = await session.get(AIRun, run_id, populate_existing=True)
+                if pending and pending.status not in {"completed", "failed", "cancelled"}:
+                    if pending.context_snapshot.get("preparation_pending"):
+                        await live_event("stage.changed", {"stage": "retrieving"})
+                    retrieval = build_route_aware_retrieval_service(
+                        database=database,
+                        settings=config,
+                        secrets=secrets,
+                        embedding=providers.embedding,
+                        rerank=providers.rerank,
+                    )
+                    await prepare_ai_run(
+                        session,
+                        run=pending,
+                        settings=config,
+                        retrieval=retrieval,
+                        secrets=secrets,
+                        web_references=providers.web_reference,
+                        storage=providers.storage,
+                        model=providers.model,
+                    )
+                    await session.commit()
                 run = await process_ai_run(
                     session,
                     run_id=run_id,

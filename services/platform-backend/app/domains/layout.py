@@ -20,6 +20,7 @@ from app.models import (
     JobRecord,
     LayoutTemplate,
     LayoutTemplateVersion,
+    OfficialAccount,
 )
 from app.providers import (
     LayoutExtractionProvider,
@@ -218,6 +219,38 @@ async def owned_template(
     if not template:
         raise ApiError(404, "LAYOUT_TEMPLATE_NOT_FOUND", "排版模板不存在。")
     return template
+
+
+async def save_layout_template(
+    session: AsyncSession,
+    *,
+    owner_id: str,
+    name: str,
+    official_account_id: str | None,
+    style_tokens: dict[str, Any],
+    enabled: bool = False,
+) -> tuple[LayoutTemplate, LayoutTemplateVersion]:
+    if not 1 <= len(name.strip()) <= 120:
+        raise ApiError(422, "TEMPLATE_NAME_INVALID", "模板名称必须为1—120字符。")
+    if official_account_id and not await session.scalar(
+        select(OfficialAccount.id).where(
+            OfficialAccount.id == official_account_id,
+            OfficialAccount.owner_id == owner_id,
+            OfficialAccount.deleted_at.is_(None),
+        )
+    ):
+        raise ApiError(404, "OFFICIAL_ACCOUNT_NOT_FOUND", "公众号不存在。")
+    template = LayoutTemplate(
+        owner_id=owner_id,
+        name=name.strip(),
+        official_account_id=official_account_id,
+        enabled=enabled,
+        extraction_status="manual",
+    )
+    session.add(template)
+    await session.flush()
+    version = await add_template_version(session, template=template, style_tokens=style_tokens)
+    return template, version
 
 
 async def add_template_version(

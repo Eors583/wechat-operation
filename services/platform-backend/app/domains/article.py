@@ -8,6 +8,8 @@ from urllib.parse import urlparse
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.common import create_job, emit_outbox
+from app.domains.user_preference_memory import enqueue_preference_summary
 from app.errors import ApiError
 from app.models import (
     Article,
@@ -472,6 +474,41 @@ async def upsert_article_library_item(
         item.search_text = f"{article.title}\n{version.plain_text}"
         item.deleted_at = None
     return item
+
+
+async def save_local_article(
+    session: AsyncSession, *, owner_id: str, article_id: str
+) -> tuple[Article, LibraryItem]:
+    article = await owned_article(
+        session, owner_id=owner_id, article_id=article_id, for_update=True
+    )
+    version = await current_article_version(session, article=article)
+    article.status = "local_draft"
+    item = await upsert_article_library_item(
+        session, article=article, version=version, status="local_draft"
+    )
+    await enqueue_preference_summary(
+        session, owner_id=owner_id, task_id=article.source_task_id, reason="save_local"
+    )
+    create_job(
+        session,
+        owner_id=owner_id,
+        job_type="article_indexing",
+        resource_type="article",
+        resource_id=article.id,
+        queue="embedding",
+        stage="queued",
+        frozen_payload={"article_id": article.id, "version_id": version.id},
+    )
+    emit_outbox(
+        session,
+        event_type="article.index.requested",
+        aggregate_type="article",
+        aggregate_id=article.id,
+        payload={"article_id": article.id, "version_id": version.id},
+    )
+    await session.flush()
+    return article, item
 
 
 async def soft_delete_article(session: AsyncSession, *, owner_id: str, article_id: str) -> Article:

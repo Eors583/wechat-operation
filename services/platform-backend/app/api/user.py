@@ -42,8 +42,8 @@ from app.domains.article import (
     owned_article,
     restore_article_version,
     save_article_version,
+    save_local_article,
     soft_delete_article,
-    upsert_article_library_item,
 )
 from app.domains.common import (
     begin_idempotency,
@@ -73,6 +73,7 @@ from app.domains.layout import (
     create_render,
     owned_template,
     process_layout_extraction,
+    save_layout_template,
     validate_source_url,
 )
 from app.domains.revision import create_article_revision
@@ -84,7 +85,12 @@ from app.domains.wechat import (
     owned_official_account,
     owned_render,
 )
-from app.domains.workspace import delete_project_keep_contents, owned_project, owned_task
+from app.domains.workspace import (
+    delete_project_keep_contents,
+    owned_project,
+    owned_task,
+    set_project_requirements,
+)
 from app.errors import ApiError
 from app.model_files import MAX_FILE_BYTES
 from app.model_gateway import active_route_snapshot
@@ -667,7 +673,12 @@ async def patch_project(
 ) -> dict[str, Any]:
     project = await owned_project(session, owner_id=user.id, project_id=project_id)
     for key, value in payload.model_dump(exclude_unset=True).items():
-        setattr(project, key, value)
+        if key == "writing_requirements":
+            await set_project_requirements(
+                session, owner_id=user.id, project_id=project_id, value=value
+            )
+        else:
+            setattr(project, key, value)
     await session.commit()
     return model_dict(project)
 
@@ -1614,33 +1625,7 @@ async def save_local_draft(
     )
     if attempt.cached_body:
         return attempt.cached_body
-    article = await owned_article(session, owner_id=user.id, article_id=article_id, for_update=True)
-    version = await current_article_version(session, article=article)
-    article.status = "local_draft"
-    item = await upsert_article_library_item(
-        session, article=article, version=version, status="local_draft"
-    )
-    await enqueue_preference_summary(
-        session, owner_id=user.id, task_id=article.source_task_id, reason="save_local"
-    )
-    create_job(
-        session,
-        owner_id=user.id,
-        job_type="article_indexing",
-        resource_type="article",
-        resource_id=article.id,
-        queue="embedding",
-        stage="queued",
-        frozen_payload={"article_id": article.id, "version_id": version.id},
-    )
-    emit_outbox(
-        session,
-        event_type="article.index.requested",
-        aggregate_type="article",
-        aggregate_id=article.id,
-        payload={"article_id": article.id, "version_id": version.id},
-    )
-    await session.flush()
+    article, item = await save_local_article(session, owner_id=user.id, article_id=article_id)
     body = {"article": model_dict(article), "library_item": model_dict(item)}
     complete_idempotency(attempt, body)
     await session.commit()
@@ -2313,22 +2298,12 @@ async def create_layout_template(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    if payload.official_account_id:
-        await owned_official_account(
-            session, owner_id=user.id, account_id=payload.official_account_id
-        )
-    template = LayoutTemplate(
-        owner_id=user.id,
-        official_account_id=payload.official_account_id,
-        name=payload.name,
-        enabled=payload.enabled,
-        extraction_status="manual",
-    )
-    session.add(template)
-    await session.flush()
-    version = await add_template_version(
+    template, version = await save_layout_template(
         session,
-        template=template,
+        owner_id=user.id,
+        name=payload.name,
+        official_account_id=payload.official_account_id,
+        enabled=payload.enabled,
         style_tokens=payload.style_tokens.model_dump(exclude_none=True),
     )
     await session.commit()

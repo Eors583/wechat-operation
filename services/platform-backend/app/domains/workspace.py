@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domains.common import audit
 from app.errors import ApiError
 from app.models import Article, Asset, Document, LibraryItem, Project, Task, utcnow
 
@@ -17,6 +18,30 @@ async def owned_project(session: AsyncSession, *, owner_id: str, project_id: str
     )
     if not project:
         raise ApiError(404, "PROJECT_NOT_FOUND", "项目不存在。")
+    return project
+
+
+async def set_project_requirements(
+    session: AsyncSession,
+    *,
+    owner_id: str,
+    project_id: str,
+    value: str | None,
+    source_id: str | None = None,
+) -> Project:
+    if value is not None and (not isinstance(value, str) or len(value) > 10000):
+        raise ApiError(422, "PROJECT_REQUIREMENTS_INVALID", "项目要求不能超过10000字符。")
+    project = await owned_project(session, owner_id=owner_id, project_id=project_id)
+    project.writing_requirements = value
+    audit(
+        session,
+        actor_type="user",
+        actor_id=owner_id,
+        action="project.requirements.update",
+        target_type="project",
+        target_id=project.id,
+        details={"source_message_id": source_id},
+    )
     return project
 
 

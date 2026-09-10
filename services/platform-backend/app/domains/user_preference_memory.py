@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 
@@ -12,7 +13,7 @@ from app.config import Settings
 from app.domains.common import emit_outbox
 from app.domains.preference_learning import LOCAL, feedback_sentences
 from app.model_gateway import active_route_snapshot, generate_with_frozen_route
-from app.models import Message, OutboxEvent, Task, User, UserPreferenceMemory
+from app.models import AuditLog, Message, OutboxEvent, Task, User, UserPreferenceMemory, utcnow
 from app.providers import ModelProvider, ProviderUnavailable, SecretProvider
 
 PRIORITY = (
@@ -37,6 +38,7 @@ INSTRUCTIONS = """
 每条必须有可核对的用户原文；没有可靠长期偏好就返回空数组。
 更新已有维度复用其 key，新要求替代同维度旧要求，最多5条，每条 value 和 evidence 不超过100字。
 不要返回任务摘要、写作风格、保存说明或完整历史档案。
+status=revoked 的维度不能重新学习；明确记录的偏好不能被自动推断覆盖。不要通过改 key 绕过撤销。
 """
 
 
@@ -82,9 +84,126 @@ async def enqueue_preference_summary(
         )
 
 
-async def private_preferences(session: AsyncSession, owner_id: str) -> list[str]:
+def memory_command(text: str) -> dict[str, str] | None:
+    if re.search(r"写作风格|行文风格|技能|例如|比如|假设|如何|怎么|能否|可以吗", text):
+        return None
+    forget = re.match(r"^(?:请|帮我)?(?:忘掉|忘记|删除|撤销|不要再记住)(.+)", text.strip())
+    if forget and re.search(r"偏好|习惯|记忆|之前|以前", forget[1]):
+        return {"operation": "forget_preference", "value": forget[1].strip()}
+    remember = re.match(
+        r"^(?:请|帮我)?(?:记住|记下|保存(?:这个|这条|我的)?(?:用户)?偏好)[：:，,\s]*(.+)",
+        text.strip(),
+    )
+    if remember:
+        return {"operation": "remember_preference", "value": remember[1].strip()}
+    return None
+
+
+async def apply_explicit_memory(
+    session: AsyncSession, *, task: Task, source_id: str, action: dict[str, str]
+) -> str:
+    await session.scalar(select(User).where(User.id == task.owner_id).with_for_update())
+    memory = await session.get(UserPreferenceMemory, task.owner_id, populate_existing=True)
+    items = list(memory.items) if memory else []
+    value = action["value"]
+    now = utcnow().isoformat()
+    if action["operation"] == "forget_preference":
+        target = re.sub(r"用户偏好|我的|之前|以前|偏好|习惯|记忆|关于|的|[。！]", "", value).strip()
+        matches = [
+            i
+            for i, item in enumerate(items)
+            if item.get("status") != "revoked"
+            and (
+                target in {"全部", "所有", "所有长期"}
+                or (len(target) >= 2 and (target in item["value"] or target in item["key"]))
+            )
+        ]
+        if not matches:
+            return "请说明要忘记的具体偏好，或说“忘掉所有用户偏好”。"
+        for index in matches:
+            items[index] = {**items[index], "status": "revoked", "source_at": now}
+        reply = "已忘记这项偏好。" if len(matches) == 1 else "已忘记这些偏好。"
+    else:
+        if not 1 <= len(value) <= 1000 or not feedback_sentences(value):
+            return "这条内容不适合作为长期偏好保存。"
+        dimension = next(
+            (
+                key
+                for pattern, key in (
+                    (r"字数|篇幅|长文|短文", "article_length"),
+                    (r"客套|说明|解释|废话|啰嗦", "communication"),
+                    (r"列表|清单|分点", "formatting"),
+                    (r"语气|口吻", "tone"),
+                )
+                if re.search(pattern, value)
+            ),
+            "explicit:" + hashlib.sha256(value.encode()).hexdigest()[:20],
+        )
+        project_id = task.project_id if re.search(r"这个项目|本项目|当前项目", value) else None
+        items = [
+            item
+            for item in items
+            if not (item["key"] == dimension and item.get("project_id") == project_id)
+        ]
+        items.append(
+            {
+                "key": dimension,
+                "value": value,
+                "evidence": value,
+                "source_message_id": source_id,
+                "source_at": now,
+                "source_type": "explicit",
+                "project_id": project_id,
+                "status": "active",
+            }
+        )
+        reply = "记住了。"
+    if not memory:
+        memory = UserPreferenceMemory(user_id=task.owner_id)
+        session.add(memory)
+    memory.items = items
+    session.add(
+        AuditLog(
+            actor_type="user",
+            actor_id=task.owner_id,
+            action=action["operation"],
+            target_type="user_preference_memory",
+            target_id=task.owner_id,
+            details={"source_message_id": source_id},
+        )
+    )
+    return reply
+
+
+async def private_preferences(
+    session: AsyncSession,
+    owner_id: str,
+    *,
+    project_id: str | None = None,
+    query: str = "",
+    run_type: str = "discussion",
+) -> list[str]:
     memory = await session.get(UserPreferenceMemory, owner_id)
-    return [item["value"] for item in memory.items] if memory else []
+    if not memory:
+        return []
+    terms = set(re.findall(r"[\u3400-\u9fff]{2}|[A-Za-z]{3,}", query.lower()))
+    eligible = [
+        item
+        for item in memory.items
+        if item.get("status") != "revoked" and item.get("project_id") in {None, project_id}
+    ]
+
+    def score(item: dict) -> tuple[int, str]:
+        overlap = sum(term in item["value"].lower() for term in terms)
+        return (
+            overlap + (2 if item["key"] in {"communication", "formatting"} else 0),
+            item["source_at"],
+        )
+
+    ranked = sorted(eligible, key=score, reverse=True)
+    return [item["value"] for item in ranked if run_type == "article_generation" or score(item)[0]][
+        :12
+    ]
 
 
 async def summarize_preferences(
@@ -136,7 +255,9 @@ async def summarize_preferences(
     if not messages:
         return
     memory = await session.get(UserPreferenceMemory, owner.id)
-    existing = {item["key"]: item for item in memory.items} if memory else {}
+    existing = (
+        {item["key"]: item for item in memory.items if not item.get("project_id")} if memory else {}
+    )
     route = await active_route_snapshot(session, purpose="memory_summary", settings=settings)
     response = await generate_with_frozen_route(
         snapshot=route,
@@ -146,7 +267,10 @@ async def summarize_preferences(
         prompt=INSTRUCTIONS,
         context={
             "private_user_preferences": True,
-            "items": [{"key": k, "value": v["value"]} for k, v in existing.items()],
+            "items": [
+                {"key": k, "value": v["value"], "status": v.get("status", "active")}
+                for k, v in existing.items()
+            ],
             "user_messages": [{"id": k, "text": v[0]} for k, v in messages.items()],
         },
         default_timeout_seconds=settings.model_timeout_seconds,
@@ -171,7 +295,10 @@ async def summarize_preferences(
     if not owner:
         return
     memory = await session.get(UserPreferenceMemory, owner.id, populate_existing=True)
-    existing = {item["key"]: item for item in memory.items} if memory else {}
+    scoped = [item for item in memory.items if item.get("project_id")] if memory else []
+    existing = (
+        {item["key"]: item for item in memory.items if not item.get("project_id")} if memory else {}
+    )
     for item in proposed[:10]:
         if not isinstance(item, dict):
             continue
@@ -189,7 +316,11 @@ async def summarize_preferences(
         ):
             continue
         source_at = source[1].created_at.isoformat()
-        if key in existing and existing[key]["source_at"] > source_at:
+        if key in existing and (
+            existing[key]["source_at"] > source_at
+            or existing[key].get("status") == "revoked"
+            or existing[key].get("source_type") == "explicit"
+        ):
             continue
         existing[key] = {
             "key": key,
@@ -197,9 +328,19 @@ async def summarize_preferences(
             "evidence": evidence,
             "source_message_id": source_id,
             "source_at": source_at,
+            "source_type": "automatic",
+            "status": "active",
         }
     if existing:
         if not memory:
             memory = UserPreferenceMemory(user_id=owner.id)
             session.add(memory)
-        memory.items = sorted(existing.values(), key=lambda item: item["source_at"])[-30:]
+        protected = [
+            item
+            for item in existing.values()
+            if item.get("status") == "revoked" or item.get("source_type") == "explicit"
+        ]
+        automatic = [item for item in existing.values() if item not in protected]
+        memory.items = (
+            scoped + protected + sorted(automatic, key=lambda item: item["source_at"])[-30:]
+        )
