@@ -187,7 +187,6 @@ const selectedModelAvailable = computed(
     (modelOptionsQuery.data.value ?? []).some((model) => model.id === selectedModelId.value),
 )
 const pendingMessages = ref<Message[]>([])
-const usePreferences = ref(true)
 const generating = ref(false)
 const runStage = ref<RunStage | null>(null)
 const runStageHistory = ref<RunStage[]>([])
@@ -285,7 +284,6 @@ watch(
   (value) => {
     if (!value || initializedTaskSettings === value.id) return
     selectedSkillId.value = value.currentSkillId
-    usePreferences.value = value.usePreferences
     initializedTaskSettings = value.id
   },
   { immediate: true },
@@ -310,15 +308,7 @@ watch(taskId, (value) => {
   initializedTaskSettings = ''
   selectedProjectId.value = null
   selectedSkillId.value = null
-  usePreferences.value = true
 })
-watch(
-  publicSettings,
-  (value) => {
-    if (!taskId.value) usePreferences.value = value.ai.preferenceEnabledByDefault
-  },
-  { immediate: true },
-)
 const modelPreferenceKey = (ownerId: string) => `wechat-ai-selected-model:${ownerId}`
 const selectModel = (modelId: string | null) => {
   if (modelId && !(modelOptionsQuery.data.value ?? []).some((model) => model.id === modelId)) return
@@ -458,7 +448,7 @@ const send = async (payload: {
       text: payload.text,
       skillId: selectedSkillId.value,
       modelDeploymentId: selectedModelId.value,
-      usePreferences: usePreferences.value,
+      usePreferences: true,
       attachments: payload.attachments,
       signal: controller.signal,
       onRunAccepted: async (runId, acceptedTaskId, clientMessageId) => {
@@ -1003,7 +993,6 @@ const layoutArticle = async () => {
               ref="taskComposer"
               v-model:selected-skill-id="selectedSkillId"
               :selected-model-id="selectedModelId"
-              v-model:use-preferences="usePreferences"
               :skills="skills"
               :models="modelOptionsQuery.data.value ?? []"
               :models-loading="modelOptionsQuery.isFetching.value"
@@ -1041,7 +1030,6 @@ const layoutArticle = async () => {
           ref="blankComposer"
           v-model:selected-skill-id="selectedSkillId"
           :selected-model-id="selectedModelId"
-          v-model:use-preferences="usePreferences"
           :skills="skills"
           :models="modelOptionsQuery.data.value ?? []"
           :models-loading="modelOptionsQuery.isFetching.value"

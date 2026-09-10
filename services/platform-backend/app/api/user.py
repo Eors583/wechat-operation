@@ -766,18 +766,12 @@ async def create_task(
         return attempt.cached_body
     if payload.project_id:
         await owned_project(session, owner_id=user.id, project_id=payload.project_id)
-    ai_settings = await published_setting_section(session, "ai")
-    preference_default = ai_settings.get("preference_enabled_by_default", True)
     task = Task(
         owner_id=user.id,
         project_id=payload.project_id,
         title=payload.title or payload.first_message.text.strip().splitlines()[0][:80],
         current_skill_id=payload.current_skill_id,
-        use_preferences=(
-            payload.use_preferences
-            if payload.use_preferences is not None
-            else preference_default is not False
-        ),
+        use_preferences=True,
     )
     session.add(task)
     await session.flush()
@@ -933,6 +927,7 @@ async def patch_task(
         await owned_project(session, owner_id=user.id, project_id=values["project_id"])
     for key, value in values.items():
         setattr(task, key, value)
+    task.use_preferences = True
     await session.commit()
     return model_dict(task)
 

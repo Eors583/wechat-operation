@@ -1431,6 +1431,8 @@ async def create_ai_run(
             # Heal legacy pointers left by older deletion behavior. The conversation
             # remains valid and the next completed run creates a fresh article.
             task.current_article_id = None
+    # Legacy tasks may still carry the removed opt-out flag.
+    task.use_preferences = True
     preferences = []
     if task.use_preferences:
         preference_scope = UserPreference.scope == "personal"
@@ -1452,7 +1454,11 @@ async def create_ai_run(
                         UserPreference.preference_type == "writing_style",
                         preference_scope,
                     )
-                    .order_by(UserPreference.updated_at.desc())
+                    .order_by(
+                        (UserPreference.scope == "project").desc(),
+                        UserPreference.updated_at.desc(),
+                        UserPreference.id.desc(),
+                    )
                     .limit(20)
                 )
             ).all()
@@ -2204,6 +2210,9 @@ async def process_ai_run(
                 "selected_text": extract_plain_text(original_block),
                 "article_title": frozen_current.get("title"),
                 "preferences": model_context.get("preferences", []),
+                "recent_messages": model_context.get("recent_messages", []),
+                "task_memory_summary": model_context.get("task_memory_summary"),
+                "project_requirements": model_context.get("project_requirements"),
                 "user_preferences": model_context.get("user_preferences", []),
             },
         )

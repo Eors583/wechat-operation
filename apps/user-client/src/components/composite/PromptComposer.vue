@@ -20,7 +20,6 @@ const props = withDefaults(
     selectedModelId?: string | null
     models?: ModelOption[]
     modelsLoading?: boolean
-    usePreferences?: boolean
     placeholder?: string
     allowedExtensions?: string[]
     maxFileMb?: number
@@ -38,7 +37,6 @@ const props = withDefaults(
     selectedModelId: null,
     models: () => [],
     modelsLoading: false,
-    usePreferences: true,
     placeholder: '告诉内容助手你想写什么……',
     allowedExtensions: () => [
       'pdf',
@@ -69,7 +67,6 @@ const emit = defineEmits<{
   'load-more-skills': []
   'update:selectedSkillId': [value: string | null]
   'update:selectedModelId': [value: string | null]
-  'update:usePreferences': [value: boolean]
 }>()
 const $q = useQuasar()
 
@@ -478,16 +475,6 @@ defineExpose({
               >
                 <q-item-section avatar><q-icon name="folder_open" /></q-item-section>
                 <q-item-section>从资料库选择</q-item-section>
-              </q-item>
-              <q-item tag="label">
-                <q-item-section avatar><q-icon name="history" /></q-item-section>
-                <q-item-section
-                  ><q-toggle
-                    :model-value="usePreferences"
-                    dense
-                    label="使用历史偏好"
-                    @update:model-value="emit('update:usePreferences', $event)"
-                /></q-item-section>
               </q-item>
             </q-list>
           </q-menu>
