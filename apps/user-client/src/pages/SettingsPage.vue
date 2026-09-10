@@ -117,10 +117,7 @@ const removePreference = (preference: Preference) => {
 
 <template>
   <q-page class="app-page settings-page">
-    <PageHeader
-      title="个人设置"
-      subtitle="管理账号外观与写作偏好。明确偏好会用于新创作，随时可以修改或删除。"
-    />
+    <PageHeader title="个人设置" />
 
     <div class="settings-grid">
       <section class="settings-section surface-card">
