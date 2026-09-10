@@ -46,7 +46,7 @@ const status = computed(
         @click="$emit('reconnect')"
       />
       <AppButton variant="ghost" label="查看详情" @click="$emit('detail')" />
-      <AppButton variant="outline" label="模板管理" @click="$emit('templates')" />
+      <AppButton variant="outline" label="排版管理" @click="$emit('templates')" />
     </q-card-actions>
   </q-card>
 </template>

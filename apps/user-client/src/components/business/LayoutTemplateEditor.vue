@@ -634,7 +634,7 @@ const remove = async () => {
     </div>
     <template #actions>
       <span class="template-editor__note"
-        >模板管理不受公众号连接状态影响，只在存草稿和发布时检查授权。</span
+        >排版管理不受公众号连接状态影响，只在存草稿和发布时检查授权。</span
       >
       <AppButton variant="ghost" label="取消" @click="$emit('update:modelValue', false)" />
       <AppButton variant="outline" label="查看整体结果" @click="mobileStep = 4" />

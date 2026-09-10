@@ -311,7 +311,7 @@ const disconnect = () => {
                   dense
                   no-caps
                   color="primary"
-                  label="模板管理"
+                  label="排版管理"
                   @click="showTemplates(row)"
               /></q-td>
             </q-tr>
@@ -390,7 +390,7 @@ const disconnect = () => {
       <template #actions
         ><AppButton variant="danger" label="解除连接" @click="disconnect" /><AppButton
           variant="outline"
-          label="模板管理"
+          label="排版管理"
           @click="showSelectedTemplates" /><AppButton
           v-if="selected.status === 'reconnect'"
           label="重新扫码绑定"
