@@ -47,10 +47,6 @@ const preferenceValid = computed(
 const saving = ref(false)
 const confirmingId = ref('')
 const themeSaving = ref(false)
-const deletionDialog = ref(false)
-const deletionPassword = ref('')
-const deletionConfirmation = ref('')
-const deletingAccount = ref(false)
 
 const themes: { value: ThemePreference; label: string; icon: string; description: string }[] = [
   { value: 'light', label: '浅色', icon: 'light_mode', description: '始终使用明亮界面' },
@@ -132,34 +128,6 @@ const logout = async () => {
     await router.replace('/login')
   }
 }
-
-const openDeletionDialog = () => {
-  deletionPassword.value = ''
-  deletionConfirmation.value = ''
-  deletionDialog.value = true
-}
-
-const deleteAccount = async () => {
-  if (!deletionPassword.value || deletionConfirmation.value !== '注销账号') return
-  deletingAccount.value = true
-  try {
-    const receipt = await auth.deleteAccount(deletionPassword.value)
-    $q.notify({
-      type: 'positive',
-      timeout: 7000,
-      message: `账号已冻结并撤销全部会话；个人业务数据最迟于 ${new Date(receipt.purgeAfter).toLocaleDateString('zh-CN')} 完成删除或匿名化。`,
-    })
-    queryClient.clear()
-    await router.replace('/login')
-  } catch (error) {
-    $q.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '账号注销请求失败，请重试。',
-    })
-  } finally {
-    deletingAccount.value = false
-  }
-}
 </script>
 
 <template>
@@ -191,22 +159,6 @@ const deleteAccount = async () => {
         <q-separator />
         <div class="settings-section__actions">
           <AppButton variant="outline" label="退出登录" @click="logout" />
-        </div>
-      </section>
-
-      <section class="settings-section settings-section--danger surface-card">
-        <header>
-          <div>
-            <h2>账号注销</h2>
-            <p>立即撤销全部设备会话与公众号凭据，随后进入不可恢复的数据清理流程。</p>
-          </div>
-        </header>
-        <q-banner rounded class="bg-negative text-white"
-          >请先导出需要保留的内容。提交后无法再次登录；除依法留存的审计和账务记录外，个人业务数据将在
-          30 日内删除或匿名化。</q-banner
-        >
-        <div class="settings-section__actions">
-          <AppButton variant="danger" label="注销账号" @click="openDeletionDialog" />
         </div>
       </section>
 
@@ -367,41 +319,6 @@ const deleteAccount = async () => {
           @click="savePreference"
       /></template>
     </AppDialog>
-
-    <AppDialog v-model="deletionDialog" title="确认注销账号" width="560px" persistent>
-      <div class="deletion-form">
-        <q-banner rounded class="bg-negative text-white"
-          >此操作不可撤销。提交后将立即退出所有设备并断开公众号。</q-banner
-        >
-        <q-input
-          v-model="deletionPassword"
-          outlined
-          type="password"
-          label="当前密码"
-          autocomplete="current-password"
-          autofocus
-        />
-        <q-input
-          v-model="deletionConfirmation"
-          outlined
-          label="输入“注销账号”以确认"
-          autocomplete="off"
-        />
-        <small>系统不会记录你在此处输入的密码或确认文本。</small>
-      </div>
-      <template #actions
-        ><AppButton
-          variant="ghost"
-          label="取消"
-          :disabled="deletingAccount"
-          @click="deletionDialog = false" /><AppButton
-          variant="danger"
-          label="永久注销账号"
-          :loading="deletingAccount"
-          :disabled="!deletionPassword || deletionConfirmation !== '注销账号'"
-          @click="deleteAccount"
-      /></template>
-    </AppDialog>
   </q-page>
 </template>
 
@@ -418,10 +335,6 @@ const deleteAccount = async () => {
 }
 .settings-section--wide {
   grid-column: 1 / -1;
-}
-.settings-section--danger {
-  grid-column: 1 / -1;
-  border-color: color-mix(in srgb, var(--q-negative) 45%, var(--app-border-default));
 }
 .settings-section > header {
   display: flex;
@@ -567,25 +480,12 @@ const deleteAccount = async () => {
   overflow-y: auto !important;
   overflow-wrap: anywhere;
 }
-.deletion-form {
-  display: grid;
-  gap: 16px;
-  min-width: 0;
-  padding: 22px;
-}
-.deletion-form small {
-  color: var(--app-text-secondary);
-  overflow-wrap: anywhere;
-}
 
 @media (max-width: 767px) {
   .settings-grid {
     grid-template-columns: 1fr;
   }
   .settings-section--wide {
-    grid-column: auto;
-  }
-  .settings-section--danger {
     grid-column: auto;
   }
   .settings-section > header {
