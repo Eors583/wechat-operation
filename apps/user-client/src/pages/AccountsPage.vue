@@ -408,7 +408,6 @@ const disconnect = () => {
             </div>
           </div>
         </section>
-        <p class="account-detail__note">授权状态由微信公众平台同步更新。</p>
       </div>
       <template #actions
         ><AppButton variant="danger" label="解除连接" @click="disconnect" /><AppButton
@@ -562,8 +561,7 @@ const disconnect = () => {
   line-height: 1.5;
 }
 .account-detail__identity small,
-.account-detail__capability small,
-.account-detail__note {
+.account-detail__capability small {
   color: var(--app-text-secondary);
 }
 .account-detail__identity small {
@@ -643,11 +641,6 @@ const disconnect = () => {
   overflow-wrap: anywhere;
   font-size: 10px;
 }
-.account-detail__note {
-  margin: -2px 0 0;
-  font-size: 10px;
-}
-
 .authorize-dialog {
   display: grid;
   place-items: center;
