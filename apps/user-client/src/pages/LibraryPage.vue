@@ -20,6 +20,11 @@ const $q = useQuasar()
 const type = ref<LibraryItemType | 'all'>('all')
 const projectId = ref<string | 'all' | 'unclassified'>('all')
 const search = ref('')
+const clearFilters = () => {
+  projectId.value = 'all'
+  type.value = 'all'
+  search.value = ''
+}
 const previewItem = ref<LibraryItem | null>(null)
 const previewOpen = ref(false)
 const previewLoading = ref(false)
@@ -225,11 +230,31 @@ const uploadReferences = async () => {
       /></template>
     </PageHeader>
 
-    <section v-if="projects.length" class="library-projects" aria-label="项目筛选">
+    <section class="library-projects" aria-label="项目筛选">
+      <button
+        type="button"
+        :class="{ 'is-active': projectId === 'all' }"
+        :aria-pressed="projectId === 'all'"
+        @click="projectId = 'all'"
+      >
+        <q-icon name="folder_copy" />
+        <span><strong>全部项目</strong><small>包含未分类的文章与资料</small></span>
+      </button>
+      <button
+        type="button"
+        :class="{ 'is-active': projectId === 'unclassified' }"
+        :aria-pressed="projectId === 'unclassified'"
+        @click="projectId = 'unclassified'"
+      >
+        <q-icon name="folder_open" />
+        <span><strong>未分类</strong><small>尚未归入项目的文章与资料</small></span>
+      </button>
       <button
         v-for="project in projects.slice(0, 3)"
         :key="project.id"
+        type="button"
         :class="{ 'is-active': projectId === project.id }"
+        :aria-pressed="projectId === project.id"
         @click="projectId = projectId === project.id ? 'all' : project.id"
       >
         <q-icon name="folder_open" />
@@ -303,6 +328,14 @@ const uploadReferences = async () => {
         empty-description="调整筛选条件，或从 AI 创作页开始新的文章。"
         @retry="libraryQuery.refetch()"
       >
+        <template #empty-action>
+          <AppButton
+            v-if="projectId !== 'all' || type !== 'all' || search"
+            variant="outline"
+            label="查看全部内容"
+            @click="clearFilters"
+          />
+        </template>
         <ResponsiveTable :rows="rows" :columns="columns">
           <template #row="{ row, props }">
             <q-tr :props="props">
