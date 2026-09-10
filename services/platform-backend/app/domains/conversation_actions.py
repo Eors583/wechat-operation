@@ -135,10 +135,12 @@ async def plan_action(
         if re.search(r"(?:保存|另存|设为).{0,12}(?:排版)?模板", authorized):
             named = re.search(r"(?:命名为|叫)[《“\"]([^》”\"]+)[》”\"]", text)
             return {"operation": "save_template", "name": named[1] if named else "对话保存的排版"}
-        if re.search(r"(?:保存|存入|存到|放入|放到).{0,12}(?:本地草稿|文章库)", authorized) or (
-            prior.get("operation") not in {"describe", "save", "save_skill"}
-            and re.fullmatch(
-                r"(?:请|帮我)?(?:先)?保存(?:这篇文章|当前文章|文章|下来|一下)?[。！]?", authorized
+        if (
+            re.search(r"(?:保存|存入|存到|放入|放到).{0,12}(?:本地草稿|文章库)", authorized)
+            or re.fullmatch(r"(?:请|帮我)?(?:先)?保存(?:这篇文章|当前文章|文章)[。！]?", authorized)
+            or (
+                prior.get("operation") not in {"describe", "save", "save_skill"}
+                and re.fullmatch(r"(?:请|帮我)?(?:先)?保存(?:下来|一下)?[。！]?", authorized)
             )
         ):
             return {"operation": "save_local"}
