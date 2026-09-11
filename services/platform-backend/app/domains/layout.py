@@ -663,7 +663,20 @@ async def create_render(
             )
     template_version: LayoutTemplateVersion | None = None
     tokens = DEFAULT_STYLE_TOKENS
-    if template_id:
+    saved_layout = article_version.layout_snapshot
+    if saved_layout and template_id == saved_layout.get("template_id"):
+        if (
+            saved_layout.get("official_account_id")
+            and saved_layout["official_account_id"] != official_account_id
+        ):
+            raise ApiError(422, "LAYOUT_ACCOUNT_MISMATCH", "模板不属于目标公众号。")
+        template_version = await session.get(
+            LayoutTemplateVersion, saved_layout["template_version_id"]
+        )
+        if not template_version:
+            raise ApiError(409, "LAYOUT_TEMPLATE_EMPTY", "已保存的排版版本不存在。")
+        tokens = validate_style_tokens(saved_layout["style_tokens"])
+    elif template_id:
         template = await owned_template(session, owner_id=owner_id, template_id=template_id)
         if template.official_account_id and template.official_account_id != official_account_id:
             raise ApiError(422, "LAYOUT_ACCOUNT_MISMATCH", "模板不属于目标公众号。")

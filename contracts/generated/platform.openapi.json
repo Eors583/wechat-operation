@@ -48,11 +48,6 @@
                   "additionalProperties": {
                     "type": "string"
                   },
-                  "type": "object",
-                  "title": "Response Liveness Health Live Get"
-                }
-              }
-            }
           }
         }
       }
@@ -25603,6 +25598,19 @@
             ],
             "title": "Source",
             "default": "manual"
+          },
+          "template_version_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 36,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Version Id"
           }
         },
         "type": "object",
@@ -25665,6 +25673,46 @@
           "content"
         ],
         "title": "ArticleCreate"
+      },
+      "ArticleLayoutSnapshot": {
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "title": "Template Id"
+          },
+          "template_version_id": {
+            "type": "string",
+            "title": "Template Version Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "official_account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Official Account Id"
+          },
+          "style_tokens": {
+            "$ref": "#/components/schemas/StyleTokenPayload"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "template_id",
+          "template_version_id",
+          "name",
+          "official_account_id",
+          "style_tokens"
+        ],
+        "title": "ArticleLayoutSnapshot"
       },
       "ArticleLibrarySource": {
         "properties": {
@@ -26166,6 +26214,16 @@
           },
           "content_json": {
             "$ref": "#/components/schemas/TiptapDocument-Output"
+          },
+          "layout_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ArticleLayoutSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "plain_text": {
             "type": "string",

@@ -16,6 +16,8 @@ from app.models import (
     ArticleConfirmation,
     ArticleRender,
     ArticleVersion,
+    LayoutTemplate,
+    LayoutTemplateVersion,
     LibraryItem,
     Task,
     utcnow,
@@ -363,6 +365,8 @@ async def save_article_version(
     source: str,
     created_by_type: str,
     created_by_id: str,
+    template_version_id: str | None = None,
+    restored_layout: dict[str, Any] | None = None,
 ) -> tuple[Article, ArticleVersion]:
     article = await owned_article(
         session, owner_id=owner_id, article_id=article_id, for_update=True
@@ -374,12 +378,41 @@ async def save_article_version(
             "文章已在其他设备更新，请刷新后继续。",
             details={"current_version": article.current_version_no},
         )
+    previous = await current_article_version(session, article=article)
+    # Layout belongs to the immutable article version, not editor HTML or browser storage.
+    # Only internal restoration may replace it from an existing version's snapshot.
+    layout = restored_layout if source == "restore" else previous.layout_snapshot
+    if template_version_id and (
+        not layout or layout.get("template_version_id") != template_version_id
+    ):
+        row = (
+            await session.execute(
+                select(LayoutTemplate, LayoutTemplateVersion)
+                .join(LayoutTemplateVersion, LayoutTemplateVersion.template_id == LayoutTemplate.id)
+                .where(
+                    LayoutTemplate.owner_id == owner_id,
+                    LayoutTemplate.deleted_at.is_(None),
+                    LayoutTemplateVersion.id == template_version_id,
+                )
+            )
+        ).first()
+        if not row:
+            raise ApiError(404, "LAYOUT_TEMPLATE_NOT_FOUND", "排版模板版本不存在。")
+        template, template_version = row
+        layout = {
+            "template_id": template.id,
+            "template_version_id": template_version.id,
+            "name": template.name,
+            "official_account_id": template.official_account_id,
+            "style_tokens": template_version.style_tokens,
+        }
     content = canonical_article_content(content)
     next_no = article.current_version_no + 1
     version = ArticleVersion(
         article_id=article.id,
         version_no=next_no,
         content_json=content,
+        layout_snapshot=layout,
         plain_text=extract_plain_text(content).strip(),
         content_hash=normalized_content_hash(content),
         source=source,
@@ -421,6 +454,7 @@ async def restore_article_version(
         summary=article.summary,
         content=source_version.content_json,
         source="restore",
+        restored_layout=source_version.layout_snapshot,
         created_by_type="user",
         created_by_id=owner_id,
     )

@@ -2,6 +2,7 @@ import type { Article, LayoutTemplate, ModuleStyle } from '@/api/types'
 import { createDefaultStyles } from '@/api/styleDefaults'
 
 export function defaultArticleTemplate(article: Article, templates: LayoutTemplate[]) {
+  if (article.layoutTemplate) return article.layoutTemplate
   const usable = templates.filter(
     (t) =>
       t.enabled &&

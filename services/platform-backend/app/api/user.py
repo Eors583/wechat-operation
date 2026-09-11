@@ -1413,6 +1413,7 @@ class ArticleContentUpdate(BaseModel):
     summary: str | None = Field(default=None, max_length=2000)
     content: contract.TiptapDocument
     source: Literal["manual", "autosave", "ai"] = "manual"
+    template_version_id: str | None = Field(default=None, min_length=1, max_length=36)
 
 
 class RestoreVersionRequest(BaseModel):
@@ -1604,6 +1605,7 @@ async def update_article_content(
         summary=payload.summary,
         content=payload.content.model_dump(exclude_none=True),
         source=payload.source,
+        template_version_id=payload.template_version_id,
         created_by_type="user",
         created_by_id=user.id,
     )

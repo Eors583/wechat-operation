@@ -2525,6 +2525,8 @@ export interface components {
             readonly source: "manual" | "autosave" | "ai";
             /** Summary */
             readonly summary?: string | null;
+            /** Template Version Id */
+            readonly template_version_id?: string | null;
             /** Title */
             readonly title: string;
         };
@@ -2539,6 +2541,18 @@ export interface components {
             readonly task_id?: string | null;
             /** Title */
             readonly title: string;
+        };
+        /** ArticleLayoutSnapshot */
+        readonly ArticleLayoutSnapshot: {
+            /** Name */
+            readonly name: string;
+            /** Official Account Id */
+            readonly official_account_id: string | null;
+            readonly style_tokens: components["schemas"]["StyleTokenPayload"];
+            /** Template Id */
+            readonly template_id: string;
+            /** Template Version Id */
+            readonly template_version_id: string;
         };
         /** ArticleLibrarySource */
         readonly ArticleLibrarySource: {
@@ -2701,6 +2715,7 @@ export interface components {
             readonly created_by_type: string;
             /** Id */
             readonly id: string;
+            readonly layout_snapshot?: components["schemas"]["ArticleLayoutSnapshot"] | null;
             /** Plain Text */
             readonly plain_text: string;
             /** Source */

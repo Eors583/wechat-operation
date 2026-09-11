@@ -218,15 +218,21 @@ const templatesQuery = useInfiniteQuery({
 const templates = computed(() =>
   [
     ...new Map(
-      (templatesQuery.data.value?.pages.flatMap((page) => page.items) ?? []).map((template) => [
-        template.id,
-        template,
-      ]),
+      [
+        ...(templatesQuery.data.value?.pages.flatMap((page) => page.items) ?? []),
+        ...(article.value?.layoutTemplate ? [article.value.layoutTemplate] : []),
+      ].map((template) => [template.id, template]),
     ).values(),
   ].filter((template) => template.enabled),
 )
 const selectedTemplate = computed(
   () => templates.value.find((item) => item.id === selectedTemplateId.value) ?? null,
+)
+const layoutDirty = computed(() =>
+  Boolean(
+    selectedTemplate.value?.versionId &&
+    selectedTemplate.value.versionId !== article.value?.layoutTemplate?.versionId,
+  ),
 )
 const selectedText = computed(() => {
   if (!editor.value) return ''
@@ -274,6 +280,7 @@ watch(
     versionNo.value = value.versionNo
     hydratedArticleId = value.id
     title.value = value.title
+    if (initialLoad || !layoutDirty.value) selectedTemplateId.value = value.templateId
     selectedAccountId.value =
       value.accountId ?? accounts.value.find((item) => item.status === 'connected')?.id ?? null
     await nextTick()
@@ -371,9 +378,9 @@ watch(
 const saveContent = async (): Promise<Article | null> => {
   if (saveInFlight) {
     await saveInFlight
-    return dirty.value ? saveContent() : article.value
+    return dirty.value || layoutDirty.value ? saveContent() : article.value
   }
-  if (!article.value || !editor.value || !dirty.value) return article.value
+  if (!article.value || !editor.value || (!dirty.value && !layoutDirty.value)) return article.value
   if (saveTimer) {
     clearTimeout(saveTimer)
     saveTimer = null
@@ -389,6 +396,7 @@ const saveContent = async (): Promise<Article | null> => {
     contentHtml: editor.value.getHTML(),
     contentJson: editor.value.getJSON(),
     baseVersionNo: versionNo.value,
+    templateVersionId: selectedTemplate.value?.versionId,
   })
   saveInFlight = operation
   let saved: Article | null = null
@@ -444,6 +452,7 @@ const copyLocalContent = async () => {
 
 const loadLatestArticle = async () => {
   const latest = await api.getArticle(articleId.value)
+  selectedTemplateId.value = latest.templateId
   queryClient.setQueryData(['article', articleId.value], latest)
   title.value = latest.title
   editor.value?.commands.setContent(latest.contentJson ?? latest.contentHtml, false)
@@ -533,6 +542,7 @@ const keepLocalAsNewVersion = () => {
 
 const restore = async (version: ArticleVersion) => {
   const restored = await api.restoreArticleVersion(articleId.value, version)
+  selectedTemplateId.value = restored.templateId
   queryClient.setQueryData(['article', articleId.value], restored)
   editor.value?.commands.setContent(restored.contentJson ?? restored.contentHtml, false)
   title.value = restored.title
@@ -1108,6 +1118,9 @@ onBeforeUnmount(() => {
               <EditorContent
                 :editor="editor"
                 class="editor-document"
+                :class="{
+                  'editor-document--with-marker': selectedTemplate?.styles.heading_marker.enabled,
+                }"
                 :style="
                   templatePreviewCssVariables(selectedTemplate?.styles ?? createDefaultStyles())
                 "
@@ -1378,6 +1391,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped lang="scss">
+@use '@/styles/mixins/article-content' as *;
+
 .article-page {
   min-width: 0;
   min-height: 0 !important;
@@ -1505,7 +1520,10 @@ onBeforeUnmount(() => {
   overflow-y: auto;
 }
 .editor-document {
+  @include article-content;
+
   width: min(100%, 820px);
+  min-width: 0;
   min-height: 100%;
   margin-inline: auto;
   padding: clamp(24px, 5vw, 64px);
@@ -1515,59 +1533,6 @@ onBeforeUnmount(() => {
   border-radius: 12px;
   box-shadow: var(--app-shadow-sm);
 }
-.editor-document :deep(.tiptap-body) {
-  min-width: 0;
-  min-height: 640px;
-  outline: none;
-  overflow-wrap: anywhere;
-}
-.editor-document :deep(.tiptap-body h1) {
-  font-size: clamp(27px, 4vw, 38px);
-  line-height: 1.3;
-  overflow-wrap: anywhere;
-}
-.editor-document :deep(.tiptap-body h2) {
-  margin-top: 30px;
-  font-size: 24px;
-  overflow-wrap: anywhere;
-}
-.editor-document :deep(.tiptap-body h3) {
-  margin-top: 24px;
-  font-size: 20px;
-  overflow-wrap: anywhere;
-}
-.editor-document :deep(.tiptap-body p),
-.editor-document :deep(.tiptap-body li) {
-  font-size: 16px;
-  line-height: 1.85;
-  overflow-wrap: anywhere;
-}
-.editor-document :deep(.tiptap-body blockquote) {
-  margin-inline: 0;
-  padding: 12px 16px;
-  color: var(--app-text-secondary);
-  background: var(--app-bg-subtle);
-  border-left: 4px solid var(--app-action-primary);
-}
-.editor-document :deep(.tiptap-body [data-module='lead']) {
-  color: var(--app-text-secondary);
-  font-size: 18px;
-}
-.editor-document :deep(.tiptap-body [data-module='highlight']) {
-  padding: 10px 12px;
-  background: var(--app-action-soft);
-  border-radius: 6px;
-}
-.editor-document :deep(.tiptap-body [data-module='caption']) {
-  color: var(--app-text-secondary);
-  font-size: 13px;
-  text-align: center;
-}
-.editor-document :deep(.tiptap-body img) {
-  max-width: 100%;
-  height: auto;
-}
-
 .layout-preview-pane {
   grid-template-rows: minmax(0, 1fr);
   background: var(--app-bg-subtle);

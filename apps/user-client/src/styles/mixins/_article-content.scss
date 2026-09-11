@@ -1,0 +1,95 @@
+@mixin preview-module($name) {
+  margin-top: var(--article-#{$name}-margin-top);
+  margin-bottom: var(--article-#{$name}-margin-bottom);
+  padding: var(--article-#{$name}-padding);
+  color: var(--article-#{$name}-color);
+  background: var(--article-#{$name}-background);
+  border-left: var(--article-#{$name}-border-left);
+  font-size: var(--article-#{$name}-font-size);
+  font-weight: var(--article-#{$name}-font-weight);
+  line-height: var(--article-#{$name}-line-height);
+  text-align: var(--article-#{$name}-text-align);
+  text-indent: var(--article-#{$name}-text-indent);
+}
+
+@mixin article-content {
+  & :deep(.tiptap-body) {
+    min-width: 0;
+    min-height: 560px;
+    outline: none;
+    overflow-wrap: anywhere;
+    counter-reset: article-heading-marker;
+  }
+
+  & :deep(.tiptap-body h1) {
+    @include preview-module('title');
+
+    overflow-wrap: anywhere;
+  }
+  & :deep(.tiptap-body h2) {
+    @include preview-module('heading1');
+
+    overflow-wrap: anywhere;
+  }
+  & :deep(.tiptap-body h3) {
+    @include preview-module('heading2');
+
+    overflow-wrap: anywhere;
+  }
+  &--with-marker :deep(.tiptap-body h2::before) {
+    @include preview-module('heading-marker');
+
+    display: block;
+    content: counter(article-heading-marker, decimal-leading-zero);
+    counter-increment: article-heading-marker;
+    overflow-wrap: anywhere;
+  }
+  & :deep(.tiptap-body p) {
+    @include preview-module('body');
+
+    overflow-wrap: anywhere;
+  }
+  & :deep(.tiptap-body blockquote) {
+    @include preview-module('quote');
+
+    overflow-wrap: anywhere;
+  }
+  & :deep(.tiptap-body blockquote p) {
+    margin: 0;
+    padding: 0;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    font: inherit;
+    text-align: inherit;
+    text-indent: inherit;
+  }
+  & :deep(.tiptap-body [data-module='lead']) {
+    @include preview-module('lead');
+  }
+  & :deep(.tiptap-body [data-module='highlight']) {
+    @include preview-module('highlight');
+  }
+  & :deep(.tiptap-body [data-module='caption']) {
+    @include preview-module('caption');
+  }
+  & :deep(.tiptap-body ul),
+  & :deep(.tiptap-body ol) {
+    @include preview-module('list');
+
+    padding-left: max(var(--article-list-padding), 24px);
+    overflow-wrap: anywhere;
+  }
+  & :deep(.tiptap-body hr) {
+    @include preview-module('divider');
+
+    min-height: 1px;
+    border-top: 1px solid var(--article-divider-color);
+  }
+  & :deep(.tiptap-body img) {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin-inline: auto;
+  }
+}

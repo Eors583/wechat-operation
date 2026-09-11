@@ -235,13 +235,18 @@ const previewTemplatesQuery = useQuery({
   enabled: computed(() => articleVisible.value && Boolean(article.value)),
 })
 const previewTemplates = computed<LayoutTemplate[]>(() =>
-  (previewTemplatesQuery.data.value?.items ?? []).filter(
+  [
+    ...(selectedArticle.value?.layoutTemplate ? [selectedArticle.value.layoutTemplate] : []),
+    ...(previewTemplatesQuery.data.value?.items ?? []).filter(
+      (template) => template.id !== selectedArticle.value?.layoutTemplate?.id,
+    ),
+  ].filter(
     (template) =>
       template.enabled &&
       template.status === 'ready' &&
-      (!article.value?.accountId ||
+      (!selectedArticle.value?.accountId ||
         template.accountId === null ||
-        template.accountId === article.value.accountId),
+        template.accountId === selectedArticle.value.accountId),
   ),
 )
 const previewTemplate = computed(
@@ -391,9 +396,13 @@ watch(
   { immediate: true },
 )
 watch(
-  [article, previewTemplates],
-  ([currentArticle, templates]) => {
-    if (templates.some((template) => template.id === previewTemplateId.value)) return
+  [selectedArticle, previewTemplates],
+  ([currentArticle, templates], [previousArticle]) => {
+    if (
+      currentArticle?.id === previousArticle?.id &&
+      templates.some((template) => template.id === previewTemplateId.value)
+    )
+      return
     previewTemplateId.value = currentArticle
       ? (defaultArticleTemplate(currentArticle, templates)?.id ?? null)
       : null
@@ -861,6 +870,7 @@ const openArticle = async (message: Message) => {
     if (!message.articleId) throw new Error('这条消息没有关联文章。')
     const resolved = await api.getArticle(message.articleId)
     if (request !== previewRequest) return
+    previewTemplateId.value = resolved.templateId
     selectedArticle.value = resolved
     articleVisible.value = true
   } catch (error) {

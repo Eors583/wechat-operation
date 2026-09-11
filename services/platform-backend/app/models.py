@@ -419,6 +419,7 @@ class ArticleVersion(Base, IdMixin):
     article_id: Mapped[str] = mapped_column(String(36), ForeignKey("articles.id"), nullable=False)
     version_no: Mapped[int] = mapped_column(Integer, nullable=False)
     content_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    layout_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     plain_text: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     source: Mapped[str] = mapped_column(String(32), nullable=False)

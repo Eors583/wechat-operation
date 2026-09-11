@@ -46,7 +46,11 @@ const saveState = ref<'saved' | 'saving' | 'failed'>('saved')
 const versionNo = ref(props.article.versionNo)
 const title = ref(props.article.title)
 let editRevision = 0
-const canSave = computed(() => dirty.value && !saving.value)
+const savedTemplateVersionId = ref(props.article.layoutTemplate?.versionId)
+const layoutDirty = computed(() =>
+  Boolean(props.template?.versionId && props.template.versionId !== savedTemplateVersionId.value),
+)
+const canSave = computed(() => (dirty.value || layoutDirty.value) && !saving.value)
 const markDirty = () => {
   if (props.readOnly) return
   editRevision += 1
@@ -80,6 +84,7 @@ watch(
   () => props.article.id,
   () => {
     versionNo.value = props.article.versionNo
+    savedTemplateVersionId.value = props.article.layoutTemplate?.versionId
     dirty.value = false
     saveState.value = 'saved'
     editor.value?.commands.setContent(props.article.contentJson ?? props.article.contentHtml, false)
@@ -95,9 +100,17 @@ watch(
   },
 )
 
+watch(
+  () => props.template?.versionId,
+  () => {
+    if (layoutDirty.value) markDirty()
+  },
+)
+
 const saveNow = async () => {
   if (props.readOnly || !editor.value || saving.value) return null
-  if (!dirty.value) return { ...props.article, versionNo: versionNo.value, title: title.value }
+  if (!dirty.value && !layoutDirty.value)
+    return { ...props.article, versionNo: versionNo.value, title: title.value }
   if (!title.value.trim() || title.value.trim().length > 120) {
     $q.notify({ type: 'negative', message: '请填写 1—120 字的文章标题。' })
     return null
@@ -105,6 +118,7 @@ const saveNow = async () => {
   saving.value = true
   saveState.value = 'saving'
   const revision = editRevision
+  const templateVersionId = props.template?.versionId
   try {
     const saved = await api.saveArticle({
       id: props.article.id,
@@ -114,9 +128,11 @@ const saveNow = async () => {
       contentJson: editor.value.getJSON(),
       baseVersionNo: versionNo.value,
       reason: 'preview_edit',
+      templateVersionId,
     })
     versionNo.value = saved.versionNo
-    dirty.value = revision !== editRevision
+    savedTemplateVersionId.value = saved.layoutTemplate?.versionId
+    dirty.value = revision !== editRevision || props.template?.versionId !== templateVersionId
     saveState.value = dirty.value ? 'failed' : 'saved'
     queryClient.setQueryData(['article', props.article.id], saved)
     await Promise.all([
@@ -375,19 +391,7 @@ onBeforeUnmount(() => editor.value?.destroy())
 </template>
 
 <style scoped lang="scss">
-@mixin preview-module($name) {
-  margin-top: var(--article-#{$name}-margin-top);
-  margin-bottom: var(--article-#{$name}-margin-bottom);
-  padding: var(--article-#{$name}-padding);
-  color: var(--article-#{$name}-color);
-  background: var(--article-#{$name}-background);
-  border-left: var(--article-#{$name}-border-left);
-  font-size: var(--article-#{$name}-font-size);
-  font-weight: var(--article-#{$name}-font-weight);
-  line-height: var(--article-#{$name}-line-height);
-  text-align: var(--article-#{$name}-text-align);
-  text-indent: var(--article-#{$name}-text-indent);
-}
+@use '@/styles/mixins/article-content' as *;
 
 .article-panel {
   display: grid;
@@ -448,6 +452,8 @@ onBeforeUnmount(() => editor.value?.destroy())
   }
 
   &__document {
+    @include article-content;
+
     width: min(100%, 820px);
     min-width: 0;
     max-width: 100%;
@@ -486,85 +492,6 @@ onBeforeUnmount(() => editor.value?.destroy())
     overflow-wrap: anywhere;
   }
 
-  &__document :deep(.tiptap-body) {
-    min-width: 0;
-    min-height: 560px;
-    outline: none;
-    overflow-wrap: anywhere;
-    counter-reset: article-heading-marker;
-  }
-
-  &__document :deep(.tiptap-body h1) {
-    @include preview-module('title');
-
-    overflow-wrap: anywhere;
-  }
-  &__document :deep(.tiptap-body h2) {
-    @include preview-module('heading1');
-
-    overflow-wrap: anywhere;
-  }
-  &__document :deep(.tiptap-body h3) {
-    @include preview-module('heading2');
-
-    overflow-wrap: anywhere;
-  }
-  &__document--with-marker :deep(.tiptap-body h2::before) {
-    @include preview-module('heading-marker');
-
-    display: block;
-    content: counter(article-heading-marker, decimal-leading-zero);
-    counter-increment: article-heading-marker;
-    overflow-wrap: anywhere;
-  }
-  &__document :deep(.tiptap-body p) {
-    @include preview-module('body');
-
-    overflow-wrap: anywhere;
-  }
-  &__document :deep(.tiptap-body blockquote) {
-    @include preview-module('quote');
-
-    overflow-wrap: anywhere;
-  }
-  &__document :deep(.tiptap-body blockquote p) {
-    margin: 0;
-    padding: 0;
-    color: inherit;
-    background: transparent;
-    border: 0;
-    font: inherit;
-    text-align: inherit;
-    text-indent: inherit;
-  }
-  &__document :deep(.tiptap-body [data-module='lead']) {
-    @include preview-module('lead');
-  }
-  &__document :deep(.tiptap-body [data-module='highlight']) {
-    @include preview-module('highlight');
-  }
-  &__document :deep(.tiptap-body [data-module='caption']) {
-    @include preview-module('caption');
-  }
-  &__document :deep(.tiptap-body ul),
-  &__document :deep(.tiptap-body ol) {
-    @include preview-module('list');
-
-    padding-left: max(var(--article-list-padding), 24px);
-    overflow-wrap: anywhere;
-  }
-  &__document :deep(.tiptap-body hr) {
-    @include preview-module('divider');
-
-    min-height: 1px;
-    border-top: 1px solid var(--article-divider-color);
-  }
-  &__document :deep(.tiptap-body img) {
-    display: block;
-    max-width: 100%;
-    height: auto;
-    margin-inline: auto;
-  }
 }
 
 @media (max-width: 599px) {

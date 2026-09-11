@@ -199,6 +199,14 @@ class TiptapNode(SparseContractModel):
         return self
 
 
+class ArticleLayoutSnapshot(ContractModel):
+    template_id: str
+    template_version_id: str
+    name: str
+    official_account_id: str | None
+    style_tokens: StyleTokenPayload
+
+
 class TiptapDocument(ContractModel):
     type: Literal["doc"]
     content: list[TiptapNode] = Field(default_factory=list)
@@ -413,7 +421,10 @@ ArticleRevisionResource = orm_contract(
 ArticleVersionResource = orm_contract(
     "ArticleVersionResource",
     ArticleVersion,
-    overrides={"content_json": (TiptapDocument, ...)},
+    overrides={
+        "content_json": (TiptapDocument, ...),
+        "layout_snapshot": (ArticleLayoutSnapshot | None, None),
+    },
 )
 LibraryItemResource = orm_contract(
     "LibraryItemResource",

@@ -1124,6 +1124,13 @@ const mapArticle = (value: unknown): Article => {
   const source = isRecord(envelope.article) ? envelope.article : envelope
   const version = record(envelope.version)
   const normalizedContent = normalizeTiptapJson(version.contentJson)
+  const layout = record(version.layoutSnapshot)
+  const layoutTemplate = textValue(layout.templateVersionId)
+    ? mapTemplate({
+        template: { ...layout, id: layout.templateId, enabled: true, extractionStatus: 'manual' },
+        version: { id: layout.templateVersionId, styleTokens: layout.styleTokens },
+      })
+    : undefined
   return {
     id: textValue(source.id),
     title: textValue(source.title, '未命名文章'),
@@ -1137,8 +1144,9 @@ const mapArticle = (value: unknown): Article => {
     contentJson: normalizedContent,
     coverState: 'missing',
     renderId: null,
-    accountId: null,
-    templateId: null,
+    accountId: layoutTemplate?.accountId ?? null,
+    templateId: layoutTemplate?.id ?? null,
+    layoutTemplate,
   }
 }
 
@@ -1344,6 +1352,7 @@ const mapTemplate = (value: unknown): LayoutTemplate => {
     sourceUrl: textValue(source.sourceUrl),
     status: templateStatus(source.extractionStatus),
     updatedAt: textValue(source.updatedAt, textValue(version.createdAt, now())),
+    versionId: optionalText(version.id),
     sourcePreview: sourcePreviewFromSnapshot(version.sourceSnapshot),
     extractionMode,
     styles: stylesFromTokens(version.styleTokens),
@@ -2621,6 +2630,7 @@ export const remoteApi: UserApi = {
     const content = normalizedContent as ArticleContentUpdateDto['content']
     let body = {
       baseVersionNo: input.baseVersionNo,
+      ...(input.templateVersionId ? { templateVersionId: input.templateVersionId } : {}),
       title: input.title,
       summary: input.summary,
       content,

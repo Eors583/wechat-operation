@@ -206,6 +206,7 @@ export interface Article {
   renderId: string | null
   accountId: string | null
   templateId: string | null
+  layoutTemplate?: LayoutTemplate
   publishedUrl?: string
   lastOperationStatus?: 'succeeded'
 }
@@ -270,6 +271,7 @@ export interface ModuleStyle {
 }
 
 export interface LayoutTemplate {
+  versionId?: string
   id: string
   accountId: string | null
   name: string
@@ -377,6 +379,7 @@ export interface SendMessageResult extends TaskBundle {
 }
 
 export interface ArticleSaveInput {
+  templateVersionId?: string
   id: string
   title: string
   contentHtml: string
