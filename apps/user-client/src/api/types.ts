@@ -172,6 +172,7 @@ export interface Message {
   retryable?: boolean
   sourceMessageId?: string
   preferenceReview?: string
+  preferenceReviewRequestedAt?: string
   preferenceProposal?: {
     value: string
     previousValue?: string
@@ -474,6 +475,11 @@ export interface UserApi {
   listTasksPage(projectId?: string | null, cursor?: string, limit?: number): Promise<TaskPage>
   getTask(id: string): Promise<TaskBundle>
   listTaskMessages(id: string, cursor: string, limit?: number): Promise<MessagePage>
+  decidePreference(
+    taskId: string,
+    messageId: string,
+    decision: 'confirmed' | 'dismissed',
+  ): Promise<void>
   uploadFile(
     file: File,
     context?: {

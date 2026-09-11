@@ -6,7 +6,7 @@ defineProps<{
   proposal: NonNullable<Message['preferenceProposal']>
   disabled: boolean
 }>()
-defineEmits<{ decide: [command: string] }>()
+defineEmits<{ decide: [decision: 'confirmed' | 'dismissed'] }>()
 </script>
 
 <template>
@@ -19,16 +19,12 @@ defineEmits<{ decide: [command: string] }>()
       <p class="q-mt-sm q-mb-none">{{ proposal.value }}</p>
     </q-card-section>
     <q-card-actions class="preference-confirmation__actions">
-      <AppButton
-        label="保存"
-        :disabled="disabled"
-        @click="$emit('decide', `保存用户偏好建议：${proposal.value}`)"
-      />
+      <AppButton label="保存" :disabled="disabled" @click="$emit('decide', 'confirmed')" />
       <AppButton
         label="仅本次"
         variant="outline"
         :disabled="disabled"
-        @click="$emit('decide', `仅本次使用用户偏好建议：${proposal.value}`)"
+        @click="$emit('decide', 'dismissed')"
       />
     </q-card-actions>
   </q-card>

@@ -7,7 +7,7 @@ import json
 import re
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -68,19 +68,47 @@ async def enqueue_preference_summary(
     periodic: bool = False,
     source_message_id: str | None = None,
 ) -> None:
-    # Ignore legacy save/publish/batch callers and their queued events.
-    if not task_id or reason != "user_turn" or not source_message_id:
+    if not task_id:
         return
     task = await session.scalar(
         select(Task).where(Task.id == task_id, Task.owner_id == owner_id, Task.deleted_at.is_(None))
     )
     if not task:
         return
-    latest = await session.get(Message, source_message_id)
+    latest = (
+        await session.get(Message, source_message_id)
+        if source_message_id
+        else await session.scalar(
+            select(Message)
+            .where(Message.task_id == task.id, Message.role == "user")
+            .order_by(Message.created_at.desc(), Message.id.desc())
+            .limit(1)
+        )
+    )
     if latest and latest.task_id == task.id and latest.role == "user":
-        if memory_command(latest.plain_text):
+        batch = reason != "user_turn"
+        review_key = "preference_batch_review" if batch else "preference_review"
+        if periodic:
+            turns = await session.scalar(
+                select(func.count(Message.id)).where(
+                    Message.task_id == task.id,
+                    Message.role == "user",
+                    Message.created_at <= latest.created_at,
+                )
+            )
+            if not turns or turns % 10:
+                return
+        await session.scalar(select(User).where(User.id == owner_id).with_for_update())
+        latest = await session.get(Message, latest.id, populate_existing=True)
+        if (not batch and memory_command(latest.plain_text)) or (
+            (latest.content_json or {}).get(review_key) in {"pending", "completed"}
+        ):
             return
-        latest.content_json = {**(latest.content_json or {}), "preference_review": "pending"}
+        latest.content_json = {
+            **(latest.content_json or {}),
+            review_key: "pending",
+            "preference_review_requested_at": utcnow().isoformat(),
+        }
         emit_outbox(
             session,
             event_type="user.preferences.summarize",
@@ -91,6 +119,7 @@ async def enqueue_preference_summary(
                 "owner_id": owner_id,
                 "source_message_id": latest.id,
                 "reason": reason,
+                "project_id": task.project_id,
             },
         )
 
@@ -236,17 +265,21 @@ async def decide_memory(
     source = await session.get(Message, source_id)
     if not source or source.task_id != task.id or source.role != "user":
         return "未找到这次确认的来源。", items
-    rows = [
-        row
-        for row in await proposal_rows(session, task.owner_id)
-        if row.task_id == task.id
-        and proposal(row).get("suggested_at", "") <= source.created_at.isoformat()
-        and (
-            proposal(row)["value"] == action["value"]
-            if action["value"]
-            else proposal(row)["status"] == "pending"
-        )
-    ]
+    rows = (
+        [source]
+        if action.get("proposal_id") == source.id
+        else [
+            row
+            for row in await proposal_rows(session, task.owner_id)
+            if row.task_id == task.id
+            and proposal(row).get("suggested_at", "") <= source.created_at.isoformat()
+            and (
+                proposal(row)["value"] == action["value"]
+                if action["value"]
+                else proposal(row)["status"] == "pending"
+            )
+        ]
+    )
     # Commands without a value must identify exactly one pending proposal.
     if not rows or (not action["value"] and len(rows) != 1):
         return "请在要保存的偏好建议下选择操作。", items
@@ -361,10 +394,11 @@ async def apply_explicit_memory(
             project_id=project_id,
         )
         reply = "保存为用户偏好？" if suggested else "没有新增待确认的偏好建议。"
-    if not memory:
-        memory = UserPreferenceMemory(user_id=task.owner_id)
-        session.add(memory)
-    memory.items = items
+    if action["operation"] != "decide_preference" or action["decision"] == "confirmed":
+        if not memory:
+            memory = UserPreferenceMemory(user_id=task.owner_id)
+            session.add(memory)
+        memory.items = items
     session.add(
         AuditLog(
             actor_type="user",
@@ -397,6 +431,12 @@ async def private_preferences(
         and item.get("source_type") in {"confirmed", "explicit"}
         and item.get("project_id") in {None, project_id}
     ]
+    project_keys = {item["key"] for item in eligible if item.get("project_id") == project_id}
+    eligible = [
+        item
+        for item in eligible
+        if item.get("project_id") == project_id or item["key"] not in project_keys
+    ]
 
     def score(item: dict) -> tuple[int, str]:
         overlap = sum(term in item["value"].lower() for term in terms)
@@ -418,6 +458,7 @@ async def apply_writer_preference(
     """A writer may propose a confirmation, but cannot authorize active memory."""
     if not isinstance(check, dict) or type(check.get("should_ask")) is not bool:
         return False
+    await session.scalar(select(User).where(User.id == task.owner_id).with_for_update())
     source = await session.get(Message, source_id, populate_existing=True)
     if not source or source.task_id != task.id or source.role != "user":
         return False
@@ -439,7 +480,6 @@ async def apply_writer_preference(
             or not feedback_sentences(value)
         ):
             return False
-        await session.scalar(select(User).where(User.id == task.owner_id).with_for_update())
         memory = await session.get(UserPreferenceMemory, task.owner_id, populate_existing=True)
         await propose_memory(
             session,
@@ -450,6 +490,7 @@ async def apply_writer_preference(
             value=value.strip(),
             evidence=evidence,
             explicit=True,
+            project_id=task.project_id,
         )
     source.content_json = {**(source.content_json or {}), "preference_review": "completed"}
     return True
@@ -464,8 +505,8 @@ async def summarize_preferences(
     settings: Settings,
 ) -> None:
     payload = event.payload
-    if payload.get("reason") != "user_turn":
-        return
+    batch = payload.get("reason") != "user_turn"
+    review_key = "preference_batch_review" if batch else "preference_review"
     owner = await session.scalar(
         select(User).where(User.id == payload["owner_id"], User.status == "active")
     )
@@ -476,38 +517,93 @@ async def summarize_preferences(
             Task.deleted_at.is_(None),
         )
     )
-    if not owner or not task:
+    if (
+        not owner
+        or not task
+        or ("project_id" in payload and payload["project_id"] != task.project_id)
+    ):
+        return
+    if not payload.get("source_message_id"):
         return
     cutoff = await session.get(Message, payload["source_message_id"])
     if not cutoff or cutoff.task_id != task.id or cutoff.role != "user":
         return
-    if (cutoff.content_json or {}).get("preference_review") == "completed":
+    if (cutoff.content_json or {}).get(review_key) == "completed":
         return
-    content = "。".join(s for s in feedback_sentences(cutoff.plain_text) if not LOCAL.search(s))[
-        :1200
-    ]
-    if not content or memory_command(cutoff.plain_text):
-        cutoff.content_json = {**(cutoff.content_json or {}), "preference_review": "completed"}
+    sources = (
+        list(
+            (
+                await session.scalars(
+                    select(Message)
+                    .where(
+                        Message.task_id == task.id,
+                        Message.role == "user",
+                        Message.created_at <= cutoff.created_at,
+                    )
+                    .order_by(Message.created_at.desc(), Message.id.desc())
+                    .limit(10)
+                )
+            ).all()
+        )
+        if batch
+        else [cutoff]
+    )
+    contents = {
+        row.id: "。".join(s for s in feedback_sentences(row.plain_text) if not LOCAL.search(s))[
+            :1200
+        ]
+        for row in sources
+        if not memory_command(row.plain_text) and not proposal(row)
+    }
+    contents = {key: value for key, value in contents.items() if value}
+    if not contents:
+        await session.scalar(select(User).where(User.id == owner.id).with_for_update())
+        cutoff = await session.get(Message, cutoff.id, populate_existing=True)
+        cutoff.content_json = {**(cutoff.content_json or {}), review_key: "completed"}
         return
     memory = await session.get(UserPreferenceMemory, owner.id)
     existing = (
-        {item["key"]: item for item in memory.items if not item.get("project_id")} if memory else {}
+        {item["key"]: item for item in memory.items if item.get("project_id") == task.project_id}
+        if memory
+        else {}
     )
-    suggestions = [proposal(row) for row in await proposal_rows(session, owner.id)]
+    suggestions = [
+        proposal(row)
+        for row in await proposal_rows(session, owner.id)
+        if proposal(row).get("project_id") == task.project_id
+    ]
     route = await active_route_snapshot(session, purpose="memory_summary", settings=settings)
     response = await generate_with_frozen_route(
         snapshot=route,
         fallback_model=model,
         secrets=secrets,
         purpose="memory_summary",
-        prompt=INSTRUCTIONS,
+        prompt=(
+            INSTRUCTIONS.replace("current_message", "user_messages")
+            .replace(
+                "只判断本轮 user_messages，不从历史、示例、转述或资料中抽取。",
+                "综合 user_messages 内用户自己的纠正与取舍，不从示例、转述或资料中抽取。",
+            )
+            .replace("最多一条。", "最多三条，每条必须对应不同的来源消息。")
+            if batch
+            else INSTRUCTIONS
+        ),
         context={
             "private_user_preferences": True,
             "items": [
                 {"key": k, "value": v["value"], "status": v.get("status", "active")}
                 for k, v in existing.items()
             ],
-            "current_message": {"id": cutoff.id, "text": content},
+            **(
+                {
+                    "user_messages": [
+                        {"id": key, "text": value}
+                        for key, value in reversed(list(contents.items()))
+                    ]
+                }
+                if batch
+                else {"current_message": {"id": cutoff.id, "text": contents[cutoff.id]}}
+            ),
             "suggestions": [
                 {"key": i["key"], "value": i["value"], "status": i["status"]}
                 for i in suggestions[:100]
@@ -536,9 +632,9 @@ async def summarize_preferences(
         return
     memory = await session.get(UserPreferenceMemory, owner.id, populate_existing=True)
     cutoff = await session.get(Message, cutoff.id, populate_existing=True)
-    if (cutoff.content_json or {}).get("preference_review") == "completed":
+    if (cutoff.content_json or {}).get(review_key) == "completed":
         return
-    for item in proposed[:1]:
+    for item in proposed[: 3 if batch else 1]:
         if not isinstance(item, dict):
             continue
         key, value = item.get("key"), item.get("value")
@@ -546,9 +642,8 @@ async def summarize_preferences(
         if not all(isinstance(v, str) and v.strip() for v in (key, value, evidence, source_id)):
             continue
         if (
-            source_id != cutoff.id
-            or evidence not in content
-            or evidence not in cutoff.plain_text
+            source_id not in contents
+            or evidence not in contents[source_id]
             or not re.fullmatch(r"[a-z][a-z0-9_]{1,63}", key)
             or item.get("category")
             not in {"communication", "formatting", "workflow", "topics", "audience"}
@@ -557,14 +652,18 @@ async def summarize_preferences(
             or not feedback_sentences(value)
         ):
             continue
+        source = await session.get(Message, source_id, populate_existing=True)
+        if not source or evidence not in source.plain_text:
+            continue
         await propose_memory(
             session,
             task=task,
-            source=cutoff,
+            source=source,
             items=list(memory.items) if memory else [],
             key=key,
             value=value.strip(),
             evidence=evidence,
             explicit=item["certainty"] == "explicit",
+            project_id=task.project_id,
         )
-    cutoff.content_json = {**(cutoff.content_json or {}), "preference_review": "completed"}
+    cutoff.content_json = {**(cutoff.content_json or {}), review_key: "completed"}

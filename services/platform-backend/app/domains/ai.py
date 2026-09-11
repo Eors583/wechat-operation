@@ -1450,7 +1450,13 @@ async def create_ai_run(
     content = {
         key: value
         for key, value in content.items()
-        if key not in {"preference_review", "preference_proposal"}
+        if key
+        not in {
+            "preference_review",
+            "preference_proposal",
+            "preference_batch_review",
+            "preference_review_requested_at",
+        }
     }
     await conversation_file_ids(session, task_id=task.id, content=content)
     base_article = (
@@ -1578,7 +1584,13 @@ async def prepare_ai_run(
     content = {
         key: value
         for key, value in message.content_json.items()
-        if key not in {"preference_review", "preference_proposal"}
+        if key
+        not in {
+            "preference_review",
+            "preference_proposal",
+            "preference_batch_review",
+            "preference_review_requested_at",
+        }
     }
     model_deployment_id = run.context_snapshot.get("requested_model_deployment_id")
     requested_skill_id = run.context_snapshot.get("requested_skill_id")
@@ -3013,6 +3025,14 @@ async def process_ai_run(
                 reason="user_turn",
                 source_message_id=str(model_context["source_message_id"]),
             )
+    await enqueue_preference_summary(
+        session,
+        owner_id=run.owner_id,
+        task_id=task.id,
+        reason="periodic",
+        periodic=True,
+        source_message_id=str(model_context["source_message_id"]),
+    )
     # The frozen reservation is the final charge for this AI run.
     run.quota_reserved = 0
     run.completed_at = utcnow()

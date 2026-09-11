@@ -68,7 +68,7 @@ const taskQuery = useQuery({
     query.state.data?.messages.some(
       (message) =>
         message.preferenceReview === 'pending' &&
-        Date.now() - Date.parse(message.createdAt) < 300_000,
+        Date.now() - Date.parse(message.preferenceReviewRequestedAt ?? message.createdAt) < 300_000,
     )
       ? 3000
       : false,
@@ -93,6 +93,36 @@ type PromptComposerInstance = {
 const bundle = computed(() => taskQuery.data.value ?? null)
 const task = computed(() => bundle.value?.task ?? null)
 const messages = computed(() => bundle.value?.messages ?? [])
+const decidingPreferences = ref(new Set<string>())
+const decidePreference = async (message: Message, decision: 'confirmed' | 'dismissed') => {
+  const sourceId = message.sourceMessageId
+  const id = taskId.value
+  if (!sourceId || decidingPreferences.value.has(sourceId)) return
+  decidingPreferences.value.add(sourceId)
+  try {
+    await api.decidePreference(id, sourceId, decision)
+    queryClient.setQueryData<TaskBundle>(['task', id], (current) =>
+      current
+        ? {
+            ...current,
+            messages: current.messages.map((source) =>
+              source.id === sourceId && source.preferenceProposal
+                ? {
+                    ...source,
+                    preferenceProposal: { ...source.preferenceProposal, status: decision },
+                  }
+                : source,
+            ),
+          }
+        : current,
+    )
+    await queryClient.invalidateQueries({ queryKey: ['task', id] })
+  } catch (error) {
+    $q.notify({ type: 'negative', message: error instanceof Error ? error.message : '操作失败' })
+  } finally {
+    decidingPreferences.value.delete(sourceId)
+  }
+}
 const preferenceForReply = (message: Message) => {
   if (
     message.role !== 'assistant' ||
@@ -970,8 +1000,8 @@ const layoutArticle = async () => {
                 <PreferenceConfirmationCard
                   v-if="preferenceForReply(message)"
                   :proposal="preferenceForReply(message)!"
-                  :disabled="generating"
-                  @decide="(text) => send({ text, attachments: [] })"
+                  :disabled="decidingPreferences.has(message.sourceMessageId!)"
+                  @decide="(decision) => decidePreference(message, decision)"
                 />
                 <div
                   v-if="message.suggestions?.length && message.responseKind !== 'retry_loading'"

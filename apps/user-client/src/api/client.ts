@@ -814,7 +814,13 @@ const mapMessage = (value: unknown) => {
     errorCode: optionalText(content.errorCode ?? content.error_code),
     retryable: typeof content.retryable === 'boolean' ? content.retryable : undefined,
     sourceMessageId: optionalText(content.sourceMessageId ?? content.source_message_id),
-    preferenceReview: optionalText(content.preferenceReview ?? content.preference_review),
+    preferenceReview:
+      content.preferenceBatchReview === 'pending' || content.preference_batch_review === 'pending'
+        ? 'pending'
+        : optionalText(content.preferenceReview ?? content.preference_review),
+    preferenceReviewRequestedAt: optionalText(
+      content.preferenceReviewRequestedAt ?? content.preference_review_requested_at,
+    ),
     preferenceProposal:
       typeof proposal.value === 'string' && typeof proposal.status === 'string'
         ? {
@@ -2370,6 +2376,13 @@ export const remoteApi: UserApi = {
       items: itemList(payload).map(mapMessage),
       nextCursor: nextPageCursor(payload, cursor),
     }
+  },
+  async decidePreference(taskId, messageId, decision) {
+    await openApiData(
+      openApi.PUT('/api/v1/tasks/{task_id}/messages/{message_id}/preference', {
+        params: { path: { task_id: taskId, message_id: messageId }, query: { decision } },
+      }),
+    )
   },
   uploadFile: uploadRemoteFile,
   async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {

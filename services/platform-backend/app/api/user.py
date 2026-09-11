@@ -77,7 +77,11 @@ from app.domains.layout import (
     validate_source_url,
 )
 from app.domains.revision import create_article_revision
-from app.domains.user_preference_memory import enqueue_preference_summary
+from app.domains.user_preference_memory import (
+    apply_explicit_memory,
+    enqueue_preference_summary,
+    proposal,
+)
 from app.domains.wechat import (
     confirm_render,
     create_wechat_operation,
@@ -1027,6 +1031,41 @@ async def list_task_messages(
         limit=limit,
     )
     return page_response([model_dict(item) for item in messages], next_cursor)
+
+
+@router.put("/tasks/{task_id}/messages/{message_id}/preference", status_code=204)
+async def decide_preference(
+    task_id: str,
+    message_id: str,
+    decision: Literal["confirmed", "dismissed"],
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+    limiter: RateLimiter = Depends(rate_limiter),
+) -> Response:
+    await limiter.check(f"preference-decision:{user.id}", 60, 60)
+    task = await owned_task(session, owner_id=user.id, task_id=task_id)
+    await session.scalar(select(User).where(User.id == user.id).with_for_update())
+    source = await session.get(Message, message_id, populate_existing=True)
+    if not source or source.task_id != task.id or source.role != "user" or not proposal(source):
+        raise ApiError(404, "PREFERENCE_NOT_FOUND", "偏好建议不存在。")
+    if proposal(source).get("status") == decision:
+        return Response(status_code=204)
+    reply = await apply_explicit_memory(
+        session,
+        task=task,
+        source_id=source.id,
+        action={
+            "operation": "decide_preference",
+            "proposal_id": source.id,
+            "decision": decision,
+            "value": proposal(source)["value"],
+        },
+    )
+    if proposal(source).get("status") != decision:
+        await session.commit()
+        raise ApiError(409, "PREFERENCE_CONFLICT", reply)
+    await session.commit()
+    return Response(status_code=204)
 
 
 @router.post("/ai-runs/{run_id}/cancel", response_model=contract.AIRunResource)
