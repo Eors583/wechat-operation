@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watchEffect } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, ref, watch, watchEffect } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useInfiniteQuery } from '@tanstack/vue-query'
 import type { QTableColumn } from 'quasar'
 import { useQuasar } from 'quasar'
@@ -16,12 +16,26 @@ import FilePreviewDialog from '@/components/business/FilePreviewDialog.vue'
 import AppButton from '@/components/base/AppButton.vue'
 
 const router = useRouter()
+const route = useRoute()
 const $q = useQuasar()
 const type = ref<LibraryItemType | 'all'>('all')
 const projectId = ref<string | 'all' | 'unclassified'>('all')
 const search = ref('')
 const fileFormat = ref('all')
+const draftsOnly = ref(false)
+watch(
+  () => route.query,
+  (query) => {
+    projectId.value = typeof query.project === 'string' ? query.project : 'all'
+    type.value = query.type === 'article' || query.type === 'reference' ? query.type : 'all'
+    draftsOnly.value = query.status === 'local_draft'
+    search.value = ''
+    fileFormat.value = 'all'
+  },
+  { immediate: true },
+)
 const clearFilters = () => {
+  draftsOnly.value = false
   fileFormat.value = 'all'
   projectId.value = 'all'
   type.value = 'all'
@@ -40,10 +54,21 @@ const projectsQuery = useInfiniteQuery({
   getNextPageParam: (lastPage) => lastPage.nextCursor,
 })
 const libraryQuery = useInfiniteQuery({
-  queryKey: computed(() => ['library', type.value, projectId.value, search.value]),
+  queryKey: computed(() => [
+    'library',
+    type.value,
+    projectId.value,
+    search.value,
+    draftsOnly.value,
+  ]),
   queryFn: ({ pageParam }) =>
     api.listLibraryItemsPage(
-      { type: type.value, projectId: projectId.value, search: search.value },
+      {
+        type: type.value,
+        projectId: projectId.value,
+        search: search.value,
+        status: draftsOnly.value ? 'local_draft' : undefined,
+      },
       pageParam,
     ),
   initialPageParam: undefined as string | undefined,
@@ -69,8 +94,20 @@ const rows = computed(() => [
     ]),
   ).values(),
 ])
+watchEffect(() => {
+  if (
+    projectId.value !== 'all' &&
+    projectId.value !== 'unclassified' &&
+    !projects.value.some((project) => project.id === projectId.value) &&
+    projectsQuery.hasNextPage.value &&
+    !projectsQuery.isFetching.value &&
+    !projectsQuery.isError.value
+  )
+    void projectsQuery.fetchNextPage()
+})
 const projectName = (id: string | null) =>
-  projects.value.find((item) => item.id === id)?.name ?? '未分类'
+  projects.value.find((item) => item.id === id)?.name ??
+  (id && id !== 'unclassified' ? '所属项目' : '未分类')
 const selectedProjectName = computed(() =>
   projectId.value === 'all' ? '全部项目' : projectName(projectId.value),
 )
@@ -318,6 +355,15 @@ const uploadReferences = async () => {
     </section>
 
     <section class="library-toolbar surface-card">
+      <q-chip
+        v-if="draftsOnly"
+        removable
+        color="primary"
+        text-color="white"
+        @remove="draftsOnly = false"
+      >
+        本地草稿
+      </q-chip>
       <div class="library-toolbar__filters">
         <div class="library-breadcrumb">
           文章库 / <strong>{{ selectedProjectName }}</strong>
@@ -368,7 +414,9 @@ const uploadReferences = async () => {
       >
         <template #empty-action>
           <AppButton
-            v-if="projectId !== 'all' || type !== 'all' || search || fileFormat !== 'all'"
+            v-if="
+              projectId !== 'all' || type !== 'all' || search || fileFormat !== 'all' || draftsOnly
+            "
             variant="outline"
             label="查看全部内容"
             @click="clearFilters"

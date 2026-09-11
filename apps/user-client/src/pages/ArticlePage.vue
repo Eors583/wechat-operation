@@ -28,6 +28,7 @@ import AppDialog from '@/components/base/AppDialog.vue'
 import AsyncStatePanel from '@/components/composite/AsyncStatePanel.vue'
 import WechatFinalPreview from '@/components/business/WechatFinalPreview.vue'
 import { usePublicSettings } from '@/composables/usePublicSettings'
+import { useLocalDraftSave } from '@/composables/useLocalDraftSave'
 
 const route = useRoute()
 const router = useRouter()
@@ -73,7 +74,7 @@ const finalRender = ref<ArticleRenderPreview | null>(null)
 const finalPreparing = ref(false)
 const renderError = ref('')
 const outcomeLoading = ref(false)
-const localSaving = ref(false)
+const { saving: localSaving, save: saveLocalDraft } = useLocalDraftSave()
 const coverAssetId = ref<string | null>(null)
 const coverName = ref('')
 const coverUploading = ref(false)
@@ -690,28 +691,12 @@ const chooseCover = async () => {
   }
 }
 
-const saveLocal = async () => {
-  localSaving.value = true
-  try {
-    const saved = (await saveContent()) ?? article.value
-    if (!saved) return
-    const result = await api.setArticleOutcome({
-      id: saved.id,
-      outcome: 'local_draft',
-      idempotencyKey: crypto.randomUUID(),
-    })
-    queryClient.setQueryData(['article', saved.id], result)
-    await queryClient.invalidateQueries({ queryKey: ['library'] })
-    $q.notify({ type: 'positive', message: '文章已存入本地草稿箱，并出现在文章库。' })
-  } catch (error) {
-    $q.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '本地草稿没有保存完成。',
-    })
-  } finally {
-    localSaving.value = false
-  }
-}
+const saveLocal = () =>
+  saveLocalDraft(async () => {
+    if (!editor.value || saveConflict.value) return null
+    const saved = await saveContent()
+    return dirty.value ? null : saved
+  })
 
 let renderRequestToken = 0
 const prepareCurrentRender = async () => {

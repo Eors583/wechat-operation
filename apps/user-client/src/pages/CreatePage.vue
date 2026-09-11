@@ -31,6 +31,7 @@ import GenerationProgress from '@/components/business/GenerationProgress.vue'
 import MessageArticleCard from '@/components/business/MessageArticleCard.vue'
 import PreferenceConfirmationCard from '@/components/business/PreferenceConfirmationCard.vue'
 import { usePublicSettings } from '@/composables/usePublicSettings'
+import { useLocalDraftSave } from '@/composables/useLocalDraftSave'
 import { renderSafeMarkdown } from '@/utils/safeMarkdown'
 import { defaultArticleTemplate } from '@/utils/articleDownload'
 
@@ -300,10 +301,18 @@ const conversation = ref<HTMLElement | null>(null)
 const articlePreviewPanel = ref<{
   canSave: boolean
   dirty: boolean
-  saveNow: () => Promise<void>
+  saveNow: () => Promise<Article | null>
   saving: boolean
   versionNo: number
 } | null>(null)
+const { saving: localSaving, save: saveLocalDraft } = useLocalDraftSave()
+const saveLocal = () =>
+  saveLocalDraft(async () => {
+    const panel = articlePreviewPanel.value
+    if (!panel || panel.saving) return null
+    const saved = await panel.saveNow()
+    return panel.dirty ? null : saved
+  })
 const currentRunId = ref('')
 const activeGenerationTaskId = ref('')
 const loadingEarlier = ref(false)
@@ -1233,8 +1242,9 @@ const layoutArticle = async () => {
           class="article-preview-dialog__button article-preview-dialog__local"
           variant="outline"
           label="存本地草稿箱"
-          :loading="articlePreviewPanel?.saving"
-          @click="articlePreviewPanel?.saveNow()"
+          :loading="localSaving || articlePreviewPanel?.saving"
+          :disabled="!articlePreviewPanel"
+          @click="saveLocal"
         />
         <AppButton
           class="article-preview-dialog__button"

@@ -45,9 +45,11 @@ const saving = ref(false)
 const saveState = ref<'saved' | 'saving' | 'failed'>('saved')
 const versionNo = ref(props.article.versionNo)
 const title = ref(props.article.title)
+let editRevision = 0
 const canSave = computed(() => dirty.value && !saving.value)
 const markDirty = () => {
   if (props.readOnly) return
+  editRevision += 1
   dirty.value = true
   saveState.value = 'failed'
 }
@@ -102,6 +104,7 @@ const saveNow = async () => {
   }
   saving.value = true
   saveState.value = 'saving'
+  const revision = editRevision
   try {
     const saved = await api.saveArticle({
       id: props.article.id,
@@ -113,14 +116,18 @@ const saveNow = async () => {
       reason: 'preview_edit',
     })
     versionNo.value = saved.versionNo
-    dirty.value = false
-    saveState.value = 'saved'
+    dirty.value = revision !== editRevision
+    saveState.value = dirty.value ? 'failed' : 'saved'
     queryClient.setQueryData(['article', props.article.id], saved)
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['article-versions', props.article.id] }),
       queryClient.invalidateQueries({ queryKey: ['library'] }),
       queryClient.invalidateQueries({ queryKey: ['task', props.article.taskId] }),
     ])
+    if (dirty.value) {
+      $q.notify({ type: 'warning', message: '保存期间内容有修改，请再次保存。' })
+      return null
+    }
     $q.notify({ type: 'positive', message: '文章修改已保存。' })
     return saved
   } catch (error) {

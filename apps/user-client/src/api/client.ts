@@ -2994,6 +2994,7 @@ export const remoteApi: UserApi = {
           query: {
             query: filters.search?.trim() || undefined,
             project_id: filters.projectId === 'all' ? undefined : filters.projectId,
+            status: filters.status,
             item_type:
               filters.type === 'article'
                 ? 'article'

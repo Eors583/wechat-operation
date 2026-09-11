@@ -435,6 +435,7 @@ export interface PendingArticleOutcome {
 }
 
 export interface LibraryFilters {
+  status?: 'local_draft'
   type?: LibraryItemType | 'all'
   projectId?: string | 'all' | 'unclassified'
   search?: string
