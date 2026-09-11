@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.domains.common import emit_outbox
-from app.domains.preference_learning import LOCAL, feedback_sentences
+from app.domains.preference_learning import feedback_sentences
 from app.model_gateway import active_route_snapshot, generate_with_frozen_route
 from app.models import AuditLog, Message, OutboxEvent, Task, User, UserPreferenceMemory, utcnow
 from app.providers import ModelProvider, ProviderUnavailable, SecretProvider
@@ -42,7 +42,13 @@ INSTRUCTIONS = """
 category=formatting，key=title_appeal，certainty=explicit，evidence 必须是用户原文。
 “少点套话”“别写这么啰嗦”等有明确评价方向且可复用的纠正，也可以直接建议。
 纯任务指令（写五个标题、把第三段删掉、替换某个词）、含糊评价（不好、再改改）、
-单篇题材及事实信息不是偏好。不能把明确的“这篇/本次/仅此”要求泛化。
+单篇题材及事实信息不是偏好。只有明确“仅本次、只对这篇、暂时”等限定才排除。
+“你这个结尾”“这篇文章的标题”是在指认修改对象，不代表仅本次有效。
+一句话可以同时包含文章修改任务和可复用偏好，不能因有“调整一下”而忽略评价标准。
+“感觉你这个结尾不能够吸引用户关注和转发，你再调整一下”应建议
+“文章结尾要有吸引力，能引导读者关注和转发”，key=ending_engagement，
+category=formatting，certainty=explicit。这里的 explicit 指取舍方向明确，
+不是已经证明长期适用；是否长期适用交给用户确认。
 返回 JSON {"preferences":[{"key":"细分维度的稳定英文标识",
 "category":"communication|formatting|workflow|topics|audience",
 "certainty":"explicit 或 uncertain", "value":"简短偏好",
@@ -57,6 +63,32 @@ category=formatting，key=title_appeal，certainty=explicit，evidence 必须是
 不要返回任务摘要、写作风格、保存说明或完整历史档案。
 status=revoked 的维度不能重新学习；明确记录的偏好不能被自动推断覆盖。不要通过改 key 绕过撤销。
 """
+
+
+ONLY_THIS = re.compile(
+    r"(?:仅|只|限)(?:在|对|针对|用于|用在)?(?:这篇|本篇|这次|本次|当前|此)|"
+    r"这次|本次|暂时|今天"
+)
+
+
+def preference_feedback(text: str) -> list[str]:
+    # A target such as '这篇文章' is not an explicit limit on future use.
+    if ONLY_THIS.search(text):
+        return []
+    return feedback_sentences(text)
+
+
+def has_evaluative_feedback(text: str) -> bool:
+    return any(
+        re.search(r"标题|开头|结尾|收尾|正文|表达|语言|语气|篇幅|结构|排版|案例|回复", sentence)
+        and re.search(r"不够|不能|没有|太|更|要|希望|喜欢|避免|少点|多点|别|不要|不喜欢", sentence)
+        and re.search(
+            r"吸引|关注|转发|互动|共鸣|冲击|平淡|简洁|啰嗦|具体|专业|自然|生硬|"
+            r"套话|废话|清晰|易懂|通俗|简短|冗长|直接|铺垫|条理|悬念|爆款",
+            sentence,
+        )
+        for sentence in preference_feedback(text)
+    )
 
 
 async def enqueue_preference_summary(
@@ -464,6 +496,9 @@ async def apply_writer_preference(
         return False
     if memory_command(source.plain_text):
         return True
+    if not check["should_ask"] and has_evaluative_feedback(source.plain_text):
+        # A negative writer hint cannot veto attributable, reusable correction feedback.
+        return False
     if check["should_ask"]:
         key, value, evidence = (check.get(field) for field in ("key", "value", "evidence"))
         if (
@@ -474,8 +509,7 @@ async def apply_writer_preference(
             or evidence not in source.plain_text
             or not any(
                 evidence.strip("。！？!?；;\n ") in sentence
-                for sentence in feedback_sentences(source.plain_text)
-                if not LOCAL.search(sentence)
+                for sentence in preference_feedback(source.plain_text)
             )
             or not feedback_sentences(value)
         ):
@@ -549,9 +583,7 @@ async def summarize_preferences(
         else [cutoff]
     )
     contents = {
-        row.id: "。".join(s for s in feedback_sentences(row.plain_text) if not LOCAL.search(s))[
-            :1200
-        ]
+        row.id: "。".join(preference_feedback(row.plain_text))[:1200]
         for row in sources
         if not memory_command(row.plain_text) and not proposal(row)
     }
@@ -663,7 +695,7 @@ async def summarize_preferences(
             key=key,
             value=value.strip(),
             evidence=evidence,
-            explicit=item["certainty"] == "explicit",
+            explicit=item["certainty"] == "explicit" or has_evaluative_feedback(evidence),
             project_id=task.project_id,
         )
     cutoff.content_json = {**(cutoff.content_json or {}), review_key: "completed"}
