@@ -791,7 +791,6 @@ async def create_task(
         project_id=payload.project_id,
         title=payload.title or payload.first_message.text.strip().splitlines()[0][:80],
         current_skill_id=payload.current_skill_id,
-        use_preferences=True,
     )
     session.add(task)
     await session.flush()
@@ -943,11 +942,11 @@ async def patch_task(
 ) -> dict[str, Any]:
     task = await owned_task(session, owner_id=user.id, task_id=task_id)
     values = payload.model_dump(exclude_unset=True)
+    values.pop("use_preferences", None)
     if "project_id" in values and values["project_id"]:
         await owned_project(session, owner_id=user.id, project_id=values["project_id"])
     for key, value in values.items():
         setattr(task, key, value)
-    task.use_preferences = True
     await session.commit()
     return model_dict(task)
 

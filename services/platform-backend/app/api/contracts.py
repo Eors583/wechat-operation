@@ -273,6 +273,15 @@ def _column_type(column: Any) -> Any:
     return str
 
 
+# Wire-only compatibility for deployed clients; these values are no longer DB columns.
+STORAGE_COMPATIBILITY_FIELDS: dict[type, dict[str, tuple[Any, Any]]] = {
+    Task: {"use_preferences": (bool, True)},
+    UserPreference: {"confidence": (float, 1.0)},
+    ArticleRender: {"html_object_key": (str | None, None)},
+    JobRecord: {"next_retry_at": (datetime | None, None)},
+}
+
+
 def orm_contract(
     name: str,
     model: type[DeclarativeBase],
@@ -291,6 +300,12 @@ def orm_contract(
         if column.nullable:
             annotation = annotation | None
         fields[column.key] = (annotation, ...)
+    fields.update(
+        {
+            key: (annotation, ...)
+            for key, (annotation, _) in STORAGE_COMPATIBILITY_FIELDS.get(model, {}).items()
+        }
+    )
     fields.update(overrides or {})
     return create_model(name, __base__=ContractModel, **fields)
 

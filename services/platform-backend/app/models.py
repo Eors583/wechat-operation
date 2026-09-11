@@ -71,18 +71,6 @@ class User(Base, IdMixin, TimestampMixin):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class AuthIdentity(Base, IdMixin, TimestampMixin):
-    __tablename__ = "auth_identities"
-    __table_args__ = (
-        UniqueConstraint("provider", "provider_subject", name="uq_auth_identity_subject"),
-    )
-
-    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id"), nullable=False)
-    provider: Mapped[str] = mapped_column(String(32), nullable=False)
-    provider_subject: Mapped[str] = mapped_column(String(320), nullable=False)
-    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-
 class VerificationChallenge(Base, IdMixin, TimestampMixin):
     __tablename__ = "verification_challenges"
     __table_args__ = (Index("ix_verification_destination_created", "destination", "created_at"),)
@@ -222,7 +210,6 @@ class Task(Base, IdMixin, TimestampMixin, OwnerMixin):
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
     current_article_id: Mapped[str | None] = mapped_column(String(36))
     current_skill_id: Mapped[str | None] = mapped_column(String(36))
-    use_preferences: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     last_message_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, nullable=False
     )
@@ -295,31 +282,12 @@ class AIRunAttempt(Base, IdMixin):
 
 class AIRunEvent(Base, IdMixin):
     __tablename__ = "ai_run_events"
-    __table_args__ = (
-        UniqueConstraint("run_id", "seq", name="uq_ai_event_seq"),
-        Index("ix_ai_events_run_seq", "run_id", "seq"),
-    )
+    __table_args__ = (UniqueConstraint("run_id", "seq", name="uq_ai_event_seq"),)
 
     run_id: Mapped[str] = mapped_column(String(36), ForeignKey("ai_runs.id"), nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     event_type: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
-    )
-
-
-class ContextSnapshot(Base, IdMixin):
-    __tablename__ = "context_snapshots"
-    __table_args__ = (Index("ix_context_task_created", "task_id", "created_at"),)
-
-    task_id: Mapped[str] = mapped_column(String(36), ForeignKey("tasks.id"), nullable=False)
-    summary_id: Mapped[str | None] = mapped_column(String(36))
-    message_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
-    document_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
-    preference_ids: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
-    skill_version_id: Mapped[str | None] = mapped_column(String(36))
-    token_budget: Mapped[dict[str, int]] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
     )
@@ -496,21 +464,6 @@ class ArticleRevision(Base, IdMixin, TimestampMixin):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
-class ArticleAsset(Base, IdMixin):
-    __tablename__ = "article_assets"
-    __table_args__ = (
-        UniqueConstraint("article_version_id", "asset_id", "node_id", name="uq_article_asset_node"),
-    )
-
-    article_version_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("article_versions.id"), nullable=False
-    )
-    asset_id: Mapped[str] = mapped_column(String(36), ForeignKey("assets.id"), nullable=False)
-    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
-    node_id: Mapped[str | None] = mapped_column(String(100))
-    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-
-
 class LayoutTemplate(Base, IdMixin, TimestampMixin, OwnerMixin):
     __tablename__ = "layout_templates"
     __table_args__ = (Index("ix_layout_account_updated", "official_account_id", "updated_at"),)
@@ -558,7 +511,6 @@ class ArticleRender(Base, IdMixin):
     )
     official_account_id: Mapped[str | None] = mapped_column(String(36))
     cover_asset_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("assets.id"))
-    html_object_key: Mapped[str | None] = mapped_column(String(500))
     html: Mapped[str] = mapped_column(Text, nullable=False)
     structure: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     checksum: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -797,21 +749,10 @@ class UserPreference(Base, IdMixin, TimestampMixin):
     preference_type: Mapped[str] = mapped_column(String(64), nullable=False)
     value: Mapped[str] = mapped_column(Text, nullable=False)
     scope: Mapped[str] = mapped_column(String(24), nullable=False)
-    confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4), default=0, nullable=False)
     source_type: Mapped[str] = mapped_column(String(40), nullable=False)
     source_id: Mapped[str | None] = mapped_column(String(36))
     status: Mapped[str] = mapped_column(String(24), default="candidate", nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-
-class UserPreferenceMemory(Base, TimestampMixin):
-    # Compatibility copy for the previous release; new reads use UserMemoryEntry.
-    __tablename__ = "user_preference_memories"
-
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
-    )
-    items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
 
 
 class UserMemoryEntry(Base, IdMixin, TimestampMixin):
@@ -1006,7 +947,6 @@ class JobRecord(Base, IdMixin, TimestampMixin):
     attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_code: Mapped[str | None] = mapped_column(String(80))
     error_message: Mapped[str | None] = mapped_column(Text)
-    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AuditLog(Base, IdMixin):

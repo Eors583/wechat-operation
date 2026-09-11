@@ -8,6 +8,7 @@ from typing import Any
 
 from sqlalchemy import inspect
 
+from app.api.contracts import STORAGE_COMPATIBILITY_FIELDS
 from app.errors import ApiError
 from app.models import Message
 
@@ -31,6 +32,13 @@ def model_dict(model: Any, *, exclude: set[str] | None = None) -> dict[str, Any]
         for column in inspect(model).mapper.column_attrs
         if column.key not in excluded
     }
+    result.update(
+        {
+            key: value
+            for key, (_, value) in STORAGE_COMPATIBILITY_FIELDS.get(type(model), {}).items()
+            if key not in excluded
+        }
+    )
     if isinstance(model, Message) and "content_json" in result:
         content = {**(result["content_json"] or {})}
         content.pop("preference_proposal", None)

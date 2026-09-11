@@ -16,7 +16,6 @@ from app.models import (
     ArticleRevision,
     ArticleVersion,
     Asset,
-    AuthIdentity,
     Document,
     DocumentChunk,
     DocumentSection,
@@ -35,7 +34,6 @@ from app.models import (
     User,
     UserMemoryEntry,
     UserPreference,
-    UserPreferenceMemory,
     WechatAuthorizationState,
     WechatOperation,
     utcnow,
@@ -129,11 +127,6 @@ async def purge_account(
     await session.execute(delete(PreferenceProposal).where(PreferenceProposal.user_id == user.id))
     await session.execute(delete(UserMemoryEntry).where(UserMemoryEntry.user_id == user.id))
 
-    await session.execute(
-        update(AuthIdentity)
-        .where(AuthIdentity.user_id == user.id)
-        .values(provider_subject=f"deleted:{user.id}")
-    )
     await session.execute(
         update(Project)
         .where(Project.owner_id == user.id)
@@ -236,9 +229,7 @@ async def purge_account(
         .values(style_tokens={}, source_snapshot={})
     )
     await session.execute(
-        update(ArticleRender)
-        .where(ArticleRender.owner_id == user.id)
-        .values(html="", structure={}, html_object_key=None)
+        update(ArticleRender).where(ArticleRender.owner_id == user.id).values(html="", structure={})
     )
     accounts = list(
         (
@@ -278,9 +269,6 @@ async def purge_account(
         update(UserPreference)
         .where(UserPreference.user_id == user.id)
         .values(value="", status="revoked", revoked_at=utcnow())
-    )
-    await session.execute(
-        update(UserPreferenceMemory).where(UserPreferenceMemory.user_id == user.id).values(items=[])
     )
     user.email = None
     user.phone = None

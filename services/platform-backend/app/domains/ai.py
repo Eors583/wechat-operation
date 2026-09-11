@@ -63,7 +63,6 @@ from app.models import (
     Article,
     Asset,
     AuditLog,
-    ContextSnapshot,
     Document,
     DocumentChunk,
     JobRecord,
@@ -1644,38 +1643,31 @@ async def prepare_ai_run(
             # Heal legacy pointers left by older deletion behavior. The conversation
             # remains valid and the next completed run creates a fresh article.
             task.current_article_id = None
-    # Legacy tasks may still carry the removed opt-out flag.
-    task.use_preferences = True
-    preferences = []
-    if task.use_preferences:
-        preference_scope = UserPreference.scope == "personal"
-        if task.project_id:
-            preference_scope = or_(
-                preference_scope,
-                and_(
-                    UserPreference.scope == "project",
-                    UserPreference.project_id == task.project_id,
-                ),
-            )
-        preferences = list(
-            (
-                await session.scalars(
-                    select(UserPreference)
-                    .where(
-                        UserPreference.user_id == owner_id,
-                        UserPreference.status == "confirmed",
-                        UserPreference.preference_type == "writing_style",
-                        preference_scope,
-                    )
-                    .order_by(
-                        (UserPreference.scope == "project").desc(),
-                        UserPreference.updated_at.desc(),
-                        UserPreference.id.desc(),
-                    )
-                    .limit(20)
-                )
-            ).all()
+    preference_scope = UserPreference.scope == "personal"
+    if task.project_id:
+        preference_scope = or_(
+            preference_scope,
+            and_(UserPreference.scope == "project", UserPreference.project_id == task.project_id),
         )
+    preferences = list(
+        (
+            await session.scalars(
+                select(UserPreference)
+                .where(
+                    UserPreference.user_id == owner_id,
+                    UserPreference.status == "confirmed",
+                    UserPreference.preference_type == "writing_style",
+                    preference_scope,
+                )
+                .order_by(
+                    (UserPreference.scope == "project").desc(),
+                    UserPreference.updated_at.desc(),
+                    UserPreference.id.desc(),
+                )
+                .limit(20)
+            )
+        ).all()
+    )
     ai_settings = await published_setting_section(session, "ai")
     file_settings = await published_setting_section(session, "files")
     feature_settings = await published_setting_section(session, "features")
@@ -1957,6 +1949,15 @@ async def prepare_ai_run(
         "untrusted_message_content": content,
         "source_message_id": message.id,
         "untrusted_documents": document_context,
+        "document_ids": document_ids,
+        "token_budget": {
+            "context_window": context_window,
+            "reserved_output_tokens": max_output_tokens,
+            "input_budget_tokens": input_budget,
+            "latest_input_tokens": latest_input_tokens,
+            "document_tokens": document_token_budget,
+            "current_article_tokens": current_article_budget,
+        },
         "untrusted_model_files": model_files,
         "retrieval_mode": "hybrid_rrf_rerank" if retrieval.enabled else "local_ordered",
         "untrusted_links": reference_links,
@@ -2056,24 +2057,6 @@ async def prepare_ai_run(
             business_id=run.id,
         )
         run.quota_reserved = 0
-    session.add(
-        ContextSnapshot(
-            task_id=task.id,
-            summary_id=memory_summary.id if memory_summary else None,
-            message_ids=[*[item.id for item in reversed(selected_recent_messages)], message.id],
-            document_ids=document_ids,
-            preference_ids=[item.id for item in selected_preferences],
-            skill_version_id=skill_version.id if skill_version else None,
-            token_budget={
-                "context_window": context_window,
-                "reserved_output_tokens": max_output_tokens,
-                "input_budget_tokens": input_budget,
-                "latest_input_tokens": latest_input_tokens,
-                "document_tokens": document_token_budget,
-                "current_article_tokens": current_article_budget,
-            },
-        )
-    )
     await session.flush()
 
 

@@ -48,6 +48,9 @@ def executable_command(text: str) -> str | None:
 async def create_preference(
     session: AsyncSession, owner_id: str, values: dict[str, Any]
 ) -> UserPreference:
+    if values.get("preference_type") != "writing_style":
+        raise ApiError(422, "PREFERENCE_TYPE_INVALID", "此接口仅用于保存写作风格。")
+    values = {key: value for key, value in values.items() if key != "confidence"}
     row = UserPreference(user_id=owner_id, source_type="explicit", status="confirmed", **values)
     session.add(row)
     await session.flush()
@@ -235,7 +238,7 @@ async def plan_action(
             action["skill_id"] = prior["skill_id"]
         return action
     if re.search(r"(?:开启|打开|启用|关闭|关掉|停用).*(?:偏好学习|使用偏好|偏好使用)", text):
-        return {"operation": "toggle", "enabled": not bool(re.search(r"关闭|关掉|停用", text))}
+        return {"operation": "help", "reply": "此开关已取消，请直接说明这次的写作要求。"}
     candidates = []
     for name, pattern in (
         ("delete", r"删除|移除|撤销"),
@@ -474,18 +477,8 @@ async def execute_action(
             for row in rows
         ), metadata
     if operation == "toggle":
-        task.use_preferences = action["enabled"]
-        session.add(
-            AuditLog(
-                actor_type="user",
-                actor_id=task.owner_id,
-                action="task.preferences.toggle",
-                target_type="task",
-                target_id=task.id,
-                details={"enabled": action["enabled"]},
-            )
-        )
-        return ("已开启" if task.use_preferences else "已关闭") + "当前任务的写作风格。", metadata
+        # A queued request from the previous release must not report a nonexistent write.
+        return "此开关已取消，请直接说明这次的写作要求。", metadata
     if operation in {"describe", "save", "update"}:
         value = (
             action.get("value")
@@ -524,14 +517,11 @@ async def execute_action(
                         "preference_type": "writing_style",
                         "value": value,
                         "scope": "personal",
-                        "confidence": 1,
                         "source_id": source_id,
                     },
                 )
             metadata["preference_id"] = row.id
-            return value + "\n\n已保存到设置 → 我的写作风格。" + (
-                "当前任务的偏好使用已关闭，保存不会自动开启它。" if not task.use_preferences else ""
-            ), metadata
+            return value + "\n\n已保存到设置 → 我的写作风格。", metadata
     row = await owned_preference(session, task.owner_id, action["preference_id"])
     if row.status == "revoked" or row.value != action["value"]:
         raise ApiError(409, "PREFERENCE_CHANGED", "该风格已经变化，请重新指定要操作的风格。")
@@ -543,10 +533,6 @@ async def execute_action(
         reply = f"已删除写作风格《{title(row)}》。"
     else:
         update_preference(session, row, {"status": "confirmed"})
-        task.use_preferences = True
-        reply = (
-            f"已确认写作风格《{title(row)}》并开启当前任务的偏好使用，"
-            "后续创作会参考它；当前文章未改动。"
-        )
+        reply = f"已确认写作风格《{title(row)}》。"
     metadata["preference_id"] = row.id
     return reply, metadata

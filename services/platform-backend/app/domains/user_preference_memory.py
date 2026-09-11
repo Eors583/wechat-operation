@@ -23,7 +23,6 @@ from app.models import (
     Task,
     User,
     UserMemoryEntry,
-    UserPreferenceMemory,
     utcnow,
 )
 from app.providers import ModelProvider, ProviderUnavailable, SecretProvider
@@ -227,8 +226,6 @@ def set_proposal(session: AsyncSession, row: Message, item: dict, *, owner_id: s
         setattr(record, field, item.get(field))
     for field in ("expires_at", "suggested_at"):
         setattr(record, field, datetime.fromisoformat(item[field]))
-    # Rollback copy only. Remove with the old-reader contract in a later release.
-    row.content_json = {**(row.content_json or {}), "preference_proposal": item}
 
 
 async def proposal_rows(
@@ -307,12 +304,6 @@ async def persist_memory_items(session: AsyncSession, owner_id: str, items: list
         ):
             setattr(row, field, item.get(field))
         row.source_at = datetime.fromisoformat(item["source_at"])
-    # Keep the previous image rollback-safe until its aggregate reader is retired.
-    legacy = await session.get(UserPreferenceMemory, owner_id, populate_existing=True)
-    if legacy is None:
-        legacy = UserPreferenceMemory(user_id=owner_id)
-        session.add(legacy)
-    legacy.items = items
 
 
 def memory_item(items: list[dict], key: str, project_id: str | None) -> dict | None:
