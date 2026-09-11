@@ -5,16 +5,26 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.domains.common import emit_outbox
 from app.domains.preference_learning import feedback_sentences
 from app.model_gateway import active_route_snapshot, generate_with_frozen_route
-from app.models import AuditLog, Message, OutboxEvent, Task, User, UserPreferenceMemory, utcnow
+from app.models import (
+    AuditLog,
+    Message,
+    OutboxEvent,
+    PreferenceProposal,
+    Task,
+    User,
+    UserMemoryEntry,
+    UserPreferenceMemory,
+    utcnow,
+)
 from app.providers import ModelProvider, ProviderUnavailable, SecretProvider
 
 PRIORITY = (
@@ -196,30 +206,115 @@ def memory_command(text: str) -> dict[str, str] | None:
 
 
 def proposal(row: Message) -> dict:
-    return dict((row.content_json or {}).get("preference_proposal") or {})
+    record = row.__dict__.get("preference_proposal_record")
+    return record.to_payload() if record else {}
 
 
-def set_proposal(row: Message, item: dict) -> None:
+def set_proposal(session: AsyncSession, row: Message, item: dict, *, owner_id: str) -> None:
+    record = row.__dict__.get("preference_proposal_record")
+    if record is None:
+        record = PreferenceProposal(id=row.id, user_id=owner_id)
+        row.preference_proposal_record = record
+        session.add(record)
+    for field in (
+        "key",
+        "value",
+        "evidence",
+        "project_id",
+        "status",
+        "base",
+        "previous_value",
+        "decision_message_id",
+    ):
+        setattr(record, field, item.get(field))
+    for field in ("expires_at", "suggested_at"):
+        setattr(record, field, datetime.fromisoformat(item[field]))
+    # Rollback copy only. Remove with the old-reader contract in a later release.
     row.content_json = {**(row.content_json or {}), "preference_proposal": item}
 
 
 async def proposal_rows(
     session: AsyncSession, owner_id: str, key: str | None = None
 ) -> list[Message]:
+    # Sessions disable autoflush; include suggestions from this same summary batch.
+    await session.flush()
     query = (
         select(Message)
-        .join(Task, Task.id == Message.task_id)
+        .join(PreferenceProposal, PreferenceProposal.id == Message.id)
         .where(
-            Task.owner_id == owner_id,
+            PreferenceProposal.user_id == owner_id,
             Message.role == "user",
-            Message.content_json["preference_proposal"]["status"].as_string().is_not(None),
         )
         .order_by(Message.created_at.desc(), Message.id.desc())
         .execution_options(populate_existing=True)
     )
     if key:
-        query = query.where(Message.content_json["preference_proposal"]["key"].as_string() == key)
+        query = query.where(PreferenceProposal.key == key)
     return list((await session.scalars(query)).all())
+
+
+def memory_payload(row: UserMemoryEntry) -> dict:
+    item = {
+        name: getattr(row, name)
+        for name in (
+            "key",
+            "value",
+            "evidence",
+            "project_id",
+            "status",
+            "source_type",
+            "source_message_id",
+            "confirmation_message_id",
+        )
+    }
+    item["source_at"] = row.source_at.isoformat()
+    return item
+
+
+async def memory_items(session: AsyncSession, owner_id: str) -> list[dict]:
+    await session.flush()
+    rows = await session.scalars(
+        select(UserMemoryEntry)
+        .where(UserMemoryEntry.user_id == owner_id)
+        .order_by(UserMemoryEntry.source_at, UserMemoryEntry.id)
+        .execution_options(populate_existing=True)
+    )
+    return [memory_payload(row) for row in rows]
+
+
+async def persist_memory_items(session: AsyncSession, owner_id: str, items: list[dict]) -> None:
+    await session.flush()
+    rows = {
+        (row.key, row.project_id): row
+        for row in await session.scalars(
+            select(UserMemoryEntry).where(UserMemoryEntry.user_id == owner_id)
+        )
+    }
+    for item in items:
+        row = rows.get((item["key"], item.get("project_id")))
+        if row and memory_payload(row) == item:
+            continue
+        if row is None:
+            row = UserMemoryEntry(user_id=owner_id)
+            session.add(row)
+        for field in (
+            "key",
+            "value",
+            "evidence",
+            "project_id",
+            "status",
+            "source_type",
+            "source_message_id",
+            "confirmation_message_id",
+        ):
+            setattr(row, field, item.get(field))
+        row.source_at = datetime.fromisoformat(item["source_at"])
+    # Keep the previous image rollback-safe until its aggregate reader is retired.
+    legacy = await session.get(UserPreferenceMemory, owner_id, populate_existing=True)
+    if legacy is None:
+        legacy = UserPreferenceMemory(user_id=owner_id)
+        session.add(legacy)
+    legacy.items = items
 
 
 def memory_item(items: list[dict], key: str, project_id: str | None) -> dict | None:
@@ -242,7 +337,7 @@ async def propose_memory(
     explicit: bool,
     project_id: str | None = None,
 ) -> bool:
-    """Suggestions live on their source message, never in the active memory profile."""
+    """Suggestions are independent records; only confirmation creates active memory."""
     if proposal(source):
         return False
     current = memory_item(items, key, project_id)
@@ -273,6 +368,7 @@ async def propose_memory(
         for row in recent
     )
     set_proposal(
+        session,
         source,
         {
             "key": key,
@@ -287,6 +383,7 @@ async def propose_memory(
             "expires_at": (utcnow() + timedelta(days=30)).isoformat(),
             "suggested_at": utcnow().isoformat(),
         },
+        owner_id=task.owner_id,
     )
     return explicit or repeated
 
@@ -328,7 +425,7 @@ async def decide_memory(
         return "这条偏好建议已失效。", items
     current = memory_item(items, candidate["key"], candidate.get("project_id"))
     if decision == "confirmed" and fingerprint(current) != candidate["base"]:
-        set_proposal(row, {**candidate, "status": "expired"})
+        set_proposal(session, row, {**candidate, "status": "expired"}, owner_id=task.owner_id)
         return "偏好已发生变化，这条旧建议未保存。", items
     if decision == "confirmed":
         items = [
@@ -351,7 +448,12 @@ async def decide_memory(
                 "source_at": utcnow().isoformat(),
             }
         )
-    set_proposal(row, {**candidate, "status": decision, "decision_message_id": source_id})
+    set_proposal(
+        session,
+        row,
+        {**candidate, "status": decision, "decision_message_id": source_id},
+        owner_id=task.owner_id,
+    )
     return {
         "confirmed": "已保存用户偏好。",
         "dismissed": "仅本次使用。",
@@ -363,8 +465,7 @@ async def apply_explicit_memory(
     session: AsyncSession, *, task: Task, source_id: str, action: dict[str, str]
 ) -> str:
     await session.scalar(select(User).where(User.id == task.owner_id).with_for_update())
-    memory = await session.get(UserPreferenceMemory, task.owner_id, populate_existing=True)
-    items = list(memory.items) if memory else []
+    items = await memory_items(session, task.owner_id)
     value = action["value"]
     now = utcnow().isoformat()
     if action["operation"] == "decide_preference":
@@ -392,7 +493,9 @@ async def apply_explicit_memory(
                     candidate.get("project_id") == items[index].get("project_id")
                     and candidate["status"] == "pending"
                 ):
-                    set_proposal(row, {**candidate, "status": "expired"})
+                    set_proposal(
+                        session, row, {**candidate, "status": "expired"}, owner_id=task.owner_id
+                    )
         reply = "已忘记这项偏好。" if len(matches) == 1 else "已忘记这些偏好。"
     else:
         if not 1 <= len(value) <= 200 or not feedback_sentences(value):
@@ -427,10 +530,7 @@ async def apply_explicit_memory(
         )
         reply = "保存为用户偏好？" if suggested else "没有新增待确认的偏好建议。"
     if action["operation"] != "decide_preference" or action["decision"] == "confirmed":
-        if not memory:
-            memory = UserPreferenceMemory(user_id=task.owner_id)
-            session.add(memory)
-        memory.items = items
+        await persist_memory_items(session, task.owner_id, items)
     session.add(
         AuditLog(
             actor_type="user",
@@ -452,16 +552,17 @@ async def private_preferences(
     query: str = "",
     run_type: str = "discussion",
 ) -> list[str]:
-    memory = await session.get(UserPreferenceMemory, owner_id)
-    if not memory:
-        return []
     terms = set(re.findall(r"[\u3400-\u9fff]{2}|[A-Za-z]{3,}", query.lower()))
     eligible = [
-        item
-        for item in memory.items
-        if item.get("status") == "active"
-        and item.get("source_type") in {"confirmed", "explicit"}
-        and item.get("project_id") in {None, project_id}
+        memory_payload(row)
+        for row in await session.scalars(
+            select(UserMemoryEntry).where(
+                UserMemoryEntry.user_id == owner_id,
+                UserMemoryEntry.status == "active",
+                UserMemoryEntry.source_type.in_(("confirmed", "explicit")),
+                or_(UserMemoryEntry.project_id.is_(None), UserMemoryEntry.project_id == project_id),
+            )
+        )
     ]
     project_keys = {item["key"] for item in eligible if item.get("project_id") == project_id}
     eligible = [
@@ -514,12 +615,11 @@ async def apply_writer_preference(
             or not feedback_sentences(value)
         ):
             return False
-        memory = await session.get(UserPreferenceMemory, task.owner_id, populate_existing=True)
         await propose_memory(
             session,
             task=task,
             source=source,
-            items=list(memory.items) if memory else [],
+            items=await memory_items(session, task.owner_id),
             key=key,
             value=value.strip(),
             evidence=evidence,
@@ -593,12 +693,11 @@ async def summarize_preferences(
         cutoff = await session.get(Message, cutoff.id, populate_existing=True)
         cutoff.content_json = {**(cutoff.content_json or {}), review_key: "completed"}
         return
-    memory = await session.get(UserPreferenceMemory, owner.id)
-    existing = (
-        {item["key"]: item for item in memory.items if item.get("project_id") == task.project_id}
-        if memory
-        else {}
-    )
+    existing = {
+        item["key"]: item
+        for item in await memory_items(session, owner.id)
+        if item.get("project_id") == task.project_id
+    }
     suggestions = [
         proposal(row)
         for row in await proposal_rows(session, owner.id)
@@ -662,7 +761,7 @@ async def summarize_preferences(
     )
     if not owner:
         return
-    memory = await session.get(UserPreferenceMemory, owner.id, populate_existing=True)
+    items = await memory_items(session, owner.id)
     cutoff = await session.get(Message, cutoff.id, populate_existing=True)
     if (cutoff.content_json or {}).get(review_key) == "completed":
         return
@@ -691,7 +790,7 @@ async def summarize_preferences(
             session,
             task=task,
             source=source,
-            items=list(memory.items) if memory else [],
+            items=items,
             key=key,
             value=value.strip(),
             evidence=evidence,

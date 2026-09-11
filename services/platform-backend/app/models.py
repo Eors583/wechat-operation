@@ -18,8 +18,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from app.security import new_uuid
 
@@ -242,6 +243,9 @@ class Message(Base, IdMixin):
     client_message_id: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, server_default=func.now(), nullable=False
+    )
+    preference_proposal_record: Mapped[PreferenceProposal | None] = relationship(
+        foreign_keys="PreferenceProposal.id", lazy="selectin", passive_deletes=True
     )
 
 
@@ -801,12 +805,93 @@ class UserPreference(Base, IdMixin, TimestampMixin):
 
 
 class UserPreferenceMemory(Base, TimestampMixin):
+    # Compatibility copy for the previous release; new reads use UserMemoryEntry.
     __tablename__ = "user_preference_memories"
 
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
     items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list, nullable=False)
+
+
+class UserMemoryEntry(Base, IdMixin, TimestampMixin):
+    __tablename__ = "user_memory_entries"
+    __table_args__ = (
+        UniqueConstraint("user_id", "project_id", "key", name="uq_memory_project_key"),
+        Index(
+            "uq_memory_personal_key",
+            "user_id",
+            "key",
+            unique=True,
+            postgresql_where=text("project_id IS NULL"),
+            sqlite_where=text("project_id IS NULL"),
+        ),
+        CheckConstraint("status IN ('active','revoked')", name="ck_memory_entry_status"),
+        Index("ix_memory_user_status", "user_id", "status"),
+    )
+
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("projects.id"))
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_message_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("messages.id"))
+    confirmation_message_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("messages.id")
+    )
+    source_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PreferenceProposal(Base):
+    __tablename__ = "preference_proposals"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('observed','pending','confirmed','dismissed','suppressed','expired')",
+            name="ck_preference_proposal_status",
+        ),
+        Index("ix_proposals_user_key_scope", "user_id", "key", "project_id"),
+    )
+
+    id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("messages.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    project_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("projects.id"))
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    base: Mapped[str] = mapped_column(String(64), nullable=False)
+    previous_value: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    suggested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decision_message_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("messages.id"))
+
+    def to_payload(self) -> dict[str, Any]:
+        result = {
+            name: getattr(self, name)
+            for name in (
+                "key",
+                "value",
+                "evidence",
+                "project_id",
+                "status",
+                "base",
+                "previous_value",
+            )
+        }
+        result.update(
+            expires_at=self.expires_at.isoformat(), suggested_at=self.suggested_at.isoformat()
+        )
+        if self.decision_message_id:
+            result["decision_message_id"] = self.decision_message_id
+        return result
 
 
 class TaskMemorySummary(Base, IdMixin):

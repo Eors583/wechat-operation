@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.common import audit
@@ -25,6 +25,7 @@ from app.models import (
     LibraryItem,
     Message,
     OfficialAccount,
+    PreferenceProposal,
     Project,
     RefreshToken,
     Skill,
@@ -32,6 +33,7 @@ from app.models import (
     Task,
     TaskMemorySummary,
     User,
+    UserMemoryEntry,
     UserPreference,
     UserPreferenceMemory,
     WechatAuthorizationState,
@@ -123,6 +125,9 @@ async def purge_account(
     template_ids = select(LayoutTemplate.id).where(LayoutTemplate.owner_id == user.id)
     skill_ids = select(Skill.id).where(Skill.owner_id == user.id)
     run_ids = select(AIRun.id).where(AIRun.owner_id == user.id)
+
+    await session.execute(delete(PreferenceProposal).where(PreferenceProposal.user_id == user.id))
+    await session.execute(delete(UserMemoryEntry).where(UserMemoryEntry.user_id == user.id))
 
     await session.execute(
         update(AuthIdentity)

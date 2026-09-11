@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import inspect
 
 from app.errors import ApiError
+from app.models import Message
 
 
 def json_value(value: Any) -> Any:
@@ -25,11 +26,19 @@ def json_value(value: Any) -> Any:
 
 def model_dict(model: Any, *, exclude: set[str] | None = None) -> dict[str, Any]:
     excluded = exclude or set()
-    return {
+    result = {
         column.key: json_value(getattr(model, column.key))
         for column in inspect(model).mapper.column_attrs
         if column.key not in excluded
     }
+    if isinstance(model, Message) and "content_json" in result:
+        content = {**(result["content_json"] or {})}
+        content.pop("preference_proposal", None)
+        record = model.__dict__.get("preference_proposal_record")
+        if record is not None:
+            content["preference_proposal"] = record.to_payload()
+        result["content_json"] = content
+    return result
 
 
 def encode_cursor(created_at: datetime, identifier: str) -> str:
