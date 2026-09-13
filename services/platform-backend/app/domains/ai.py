@@ -56,6 +56,7 @@ from app.model_gateway import (
     freeze_preferred_deployment_snapshot,
     generate_with_frozen_route,
 )
+from app.model_limits import estimate_tokens
 from app.models import (
     AIRun,
     AIRunAttempt,
@@ -276,13 +277,6 @@ def generated_article_content(content: dict[str, Any]) -> dict[str, Any]:
             return enforce_article_body_boundary(document, title_candidates)
         content = parsed
     raise ApiError(422, "ARTICLE_CONTENT_INVALID", "文章内容嵌套层数过多。")
-
-
-def estimate_tokens(text: str) -> int:
-    """Conservative tokenizer-independent estimate for mixed Chinese and Latin text."""
-    chinese = sum(1 for character in text if "\u2e80" <= character <= "\u9fff")
-    other = max(0, len(text) - chinese)
-    return chinese + (other + 3) // 4
 
 
 def article_minimum_length(context: dict[str, Any]) -> int:
@@ -2282,7 +2276,7 @@ async def process_ai_run(
 
             context = await fit_context(
                 context,
-                budget=context_budget(snapshot, prompt),
+                budget=context_budget(snapshot, prompt, purpose=purpose, context=context),
                 summarize=summarize,
                 progress=reading_progress,
                 cache=long_context_cache,

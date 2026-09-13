@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.errors import ApiError
+from app.model_limits import estimate_tokens, output_token_limit
 
 MAX_SOURCE_CHARACTERS = 2_000_000
 MAX_SUMMARY_CALLS = 160
@@ -205,13 +206,30 @@ def summary_prompt(part: dict[str, Any]) -> str:
     )
 
 
-def context_budget(snapshot: dict[str, Any], prompt: str) -> int:
+def context_budget(
+    snapshot: dict[str, Any],
+    prompt: str,
+    *,
+    purpose: str | None = None,
+    context: dict[str, Any] | None = None,
+) -> int:
     configs = snapshot.get("execution_configs") or [{}]
     available = min(
-        int(c.get("context_window") or 32768) - max(16384, int(c.get("max_output_tokens") or 4096))
+        (int(c.get("context_window") or 0) if int(c.get("context_window") or 0) > 0 else 32768)
+        - (
+            output_token_limit(
+                purpose or str(snapshot.get("purpose", "")),
+                int(c.get("max_output_tokens") or 0),
+                private_user_preferences=bool((context or {}).get("private_user_preferences")),
+            )
+            or 16384
+        )
         for c in configs
     )
-    return max(0, available - len(prompt.encode()) - 4096)
+    # Return a conservative byte allowance for fit_context: one input byte may
+    # consume at most one token. The prompt uses our shared token estimate plus
+    # 4096 tokens of headroom for estimation error, wrappers and provider instructions.
+    return max(0, available - estimate_tokens(prompt) - 4096)
 
 
 def requires_local_compaction(snapshot: dict[str, Any]) -> bool:

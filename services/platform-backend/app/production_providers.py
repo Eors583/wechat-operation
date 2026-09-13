@@ -19,6 +19,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from app.domains.preference_output import MARKER
 from app.model_files import upload_manus_file
+from app.model_limits import output_token_limit
 from app.providers import (
     CompletedUploadPart,
     DocumentProcessingResult,
@@ -295,22 +296,11 @@ class OpenAICompatibleModelProvider:
                 "The application removes this metadata before displaying the text."
             )
         headers = {"Authorization": f"Bearer {self._api_key}"}
-        default_output_limit = {
-            "intent_detection": 128,
-            "article_planning": 3_072,
-            "article_generation": 16_384,
-            "article_revision": 16_384,
-            "fast_task": 4_096,
-            "content_check": 256,
-            "memory_summary": 4096 if context.get("private_user_preferences") else 512,
-            "vision": 2_048,
-            "layout_extraction": 4_096,
-        }.get(purpose)
-        output_limit = self._max_output_tokens
-        if default_output_limit is not None:
-            output_limit = (
-                min(output_limit, default_output_limit) if output_limit else default_output_limit
-            )
+        output_limit = output_token_limit(
+            purpose,
+            self._max_output_tokens or 0,
+            private_user_preferences=bool(context.get("private_user_preferences")),
+        )
         if self._api_style == "responses":
             url = _endpoint(self._api_base, "responses")
             payload: dict[str, Any] = {
