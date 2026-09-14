@@ -11,6 +11,7 @@ from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import httpx
+from markdownify import markdownify
 
 from app.layout_content import extract_content_blocks
 from app.providers import LayoutExtractionResult, ProviderUnavailable, WebReferenceContent
@@ -147,6 +148,25 @@ class WeChatPublicLayoutExtractionProvider:
         text = "\n".join(sample.text for sample in parser.samples if sample.text).strip()
         if len(re.sub(r"\s+", "", text)) < 80:
             raise ProviderUnavailable("没有读取到完整微信公众号正文，请稍后重试或直接粘贴原文。")
+        return WebReferenceContent(
+            requested_url=clean_url,
+            final_url=clean_url,
+            title=parser.title or "微信公众号文章",
+            text=text,
+            content_type="text/html",
+        )
+
+    async def fetch_article_markdown(self, *, source_url: str) -> WebReferenceContent:
+        """Read full article blocks while retaining headings, lists and quotations."""
+        clean_url = _validate_url(source_url)
+        parser = await self._load_parser(clean_url)
+        text = markdownify(
+            "\n".join(block["html"] for block in parser.content_blocks),
+            heading_style="ATX",
+            strip=["img", "a"],
+        ).strip()
+        if len(re.sub(r"\s+", "", text)) < 80:
+            raise ProviderUnavailable("未读取到选定文章的完整正文，不能用旧文章替代。")
         return WebReferenceContent(
             requested_url=clean_url,
             final_url=clean_url,

@@ -9,15 +9,13 @@ import struct
 import time
 import zlib
 from dataclasses import dataclass
-from datetime import UTC, timedelta
+from datetime import UTC, date, timedelta
 from typing import Any, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from xml.etree import ElementTree
 
 import httpx
-from bs4 import BeautifulSoup
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from markdownify import markdownify
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,6 +41,14 @@ logger = logging.getLogger(__name__)
 class WechatPublishedContentError(ProviderUnavailable):
     def __init__(self, code: int) -> None:
         super().__init__("WeChat published content is unavailable")
+        self.code = code
+
+
+class WechatProfileSourceError(ProviderUnavailable):
+    """A safe explanation for an unverified latest-article selection."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
         self.code = code
 
 
@@ -223,7 +229,7 @@ class WechatOpenPlatformClient:
                     f"WeChat Open Platform rejected the configured credentials ({code})",
                     code=code,
                 )
-            if path == "/cgi-bin/freepublish/batchget":
+            if path in {"/cgi-bin/freepublish/batchget", "/datacube/getarticletotaldetail"}:
                 raise WechatPublishedContentError(code)
             raise ProviderUnavailable(f"WeChat Open Platform returned error {code}")
         return cast(dict[str, Any], result)
@@ -330,94 +336,110 @@ class WechatOpenPlatformClient:
             raise ProviderUnavailable("WeChat publish query returned an invalid status")
         return status
 
-    async def recent_published_articles(
+    async def recent_publication_records(
         self, *, access_token: str, limit: int = 20
-    ) -> list[dict[str, Any]]:
-        """Read published content only; WeChat exposes update time, not publication time."""
+    ) -> dict[str, Any]:
+        """Select by official publication date, never by material update order."""
         if not 1 <= limit <= 20:
             raise ValueError("Published article limit must be between 1 and 20")
+        cutoff = (utcnow() + timedelta(hours=8)).date() - timedelta(days=1)
+        day = cutoff
         articles: list[dict[str, Any]] = []
-        seen_articles: set[str] = set()
-        seen_messages: set[str] = set()
-        offset = 0
-        for _page in range(20):
+        seen: set[str] = set()
+        days_read = 0
+        # The official daily publication catalogue starts on 2025-11-01.
+        while day >= date(2025, 11, 1):
             result = await self._post(
-                "/cgi-bin/freepublish/batchget",
-                {"offset": offset, "count": 20, "no_content": 0},
+                "/datacube/getarticletotaldetail",
+                {"begin_date": day.isoformat(), "end_date": day.isoformat()},
                 access_token=access_token,
                 token_parameter="access_token",
             )
-            items = result.get("item")
-            total = result.get("total_count")
-            if not isinstance(items, list) or not isinstance(total, int) or total < 0:
-                raise ProviderUnavailable("WeChat published article response is incomplete")
-            if not items:
-                break
-            new_messages = 0
+            days_read += 1
+            if result.get("is_delay") not in (False, "false"):
+                raise WechatProfileSourceError(
+                    "WECHAT_PROFILE_SOURCE_DELAYED", "微信发表记录尚有延迟，不能确认最新文章。"
+                )
+            items = result.get("list")
+            if not isinstance(items, list):
+                raise WechatProfileSourceError(
+                    "WECHAT_PROFILE_SOURCE_INVALID", "微信发表记录不完整。"
+                )
+            daily: list[dict[str, Any]] = []
             for item in items:
-                if not isinstance(item, dict):
-                    raise ProviderUnavailable("WeChat published article entry is invalid")
-                article_id = item.get("article_id")
-                content = item.get("content")
-                updated_at = item.get("update_time")
-                if (
-                    not isinstance(article_id, str)
-                    or not article_id
-                    or not isinstance(content, dict)
-                    or not isinstance(content.get("news_item"), list)
-                    or not isinstance(updated_at, int)
-                    or updated_at < 0
-                ):
-                    raise ProviderUnavailable("WeChat published article content is incomplete")
-                if article_id in seen_messages:
-                    continue
-                seen_messages.add(article_id)
-                new_messages += 1
-                for index, article in enumerate(content["news_item"]):
-                    if not isinstance(article, dict):
-                        raise ProviderUnavailable("WeChat published article content is invalid")
-                    if article.get("is_deleted"):
-                        continue
-                    title = article.get("title")
-                    body = article.get("content")
-                    if not isinstance(title, str) or not isinstance(body, str):
-                        raise ProviderUnavailable("WeChat published article text is incomplete")
-                    if not title.strip() or not body.strip():
-                        continue
-                    url = article.get("url")
-                    url = url if isinstance(url, str) else ""
-                    identity = url or f"{article_id}:{index}"
-                    if identity in seen_articles:
-                        continue
-                    seen_articles.add(identity)
-                    soup = BeautifulSoup(body, "html.parser")
-                    for element in soup.find_all(["script", "style", "noscript", "svg", "form"]):
-                        element.decompose()
-                    if not soup.get_text(strip=True).strip("\u200b\ufeff"):
-                        continue
-                    text = markdownify(str(soup), heading_style="ATX", strip=["img", "a"]).strip()
-                    if not text:
-                        continue
-                    articles.append(
-                        {
-                            "article_id": article_id,
-                            "article_index": index,
-                            "title": title,
-                            "content": body,
-                            "text": text,
-                            "url": url,
-                            "updated_at": updated_at,
-                        }
+                if not isinstance(item, dict) or item.get("ref_date") != day.isoformat():
+                    raise WechatProfileSourceError(
+                        "WECHAT_PROFILE_SOURCE_INVALID", "微信发表日期不符合查询范围。"
                     )
-            offset += len(items)
-            if len(articles) >= limit or offset >= total:
-                break
-            if not new_messages:
-                raise ProviderUnavailable("WeChat published article pagination made no progress")
-        else:
-            raise ProviderUnavailable("WeChat published article pagination exceeded 20 pages")
-        articles.sort(key=lambda article: article["updated_at"], reverse=True)
-        return articles[:limit]
+                msgid = item.get("msgid")
+                title, url = item.get("title"), item.get("content_url")
+                parts = msgid.split("_") if isinstance(msgid, str) else []
+                if (
+                    len(parts) != 2
+                    or not all(part.isdecimal() for part in parts)
+                    or int(parts[1]) < 1
+                    or not isinstance(title, str)
+                    or not title.strip()
+                    or not isinstance(url, str)
+                ):
+                    raise WechatProfileSourceError(
+                        "WECHAT_PROFILE_SOURCE_INVALID", "微信发表记录缺少文章标识或链接。"
+                    )
+                parsed = urlsplit(url)
+                query = dict(parse_qsl(parsed.query))
+                if (
+                    parsed.scheme not in {"http", "https"}
+                    or parsed.netloc != "mp.weixin.qq.com"
+                    or parsed.path != "/s"
+                    or query.get("mid") != parts[0]
+                    or query.get("idx") != str(int(parts[1]))
+                    or not query.get("__biz")
+                ):
+                    raise WechatProfileSourceError(
+                        "WECHAT_PROFILE_SOURCE_INVALID", "微信发表记录的文章链接与标识不一致。"
+                    )
+                if msgid in seen:
+                    continue
+                seen.add(msgid)
+                daily.append(
+                    {
+                        "article_id": msgid,
+                        "publication_group": parts[0],
+                        "article_index": int(parts[1]),
+                        "title": title,
+                        "url": urlunsplit(parsed._replace(scheme="https")),
+                        "published_date": day.isoformat(),
+                    }
+                )
+            remaining = limit - len(articles)
+            if len(daily) > remaining and len({a["publication_group"] for a in daily}) > 1:
+                # Message IDs are identifiers, not timestamps. Never guess which batch
+                # was published later when the boundary cuts across several daily batches.
+                raise WechatProfileSourceError(
+                    "WECHAT_PROFILE_TIME_AMBIGUOUS",
+                    "第20篇所在日期有多批发表内容，官方仅提供日期，无法确认批次先后。",
+                )
+            daily.sort(key=lambda a: (a["publication_group"], a["article_index"]))
+            articles.extend(daily[:remaining])
+            if len(articles) == limit:
+                return {
+                    "articles": articles,
+                    "selection": {
+                        "policy": "latest-20-by-publication-date-v2",
+                        "source": "wechat_getarticletotaldetail",
+                        "as_of_date": cutoff.isoformat(),
+                        "oldest_published_date": day.isoformat(),
+                        "newest_published_date": articles[0]["published_date"],
+                        "date_precision": "day",
+                        "days_queried": days_read,
+                        "same_publication_order": "article_index_ascending",
+                    },
+                }
+            day -= timedelta(days=1)
+        raise WechatProfileSourceError(
+            "WECHAT_PROFILE_INSUFFICIENT_ARTICLES",
+            f"官方可查询的发表记录仅找到{len(articles)}篇，未达到20篇。",
+        )
 
     async def component_access_token(
         self, *, component_appid: str, component_appsecret: str, verify_ticket: str

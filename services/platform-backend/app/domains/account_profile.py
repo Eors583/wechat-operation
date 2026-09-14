@@ -25,6 +25,7 @@ from app.providers import (
     SecretProvider,
 )
 from app.wechat_open_platform import WechatOpenPlatformClient, ensure_authorizer_access_token
+from app.wechat_public_layout import WeChatPublicLayoutExtractionProvider
 
 from .common import audit, create_job, emit_outbox
 
@@ -210,6 +211,7 @@ async def process_account_profile(
     client: WechatOpenPlatformClient,
     model: ModelProvider,
     safety: ContentSafetyProvider,
+    article_reader: WeChatPublicLayoutExtractionProvider,
 ) -> JobRecord | None:
     job = await session.scalar(select(JobRecord).where(JobRecord.id == job_id).with_for_update())
     if not job or job.job_type != PROFILE_JOB or job.status in {"completed", "failed", "cancelled"}:
@@ -251,31 +253,39 @@ async def process_account_profile(
     )
     if not job or job.status in {"completed", "failed", "cancelled"}:
         return job
-    articles = await client.recent_published_articles(access_token=access_token, limit=20)
+    publication = await client.recent_publication_records(access_token=access_token, limit=20)
+    job.frozen_payload = {**job.frozen_payload, "selection": publication["selection"]}
     sources: list[dict[str, Any]] = []
-    for article in articles:
-        body = article["text"]
+    for article in publication["articles"]:
+        try:
+            content = await article_reader.fetch_article_markdown(source_url=article["url"])
+        except Exception as exc:
+            raise ApiError(
+                502, "WECHAT_PROFILE_ARTICLE_UNAVAILABLE", "最新20篇中有文章正文读取失败。"
+            ) from exc
+        body = content.text
         if body:
             sources.append(
                 {
-                    "article_id": f"{article['article_id']}:{article['article_index']}",
+                    "article_id": article["article_id"],
                     "title": article["title"],
                     "source_url": article["url"],
-                    "updated_at": article["updated_at"],
+                    "published_date": article["published_date"],
+                    "article_index": article["article_index"],
                     "content_hash": hashlib.sha256(body.encode()).hexdigest(),
                     "source_characters": len(body),
                     "text": body,
                 }
             )
-    if not sources:
-        raise ApiError(422, "WECHAT_PROFILE_NO_ARTICLES", "微信未返回可读取的已发表文章正文。")
+    if len(sources) != 20:
+        raise ApiError(422, "WECHAT_PROFILE_INSUFFICIENT_ARTICLES", "未读取到完整的最新20篇。")
     if sum(item["source_characters"] for item in sources) > 2_000_000:
         raise ApiError(413, "WECHAT_PROFILE_SOURCE_LIMIT", "公众号文章超出本次学习容量。")
     route = await active_route_snapshot(session, purpose="article_planning", settings=settings)
     job.frozen_payload = {
         **job.frozen_payload,
         "model_route": route,
-        "prompt_version": "account-profile-v1",
+        "prompt_version": "account-profile-v2",
         "sample_count": len(sources),
         "samples": [{k: v for k, v in source.items() if k != "text"} for source in sources],
     }
@@ -352,8 +362,9 @@ async def process_account_profile(
         "sample_count": len(sources),
         "sample_limit": 20,
         "learned_at": utcnow().isoformat(),
-        "source": "wechat_freepublish_batchget",
-        "prompt_version": "account-profile-v1",
+        "source": "wechat_getarticletotaldetail",
+        "prompt_version": "account-profile-v2",
+        "selection": publication["selection"],
         "samples": job.frozen_payload["samples"],
     }
     job.status = job.stage = "completed"

@@ -57,9 +57,11 @@ from app.retrieval_routing import build_route_aware_retrieval_service
 from app.web_references import SafeHttpWebReferenceProvider
 from app.wechat_open_platform import (
     WechatOpenPlatformClient,
+    WechatProfileSourceError,
     WechatPublishedContentError,
     ensure_authorizer_access_token,
 )
+from app.wechat_public_layout import WeChatPublicLayoutExtractionProvider
 
 
 def _run(coroutine: Any) -> Any:
@@ -108,6 +110,9 @@ async def _process_account_profile(job_id: str) -> dict[str, Any]:
                     client=WechatOpenPlatformClient(),
                     model=providers.model,
                     safety=providers.content_safety,
+                    article_reader=WeChatPublicLayoutExtractionProvider(
+                        article_apis=await _wechat_article_api_configs(session, secrets)
+                    ),
                 )
             except Exception as exc:
                 await session.rollback()
@@ -156,6 +161,9 @@ async def _process_account_profile(job_id: str) -> dict[str, Any]:
                     if isinstance(exc, WechatPublishedContentError):
                         job.error_code = f"WECHAT_PROFILE_API_{exc.code}"
                         job.error_message = "微信拒绝读取已发表内容，请确认公众号资格及授权权限。"
+                    if isinstance(exc, WechatProfileSourceError):
+                        job.error_code = exc.code
+                        job.error_message = str(exc)
                     account = await session.scalar(
                         select(OfficialAccount)
                         .where(
