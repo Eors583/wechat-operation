@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
+from app.layout_content import wechat_video_attributes
 from app.models import OfficialAccount, WechatPlatformConfig, utcnow
 from app.providers import (
     ProviderAuthenticationError,
@@ -103,8 +104,10 @@ def _compatible_draft_html(html: str) -> str:
                     "width": "100%", "height": "360",
                     "frameborder": "0", "allowfullscreen": "true",
                 })
+                player.attrs.update(wechat_video_attributes(link))
+                player["scrolling"] = str(player.get("scrolling", "no"))
                 image = link.find("img", src=True)
-                cover = str(image["src"] if image else link.get("data-cover", ""))
+                cover = str(link.get("data-cover") or (image["src"] if image else ""))
                 if cover:
                     cover_url = urlsplit(cover)
                     if (

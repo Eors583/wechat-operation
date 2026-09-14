@@ -6,7 +6,7 @@ import ipaddress
 import re
 from collections.abc import Iterator
 from html import escape
-from urllib.parse import unquote, urlparse, urlunparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
 
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
@@ -132,6 +132,51 @@ def _profile_attributes(element: Tag) -> dict[str, str]:
     return attributes
 
 
+def wechat_video_attributes(element: Tag) -> dict[str, str]:
+    """Keep native video metadata on the static preview through repeated cleaning."""
+    source = str(element.get("data-src") or element.get("href") or "")
+    try:
+        parsed = urlparse(source)
+        query = parse_qs(parsed.query)
+    except ValueError:
+        return {}
+    video_id = str(element.get("data-mpvid") or query.get("vid", [""])[0])
+    if not re.fullmatch(r"wxv_[0-9]{1,30}", video_id):
+        return {}
+    if source and (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname != "mp.weixin.qq.com"
+        or parsed.path != "/mp/readtemplate"
+        or query.get("action") != ["mpvideo"]
+        or query.get("vid") != [video_id]
+    ):
+        return {}
+    attrs = {
+        "data-mpvid": video_id,
+        "data-src": "https://mp.weixin.qq.com/mp/readtemplate?" + urlencode({
+            "t": "pages/video_player_tmpl", "action": "mpvideo", "auto": "0", "vid": video_id,
+        }),
+    }
+    cover = _safe_url(unquote(str(element.get("data-cover") or "")), image=True)
+    if cover:
+        attrs["data-cover"] = cover
+    for key in ("data-vidtype", "data-w", "width", "height", "frameborder"):
+        value = str(element.get(key, ""))
+        if re.fullmatch(r"[0-9]{1,5}%?", value):
+            attrs[key] = value
+    ratio = str(element.get("data-ratio", ""))
+    if re.fullmatch(r"[0-9]{1,3}(?:\.[0-9]{1,18})?", ratio) and float(ratio) > 0:
+        attrs["data-ratio"] = ratio
+    style = str(element.get("style", ""))
+    if style:
+        attrs["style"] = _safe_style(style)
+    if element.has_attr("allowfullscreen"):
+        attrs["allowfullscreen"] = "true"
+    if str(element.get("scrolling", "")) in {"yes", "no", "auto"}:
+        attrs["scrolling"] = str(element["scrolling"])
+    return attrs
+
+
 def native_wechat_profile_cards(value: str) -> str:
     """Use native account components in the draft payload, not the preview artwork."""
     soup = BeautifulSoup(value, "html.parser")
@@ -198,7 +243,10 @@ def sanitize_content_html(value: str) -> str:
             element.decompose()
             continue
         if name in _MEDIA_TAGS:
-            url = _safe_url(str(element.get("data-src") or element.get("src") or ""))
+            video_attributes = wechat_video_attributes(element)
+            url = video_attributes.get("data-src") or _safe_url(
+                str(element.get("data-src") or element.get("src") or ""),
+            )
             replacement = soup.new_tag("a" if url else "span")
             cover = _safe_url(
                 unquote(str(element.get("data-cover") or element.get("poster") or "")), image=True,
@@ -217,17 +265,22 @@ def sanitize_content_html(value: str) -> str:
                 replacement.string = "此媒体请在原文查看"
             if url:
                 replacement.attrs = {"href": url, "target": "_blank", "rel": "noopener noreferrer"}
+            if video_attributes:
+                replacement.attrs.update(video_attributes)
+                replacement["style"] = _safe_style(str(element.get("style", "")))
             element.replace_with(replacement)
             continue
         if name not in _TAGS:
             element.unwrap()
             continue
         original = dict(element.attrs)
+        video_attributes = wechat_video_attributes(element) if name == "a" else {}
         profile_attributes = (
             _profile_attributes(element)
             if name == "figure" and element.get("data-profile-card") == "true" else {}
         )
         element.attrs = {}
+        element.attrs.update(video_attributes)
         if profile_attributes:
             element.attrs.update(profile_attributes)
             element["data-profile-card"] = "true"
