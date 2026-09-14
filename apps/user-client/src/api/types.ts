@@ -295,6 +295,7 @@ export interface LayoutTemplate {
 }
 
 export interface OfficialAccount {
+  isDefault?: BackendSchemas['OfficialAccountResponse']['is_default']
   id: string
   name: string
   avatarText: string
@@ -561,6 +562,7 @@ export interface UserApi {
     previousAccountIds?: string[],
   ): Promise<OfficialAccount | null>
   disconnectOfficialAccount(id: string): Promise<void>
+  setDefaultOfficialAccount(id: string): Promise<OfficialAccount>
   listTemplatesPage(
     accountId?: string | null,
     cursor?: string,

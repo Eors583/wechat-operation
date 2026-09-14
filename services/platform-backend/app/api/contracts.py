@@ -703,6 +703,7 @@ class AuthorizationUrlResponse(ContractModel):
 
 class OfficialAccountResponse(ContractModel):
     id: str
+    is_default: bool = False
     name: str
     avatar_url: str | None
     status: str

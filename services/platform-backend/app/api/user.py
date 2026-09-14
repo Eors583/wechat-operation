@@ -2947,6 +2947,7 @@ def _official_account_public(account: OfficialAccount) -> dict[str, Any]:
         ui_status = "connected"
     return {
         "id": account.id,
+        "is_default": account.technical_metadata.get("is_default") is True,
         "name": account.name,
         "avatar_url": account.avatar_url,
         "status": account.status,
@@ -2969,6 +2970,43 @@ async def get_official_account(
     if profile_needs_learning(account.writing_profile) and account.status == "connected":
         if await enqueue_account_profile_learning(session, account=account, only_if_needed=True):
             await session.commit()
+    return _official_account_public(account)
+
+
+@router.put(
+    "/official-accounts/{account_id}/default", response_model=contract.OfficialAccountResponse
+)
+async def set_default_official_account(
+    account_id: str,
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+    limiter: RateLimiter = Depends(rate_limiter),
+) -> dict[str, Any]:
+    await limiter.check(f"default-account:{user.id}", 30, 60)
+    # Serialize choices for this owner, including simultaneous selections of different accounts.
+    await session.scalar(select(User).where(User.id == user.id).with_for_update())
+    accounts = list(await session.scalars(
+        select(OfficialAccount)
+        .where(OfficialAccount.owner_id == user.id, OfficialAccount.deleted_at.is_(None))
+        .order_by(OfficialAccount.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ))
+    account = next((item for item in accounts if item.id == account_id), None)
+    if account is None:
+        raise ApiError(404, "OFFICIAL_ACCOUNT_NOT_FOUND", "公众号不存在。")
+    if account.status != "connected":
+        raise ApiError(409, "OFFICIAL_ACCOUNT_UNAVAILABLE", "请先重新授权该公众号。")
+    for item in accounts:
+        is_default = item.id == account.id
+        if (item.technical_metadata.get("is_default") is True) != is_default:
+            item.technical_metadata = {**item.technical_metadata, "is_default": is_default}
+    audit(
+        session, actor_type="user", actor_id=user.id,
+        action="official_account.set_default", target_type="official_account",
+        target_id=account.id, request_id=None, details={},
+    )
+    await session.commit()
     return _official_account_public(account)
 
 

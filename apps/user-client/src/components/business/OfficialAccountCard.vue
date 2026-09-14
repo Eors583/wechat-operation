@@ -3,8 +3,8 @@ import { computed } from 'vue'
 import type { OfficialAccount } from '@/api/types'
 import AppButton from '@/components/base/AppButton.vue'
 
-const props = defineProps<{ account: OfficialAccount }>()
-defineEmits<{ detail: []; templates: []; reconnect: [] }>()
+const props = defineProps<{ account: OfficialAccount; settingDefault?: boolean }>()
+defineEmits<{ detail: []; templates: []; reconnect: []; 'set-default': [] }>()
 
 const status = computed(
   () =>
@@ -47,6 +47,12 @@ const status = computed(
       />
       <AppButton variant="ghost" label="查看详情" @click="$emit('detail')" />
       <AppButton variant="outline" label="排版管理" @click="$emit('templates')" />
+      <AppButton
+        variant="ghost"
+        :label="account.isDefault ? '默认公众号' : '设为默认公众号'"
+        :disabled="settingDefault || account.isDefault || account.status !== 'connected'"
+        @click="$emit('set-default')"
+      />
     </q-card-actions>
   </q-card>
 </template>

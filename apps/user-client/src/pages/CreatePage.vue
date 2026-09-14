@@ -17,6 +17,7 @@ import type {
   Attachment,
   AttachmentUploadProgress,
   LayoutTemplate,
+  OfficialAccount,
   Message,
   RunStage,
   TaskBundle,
@@ -33,7 +34,6 @@ import PreferenceConfirmationCard from '@/components/business/PreferenceConfirma
 import { usePublicSettings } from '@/composables/usePublicSettings'
 import { useLocalDraftSave } from '@/composables/useLocalDraftSave'
 import { renderSafeMarkdown } from '@/utils/safeMarkdown'
-import { defaultArticleTemplate } from '@/utils/articleDownload'
 
 const route = useRoute()
 const router = useRouter()
@@ -226,26 +226,64 @@ const loadedSkills = computed(() => [
 ])
 const articleVisible = ref(false)
 const selectedArticle = ref<Article | null>(null)
+const previewAccountId = ref<string | null>(null)
+const previewAccountsQuery = useQuery({
+  queryKey: ['accounts', 'article-preview'],
+  queryFn: async () => {
+    const items: OfficialAccount[] = []
+    let cursor: string | undefined
+    do {
+      const page = await api.listOfficialAccountsPage(cursor, 100)
+      items.push(...page.items)
+      cursor = page.nextCursor
+    } while (cursor)
+    return items.filter((account) => account.status === 'connected')
+  },
+  enabled: computed(() => articleVisible.value),
+})
+const previewAccounts = computed(() => previewAccountsQuery.data.value ?? [])
 let previewRequest = 0
 const previewTemplateId = ref<string | null>(null)
 const previewTemplateChosen = ref(false)
+const selectPreviewAccount = (id: string | null) => {
+  previewTemplateChosen.value = false
+  previewTemplateId.value = null
+  previewAccountId.value = id
+}
+watch([previewAccounts, articleVisible], ([accounts, visible]) => {
+  if (!visible || accounts.some((account) => account.id === previewAccountId.value)) return
+  selectPreviewAccount(
+    accounts.find((account) => account.isDefault)?.id ??
+      accounts.find((account) => account.id === selectedArticle.value?.accountId)?.id ??
+      accounts[0]?.id ??
+      null,
+  )
+})
 const selectPreviewTemplate = (id: string | null) => {
   previewTemplateChosen.value = true
   previewTemplateId.value = id
 }
 const previewTemplatesQuery = useQuery({
-  queryKey: ['templates', 'article-preview'],
-  queryFn: () => api.listTemplatesPage(undefined, undefined, 100),
-  enabled: computed(() => articleVisible.value && Boolean(selectedArticle.value)),
+  queryKey: computed(() => ['templates', 'article-preview', previewAccountId.value]),
+  queryFn: async () => {
+    const accountId = previewAccountId.value
+    const items: LayoutTemplate[] = []
+    let cursor: string | undefined
+    do {
+      const page = await api.listTemplatesPage(accountId, cursor, 100)
+      items.push(...page.items)
+      cursor = page.nextCursor
+    } while (cursor)
+    return items
+  },
+  enabled: computed(() => articleVisible.value && Boolean(previewAccountId.value)),
 })
 const previewTemplates = computed<LayoutTemplate[]>(() =>
-  (previewTemplatesQuery.data.value?.items ?? []).filter(
+  (previewTemplatesQuery.data.value ?? []).filter(
     (template) =>
       template.enabled &&
       Boolean(template.versionId) &&
-      (!selectedArticle.value?.accountId ||
-        template.accountId === null ||
-        template.accountId === selectedArticle.value.accountId),
+      template.accountId === previewAccountId.value,
   ),
 )
 const previewTemplate = computed(
@@ -400,17 +438,16 @@ watch(
   { immediate: true },
 )
 watch(
-  [selectedArticle, previewTemplates],
-  ([currentArticle, templates], [previousArticle]) => {
+  [previewAccountId, previewTemplates],
+  ([accountId, templates], [previousAccountId]) => {
     if (
-      currentArticle?.id === previousArticle?.id &&
-      (previewTemplateChosen.value || Boolean(currentArticle?.layoutTemplate)) &&
+      accountId === previousAccountId &&
+      previewTemplateChosen.value &&
       templates.some((template) => template.id === previewTemplateId.value)
     )
       return
-    previewTemplateId.value = currentArticle
-      ? (defaultArticleTemplate(currentArticle, templates)?.id ?? null)
-      : null
+    previewTemplateId.value =
+      templates.find((template) => template.isDefault)?.id ?? templates[0]?.id ?? null
   },
   { immediate: true },
 )
@@ -876,7 +913,8 @@ const openArticle = async (message: Message) => {
     const resolved = await api.getArticle(message.articleId)
     if (request !== previewRequest) return
     previewTemplateChosen.value = false
-    previewTemplateId.value = resolved.templateId
+    previewTemplateId.value = null
+    previewAccountId.value = null
     selectedArticle.value = resolved
     articleVisible.value = true
   } catch (error) {
@@ -891,7 +929,11 @@ const openArticle = async (message: Message) => {
 const editArticle = async () => {
   await articlePreviewPanel.value?.saveNow()
   if (articlePreviewPanel.value?.dirty || articlePreviewPanel.value?.saving) return
-  if (selectedArticle.value) void router.push(`/articles/${selectedArticle.value.id}/edit`)
+  if (selectedArticle.value)
+    void router.push({
+      path: `/articles/${selectedArticle.value.id}/edit`,
+      query: { account: previewAccountId.value ?? undefined },
+    })
 }
 const layoutArticle = async () => {
   await articlePreviewPanel.value?.saveNow()
@@ -899,7 +941,7 @@ const layoutArticle = async () => {
   if (selectedArticle.value)
     void router.push({
       path: `/articles/${selectedArticle.value.id}/edit`,
-      query: { view: 'layout' },
+      query: { view: 'layout', account: previewAccountId.value ?? undefined },
     })
 }
 </script>
@@ -1243,15 +1285,24 @@ const layoutArticle = async () => {
         ref="articlePreviewPanel"
         :key="`${selectedArticle.id}:${selectedArticle.versionNo}`"
         :article="selectedArticle"
+        :account-id="previewAccountId"
+        :accounts="previewAccounts"
+        :accounts-loading="previewAccountsQuery.isFetching.value"
+        :accounts-error="
+          previewAccountsQuery.error.value instanceof Error
+            ? previewAccountsQuery.error.value.message
+            : ''
+        "
         :template="previewTemplate"
         :templates="previewTemplates"
-        :templates-loading="previewTemplatesQuery.isPending.value"
+        :templates-loading="previewTemplatesQuery.isFetching.value"
         :templates-error="
           previewTemplatesQuery.error.value instanceof Error
             ? previewTemplatesQuery.error.value.message
             : ''
         "
         @select-template="selectPreviewTemplate"
+        @select-account="selectPreviewAccount"
       />
       <template #actions>
         <AppButton

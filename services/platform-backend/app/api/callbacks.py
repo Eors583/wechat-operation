@@ -603,7 +603,7 @@ async def direct_wechat_authorization_callback(
         select(OfficialAccount).where(
             OfficialAccount.owner_id == authorization_state.owner_id,
             OfficialAccount.authorizer_appid == details.authorizer_appid,
-        )
+        ).with_for_update().execution_options(populate_existing=True)
     )
     if not account:
         account = OfficialAccount(
@@ -623,6 +623,7 @@ async def direct_wechat_authorization_callback(
     account.deleted_at = None
     account.technical_metadata = {
         **details.metadata,
+        "is_default": (account.technical_metadata or {}).get("is_default") is True,
         "authorizer_refresh_token_ref": secrets.protect(details.refresh_token),
         "platform_config_id": config.id,
     }

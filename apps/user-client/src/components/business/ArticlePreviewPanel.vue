@@ -5,7 +5,7 @@ import StarterKit from '@tiptap/starter-kit'
 import Link from '@tiptap/extension-link'
 import Image from '@tiptap/extension-image'
 import { useQuasar } from 'quasar'
-import type { Article, LayoutTemplate } from '@/api/types'
+import type { Article, LayoutTemplate, OfficialAccount } from '@/api/types'
 import { api } from '@/api/client'
 import { createDefaultStyles } from '@/api/styleDefaults'
 import { queryClient } from '@/boot/query'
@@ -21,6 +21,10 @@ import ArticleTitleChoices from './ArticleTitleChoices.vue'
 const props = withDefaults(
   defineProps<{
     article: Article
+    accountId?: string | null
+    accounts?: OfficialAccount[]
+    accountsLoading?: boolean
+    accountsError?: string
     readOnly?: boolean
     template?: LayoutTemplate | null
     templates?: LayoutTemplate[]
@@ -29,13 +33,20 @@ const props = withDefaults(
   }>(),
   {
     template: null,
+    accountId: null,
+    accounts: () => [],
+    accountsLoading: false,
+    accountsError: '',
     readOnly: false,
     templates: () => [],
     templatesLoading: false,
     templatesError: '',
   },
 )
-defineEmits<{ 'select-template': [templateId: string | null] }>()
+defineEmits<{
+  'select-template': [templateId: string | null]
+  'select-account': [accountId: string | null]
+}>()
 const $q = useQuasar()
 const fallbackStyles = createDefaultStyles()
 const previewCssVariables = computed(() =>
@@ -128,7 +139,7 @@ watch(
 )
 
 watch(
-  () => [props.template?.id, props.template?.versionId],
+  () => [props.accountId, props.template?.id, props.template?.versionId],
   () => {
     invalidateFullPreview()
     if (layoutDirty.value) markDirty()
@@ -202,7 +213,7 @@ const loadFullPreview = async () => {
   const articleVersionNo = props.article.versionNo
   const templateId = props.template?.id ?? null
   const templateVersionId = props.template?.versionId
-  const accountId = props.template?.accountId ?? props.article.accountId
+  const accountId = props.accountId ?? props.template?.accountId ?? props.article.accountId
   const revision = editRevision
   let request: number | undefined
   try {
@@ -210,6 +221,7 @@ const loadFullPreview = async () => {
     if (
       !editorReady.value ||
       articleId !== props.article.id ||
+      accountId !== (props.accountId ?? props.template?.accountId ?? props.article.accountId) ||
       templateId !== (props.template?.id ?? null) ||
       templateVersionId !== props.template?.versionId ||
       revision !== editRevision
@@ -235,6 +247,13 @@ const loadFullPreview = async () => {
       fullPreviewError.value = error instanceof Error ? error.message : '完整排版加载失败。'
   } finally {
     fullPreviewLoading.value = false
+    if (
+      editorReady.value &&
+      view.value === 'layout' &&
+      (accountId !== (props.accountId ?? props.template?.accountId ?? props.article.accountId) ||
+        templateVersionId !== props.template?.versionId)
+    )
+      void loadFullPreview()
   }
 }
 
@@ -244,7 +263,7 @@ const selectView = (value: 'edit' | 'layout') => {
 }
 
 watch(
-  () => [props.article.id, props.template?.versionId, editorReady.value],
+  () => [props.article.id, props.accountId, props.template?.versionId, editorReady.value],
   () => {
     if (editorReady.value && view.value === 'layout') selectView('layout')
   },
@@ -284,6 +303,22 @@ onBeforeUnmount(() => {
       <q-select
         v-if="!readOnly"
         class="article-panel__template-select"
+        :model-value="accountId"
+        :options="accounts.map((item) => ({ label: item.name, value: item.id }))"
+        :loading="accountsLoading"
+        :disable="saving || accountsLoading || !accounts.length"
+        emit-value
+        map-options
+        dense
+        outlined
+        options-dense
+        label="公众号"
+        aria-label="选择预览公众号"
+        @update:model-value="$emit('select-account', $event)"
+      />
+      <q-select
+        v-if="!readOnly"
+        class="article-panel__template-select"
         :model-value="template?.id ?? null"
         :options="templates.map((item) => ({ label: item.name, value: item.id }))"
         :loading="templatesLoading"
@@ -302,8 +337,12 @@ onBeforeUnmount(() => {
       <span v-if="template" class="article-panel__template-status">
         已应用：{{ template.name }}
       </span>
-      <span v-else-if="!templatesLoading" class="article-panel__template-status">
-        {{ templatesError || '暂无可用排版模板，当前使用基础样式' }}
+      <span
+        v-if="accountsError || templatesError"
+        class="article-panel__template-status"
+        role="alert"
+      >
+        {{ accountsError || templatesError }}
       </span>
       <q-btn-toggle
         :model-value="view"

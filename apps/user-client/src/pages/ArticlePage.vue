@@ -299,7 +299,10 @@ watch(
     title.value = value.title
     if (initialLoad || !layoutDirty.value) selectedTemplateId.value = value.templateId
     selectedAccountId.value =
+      accounts.value.find((item) => item.id === route.query.account && item.status === 'connected')
+        ?.id ??
       value.accountId ??
+      accounts.value.find((item) => item.isDefault && item.status === 'connected')?.id ??
       accounts.value.find((item) => item.status === 'connected')?.id ??
       accounts.value[0]?.id ??
       null
@@ -365,7 +368,11 @@ watch(
   (value) => {
     if (!selectedAccountId.value)
       selectedAccountId.value =
-        value.find((item) => item.status === 'connected')?.id ?? value[0]?.id ?? null
+        value.find((item) => item.id === route.query.account && item.status === 'connected')?.id ??
+        value.find((item) => item.isDefault && item.status === 'connected')?.id ??
+        value.find((item) => item.status === 'connected')?.id ??
+        value[0]?.id ??
+        null
   },
   { immediate: true },
 )

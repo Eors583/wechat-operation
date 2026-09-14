@@ -1445,6 +1445,7 @@ const mapOfficialAccount = (value: unknown): OfficialAccount => {
   const name = textValue(source.name, '未命名公众号')
   return {
     id: textValue(source.id),
+    isDefault: source.isDefault === true,
     name,
     avatarText: [...name][0] ?? '号',
     avatarColor: avatarColor(name),
@@ -3249,6 +3250,15 @@ export const remoteApi: UserApi = {
       openApi.DELETE('/api/v1/official-accounts/{account_id}', {
         params: { path: { account_id: id } },
       }),
+    )
+  },
+  async setDefaultOfficialAccount(id) {
+    return mapOfficialAccount(
+      await openApiData(
+        openApi.PUT('/api/v1/official-accounts/{account_id}/default', {
+          params: { path: { account_id: id } },
+        }),
+      ),
     )
   },
   async listTemplatesPage(accountId, cursor, limit = 50) {

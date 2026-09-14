@@ -34,6 +34,20 @@ const accounts = computed(() => [
   ).values(),
 ])
 const selected = ref<OfficialAccount | null>(null)
+const settingDefault = ref(false)
+const setDefaultAccount = async (account: OfficialAccount) => {
+  if (settingDefault.value || account.isDefault || account.status !== 'connected') return
+  settingDefault.value = true
+  try {
+    await api.setDefaultOfficialAccount(account.id)
+    await queryClient.invalidateQueries({ queryKey: ['accounts'] })
+    $q.notify({ type: 'positive', message: '已设为默认公众号。' })
+  } catch (error) {
+    $q.notify({ type: 'negative', message: error instanceof Error ? error.message : '设置失败。' })
+  } finally {
+    settingDefault.value = false
+  }
+}
 const detailDialog = ref(false)
 const authDialog = ref(false)
 const templateDialog = ref(false)
@@ -272,7 +286,9 @@ const disconnect = () => {
                     row.avatarText
                   }}</q-avatar
                   ><span
-                    ><strong>{{ row.name }}</strong
+                    ><strong
+                      >{{ row.name }}
+                      <q-badge v-if="row.isDefault" color="primary">默认</q-badge></strong
                     ><small>ID · {{ row.id.slice(0, 12) }}</small></span
                   >
                 </div></q-td
@@ -318,17 +334,25 @@ const disconnect = () => {
                   no-caps
                   color="primary"
                   label="排版管理"
-                  @click="showTemplates(row)"
+                  @click="showTemplates(row)" /><q-btn
+                  flat
+                  dense
+                  color="primary"
+                  :label="row.isDefault ? '默认公众号' : '设为默认公众号'"
+                  :disable="settingDefault || row.isDefault || row.status !== 'connected'"
+                  @click="setDefaultAccount(row)"
               /></q-td>
             </q-tr>
           </template>
           <template #card="{ row }"
             ><OfficialAccountCard
               :account="row"
+              :setting-default="settingDefault"
               role="listitem"
               @detail="showDetail(row)"
               @templates="showTemplates(row)"
               @reconnect="openAuthorize(row)"
+              @set-default="setDefaultAccount(row)"
           /></template>
         </ResponsiveTable>
       </AsyncStatePanel>
@@ -342,13 +366,7 @@ const disconnect = () => {
       </div>
     </section>
 
-    <AppDialog
-      v-if="selected"
-      v-model="detailDialog"
-      title="公众号详情"
-      width="600px"
-      compact
-    >
+    <AppDialog v-if="selected" v-model="detailDialog" title="公众号详情" width="600px" compact>
       <div class="account-detail">
         <div class="account-detail__hero">
           <q-avatar size="46px" :style="{ background: selected.avatarColor, color: '#fff' }">{{
@@ -368,16 +386,28 @@ const disconnect = () => {
         <section class="account-detail__section">
           <h3>基本信息</h3>
           <dl class="account-detail__facts">
-            <div><dt>公众号名称</dt><dd>{{ selected.name }}</dd></div>
+            <div>
+              <dt>公众号名称</dt>
+              <dd>{{ selected.name }}</dd>
+            </div>
             <div>
               <dt>授权状态</dt>
               <dd :class="`text-${statusInfo(selected.status).color}`">
                 {{ detailStatusLabel(selected.status) }}
               </dd>
             </div>
-            <div><dt>账号 ID</dt><dd>{{ selected.id }}</dd></div>
-            <div><dt>授权时间</dt><dd>{{ formatDetailTime(selected.authorizedAt) }}</dd></div>
-            <div><dt>最近同步</dt><dd>{{ formatDetailTime(selected.lastSyncedAt) }}</dd></div>
+            <div>
+              <dt>账号 ID</dt>
+              <dd>{{ selected.id }}</dd>
+            </div>
+            <div>
+              <dt>授权时间</dt>
+              <dd>{{ formatDetailTime(selected.authorizedAt) }}</dd>
+            </div>
+            <div>
+              <dt>最近同步</dt>
+              <dd>{{ formatDetailTime(selected.lastSyncedAt) }}</dd>
+            </div>
           </dl>
         </section>
         <section class="account-detail__section">
