@@ -6,7 +6,6 @@ import re
 import socket
 from collections import Counter
 from dataclasses import dataclass
-from html import unescape
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -14,7 +13,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from markdownify import markdownify
 
-from app.layout_content import _safe_url, extract_content_blocks
+from app.layout_content import extract_content_blocks
 from app.providers import LayoutExtractionResult, ProviderUnavailable, WebReferenceContent
 
 _WECHAT_HOST = "mp.weixin.qq.com"
@@ -175,21 +174,6 @@ class WeChatPublicLayoutExtractionProvider:
             text=text,
             content_type="text/html",
         )
-
-    async def resolve_video_source(self, source_url: str, video_id: str) -> str:
-        # Fetch fresh signed CDN URLs; saved playback URLs expire.
-        page = await self._fetch_page_direct(_validate_url(source_url))
-        match = re.search(r"video_id\s*:\s*['\"]" + re.escape(video_id) + r"['\"]", page)
-        if not match:
-            raise ProviderUnavailable("原文中未找到该视频。")
-        section = re.split(r"video_id\s*:", page[match.end():], maxsplit=1)[0]
-        for raw in re.findall(r"url\s*:\s*['\"]([^'\"]+)['\"]", section):
-            decoded = unescape(re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m[1], 16)), raw))
-            url = _safe_url(decoded, image=True)
-            parsed = urlparse(url)
-            if parsed.hostname == "mpvideo.qpic.cn" and parsed.path.endswith(".mp4"):
-                return url
-        raise ProviderUnavailable("暂时无法读取视频地址，请稍后重试。")
 
     async def _load_parser(self, url: str) -> _WeChatContentParser:
         page = await self._fetch_page(url)

@@ -122,6 +122,7 @@ from app.models import (
     Project,
     QuotaAccount,
     QuotaLedger,
+    ResourceLimit,
     Skill,
     SkillVersion,
     Task,
@@ -1373,6 +1374,8 @@ async def get_document_content(
     asset = await session.get(Asset, document.asset_id)
     if not asset or asset.deleted_at:
         raise ApiError(404, "DOCUMENT_ASSET_MISSING", "原文件不存在或已被删除。")
+    if asset.scan_status == "rejected":
+        raise ApiError(422, "DOCUMENT_SECURITY_REJECTED", "该文件未通过安全检查。")
     content = await storage.read_bytes(object_key=asset.object_key, max_bytes=MAX_FILE_BYTES)
     return Response(
         content=content,
@@ -2520,20 +2523,83 @@ async def get_layout_video_source(
     source_url: str = Query(min_length=12, max_length=1000),
     video_id: str = Query(pattern=r"^wxv_[0-9]{1,30}$"),
     user: User = Depends(current_user),
-    provider: LayoutExtractionProvider = Depends(layout_extraction_provider),
+    session: AsyncSession = Depends(get_session),
     limiter: RateLimiter = Depends(rate_limiter),
 ) -> PlainTextResponse:
-    from app.wechat_public_layout import WeChatPublicLayoutExtractionProvider
-
     await limiter.check(f"layout-video-read:{user.id}", 20, 60)
-    source_url = validate_source_url(source_url)
-    if not isinstance(provider, WeChatPublicLayoutExtractionProvider):
-        raise ApiError(503, "VIDEO_UNAVAILABLE", "视频服务暂不可用。")
-    try:
-        url = await provider.resolve_video_source(source_url, video_id)
-    except ProviderUnavailable as exc:
-        raise ApiError(503, "VIDEO_UNAVAILABLE", str(exc)) from exc
-    return PlainTextResponse(url, headers={"Cache-Control": "no-store"})
+    validate_source_url(source_url)
+    document = await session.scalar(
+        select(Document)
+        .join(Asset, Asset.id == Document.asset_id)
+        .where(
+            Document.owner_id == user.id,
+            Asset.owner_id == user.id,
+            Document.external_source_id == f"wechat-video:{video_id}",
+            Asset.deleted_at.is_(None),
+            Asset.mime_type == "video/mp4",
+            Asset.size_bytes <= MAX_FILE_BYTES,
+            Asset.scan_status != "rejected",
+        )
+        .order_by(Document.updated_at.desc())
+        .limit(1)
+    )
+    if not document:
+        raise ApiError(422, "VIDEO_FILE_REQUIRED", "请上传这段视频的 MP4 文件。")
+    return PlainTextResponse(
+        f"/api/v1/documents/{document.id}/content", headers={"Cache-Control": "no-store"}
+    )
+
+
+@router.put("/layout-video-source", status_code=204, response_class=Response)
+async def bind_layout_video_source(
+    video_id: str = Query(pattern=r"^wxv_[0-9]{1,30}$"),
+    document_id: str = Query(min_length=36, max_length=36),
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+    limiter: RateLimiter = Depends(rate_limiter),
+) -> Response:
+    await limiter.check(f"layout-video-bind:{user.id}", 10, 60)
+    # Serialize replacement, so a video has one active resource per owner.
+    await session.scalar(
+        select(ResourceLimit).where(ResourceLimit.owner_id == user.id).with_for_update()
+    )
+    document = await owned_document(session, owner_id=user.id, document_id=document_id)
+    asset = await session.get(Asset, document.asset_id)
+    if (
+        not asset
+        or asset.owner_id != user.id
+        or asset.deleted_at
+        or asset.mime_type != "video/mp4"
+        or asset.size_bytes > MAX_FILE_BYTES
+        or asset.scan_status == "rejected"
+        or document.source_type != "upload"
+    ):
+        raise ApiError(422, "VIDEO_FILE_INVALID", "请选择资源池中的 MP4 文件（不超过 100 MB）。")
+    source_id = f"wechat-video:{video_id}"
+    if document.external_source_id == source_id:
+        return Response(status_code=204)
+    if document.external_source_id:
+        raise ApiError(409, "VIDEO_ALREADY_BOUND", "该资源已关联其他视频，请上传另一份文件。")
+    previous = await session.scalars(
+        select(Document).where(
+            Document.owner_id == user.id, Document.external_source_id == source_id
+        )
+    )
+    for row in previous:
+        row.external_source_id = None
+    document.external_source_id = source_id
+    audit(
+        session,
+        actor_type="user",
+        actor_id=user.id,
+        action="layout.video.bound",
+        target_type="document",
+        target_id=document.id,
+        request_id=None,
+        details={"video_id": video_id},
+    )
+    await session.commit()
+    return Response(status_code=204)
 
 
 @router.get("/layout-templates/{template_id}", response_model=contract.LayoutTemplateDetailResponse)

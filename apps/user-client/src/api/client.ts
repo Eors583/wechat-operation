@@ -594,7 +594,32 @@ export const resolveTemplateVideoSource = async (sourceUrl: string, videoId: str
     `${baseUrl}/layout-video-source?${query}`, { signal: AbortSignal.timeout(30000) },
   ))
   if (!response.ok) throw await responseError(response)
-  return response.text()
+  const path = await response.text()
+  if (!/^\/api\/v1\/documents\/[0-9a-f-]{36}\/content$/.test(path)) {
+    throw new ApiError('视频资源地址无效。', 422, 'VIDEO_SOURCE_INVALID')
+  }
+  const content = await authenticatedFetch(new Request(
+    `${baseUrl}${path.slice('/api/v1'.length)}`, { signal: AbortSignal.timeout(120000) },
+  ))
+  if (!content.ok) throw await responseError(content)
+  if (!content.headers.get('Content-Type')?.startsWith('video/mp4')) {
+    throw new ApiError('视频文件格式无效。', 422, 'VIDEO_SOURCE_INVALID')
+  }
+  return content.blob()
+}
+
+export const uploadTemplateVideo = async (
+  videoId: string, file: File, onProgress: (loaded: number) => void,
+) => {
+  if (!file.name.toLowerCase().endsWith('.mp4') || file.size > 100 * 1024 * 1024) {
+    throw new ApiError('请选择不超过 100 MB 的 MP4 文件。', 422, 'VIDEO_FILE_INVALID')
+  }
+  const attachment = await uploadRemoteFile(file, { saveToLibrary: true, onProgress })
+  const query = new URLSearchParams({ video_id: videoId, document_id: attachment.documentId! })
+  const response = await authenticatedFetch(new Request(`${baseUrl}/layout-video-source?${query}`, {
+    method: 'PUT', signal: AbortSignal.timeout(30000),
+  }))
+  if (!response.ok) throw await responseError(response)
 }
 
 const openApi = createClient<paths, 'application/json'>({

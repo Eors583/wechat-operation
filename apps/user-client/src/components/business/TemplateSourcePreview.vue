@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { LayoutTemplate, ModuleKey, ModuleStyle } from '@/api/types'
 import AppButton from '@/components/base/AppButton.vue'
-import { playTemplateVideo, prepareTemplateVideos } from '@/utils/templateMedia'
+import { playTemplateVideo, prepareTemplateVideos, releaseTemplateVideos } from '@/utils/templateMedia'
 
 const props = defineProps<{
   blocks: NonNullable<LayoutTemplate['contentBlocks']>
@@ -31,7 +31,7 @@ let cleanupSelection = () => {}
 const sourceDocument = computed(
   () => `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'; script-src 'none'; media-src https://mpvideo.qpic.cn; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'; script-src 'none'; media-src blob:; form-action 'none'; base-uri 'none'">
 <meta name="referrer" content="no-referrer"><style>
 *{box-sizing:border-box}html,body{margin:0;min-width:0;font-family:system-ui,'Microsoft YaHei',sans-serif}
 body{padding:16px;color:CanvasText;background:Canvas;color-scheme:light;overflow-wrap:anywhere}
@@ -310,7 +310,7 @@ const onLoad = () => {
   ) => {
     finish()
     suppressClickUntil = 0
-    if (props.busy || (target as Element | null)?.closest('.source-unlock, [data-video-play], video')) return
+    if (props.busy || (target as Element | null)?.closest('.source-unlock, [data-video-play], [data-video-upload], video')) return
     const row = (target as Element | null)?.closest<HTMLElement>('main > .source-block')
     if (!row || row.dataset.locked === 'true') return
     press = {
@@ -442,7 +442,7 @@ const onLoad = () => {
       const target = event.target as Element | null
       if (target?.closest('a')) event.preventDefault()
       if (props.busy || target?.closest('video')) return
-      if (target?.closest('[data-video-play]') && playTemplateVideo(target, props.sourceUrl)) return
+      if (target?.closest('[data-video-play], [data-video-upload]') && playTemplateVideo(target, props.sourceUrl)) return
       if (event.detail !== 0 && Date.now() < suppressClickUntil) {
         event.preventDefault()
         return
@@ -461,6 +461,7 @@ const onLoad = () => {
     options,
   )
   cleanupSelection = () => {
+    releaseTemplateVideos(document)
     finish()
     listeners.abort()
   }
