@@ -229,6 +229,11 @@ const articleVisible = ref(false)
 const selectedArticle = ref<Article | null>(null)
 let previewRequest = 0
 const previewTemplateId = ref<string | null>(null)
+const previewTemplateChosen = ref(false)
+const selectPreviewTemplate = (id: string | null) => {
+  previewTemplateChosen.value = true
+  previewTemplateId.value = id
+}
 const previewTemplatesQuery = useQuery({
   queryKey: ['templates', 'article-preview'],
   queryFn: () => api.listTemplatesPage(undefined, undefined, 100),
@@ -243,7 +248,7 @@ const previewTemplates = computed<LayoutTemplate[]>(() =>
   ].filter(
     (template) =>
       template.enabled &&
-      template.status === 'ready' &&
+      Boolean(template.versionId) &&
       (!selectedArticle.value?.accountId ||
         template.accountId === null ||
         template.accountId === selectedArticle.value.accountId),
@@ -400,6 +405,7 @@ watch(
   ([currentArticle, templates], [previousArticle]) => {
     if (
       currentArticle?.id === previousArticle?.id &&
+      (previewTemplateChosen.value || Boolean(currentArticle?.layoutTemplate)) &&
       templates.some((template) => template.id === previewTemplateId.value)
     )
       return
@@ -870,6 +876,7 @@ const openArticle = async (message: Message) => {
     if (!message.articleId) throw new Error('这条消息没有关联文章。')
     const resolved = await api.getArticle(message.articleId)
     if (request !== previewRequest) return
+    previewTemplateChosen.value = false
     previewTemplateId.value = resolved.templateId
     selectedArticle.value = resolved
     articleVisible.value = true
@@ -1245,7 +1252,7 @@ const layoutArticle = async () => {
             ? previewTemplatesQuery.error.value.message
             : ''
         "
-        @select-template="previewTemplateId = $event"
+        @select-template="selectPreviewTemplate"
       />
       <template #actions>
         <AppButton

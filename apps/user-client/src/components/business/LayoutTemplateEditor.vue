@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { api } from '@/api/client'
+import { queryClient } from '@/boot/query'
 import { createDefaultStyles } from '@/api/styleDefaults'
 import type { LayoutTemplate, ModuleKey, ModuleStyle, OfficialAccount } from '@/api/types'
 import AppButton from '@/components/base/AppButton.vue'
@@ -31,7 +32,6 @@ const activeModule = ref<ModuleKey>('highlight')
 const sourceUrl = ref('')
 const extracting = ref(false)
 const saving = ref(false)
-const togglingIds = ref(new Set<string>())
 const mobileStep = ref(1)
 const draftTemplateIds = new Set<string>()
 const dirtyTemplateIds = new Set<string>()
@@ -81,7 +81,13 @@ watch(
       .map((item) => {
         const local = localTemplates.value.find((candidate) => candidate.id === item.id)
         return local && dirtyTemplateIds.has(item.id)
-          ? { ...local, status: item.status, updatedAt: item.updatedAt }
+          ? {
+              ...local,
+              status: item.status,
+              updatedAt: item.updatedAt,
+              isDefault: item.isDefault,
+              enabled: item.enabled,
+            }
           : item
       })
       .concat(drafts.filter((draft) => !incoming.some((item) => item.id === draft.id)))
@@ -177,7 +183,7 @@ const addTemplate = () => {
         id: `template_${crypto.randomUUID()}`,
         accountId: templateAccountId.value,
         name: '新模板 1',
-        enabled: false,
+        enabled: true,
         sourceUrl: '',
         status: 'idle',
         updatedAt: new Date().toISOString(),
@@ -188,7 +194,8 @@ const addTemplate = () => {
   if (base) {
     template.id = `template_${crypto.randomUUID()}`
     template.name = `新模板 ${localTemplates.value.length + 1}`
-    template.enabled = false
+    template.enabled = true
+    template.isDefault = false
     template.sourceUrl = ''
     template.status = 'idle'
     template.updatedAt = new Date().toISOString()
@@ -227,46 +234,41 @@ const extract = async () => {
   }
 }
 
-const toggleEnabled = async (template: LayoutTemplate, enabled: boolean) => {
-  const previous = template.enabled
-  template.enabled = enabled
-  dirtyTemplateIds.add(template.id)
-  if (draftTemplateIds.has(template.id)) {
-    selectedId.value = template.id
-    return
-  }
-  togglingIds.value.add(template.id)
-  try {
-    const saved = await api.saveTemplate(template)
-    const index = localTemplates.value.findIndex((item) => item.id === template.id)
-    if (index >= 0) localTemplates.value[index] = saved
-    dirtyTemplateIds.delete(template.id)
-    emit('changed')
-  } catch (error) {
-    template.enabled = previous
-    $q.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '模板启停状态没有保存。',
-    })
-  } finally {
-    togglingIds.value.delete(template.id)
-  }
-}
-
-const save = async () => {
-  if (!selectedTemplate.value || !selectedTemplate.value.name.trim()) return
+const save = async (makeDefault = false) => {
+  if (!selectedTemplate.value || !selectedTemplate.value.name.trim() || saving.value) return
   saving.value = true
   try {
+    if (makeDefault && !dirtyTemplateIds.has(selectedTemplate.value.id)) {
+      const id = selectedTemplate.value.id
+      await api.setDefaultTemplate(id)
+      localTemplates.value.forEach((item) => {
+        item.isDefault = item.id === id
+      })
+      await queryClient.invalidateQueries({ queryKey: ['templates'] })
+      emit('changed')
+      $q.notify({ type: 'positive', message: '已设为默认模板。' })
+      return
+    }
     selectedTemplate.value.name = selectedTemplate.value.name.trim()
     const previousId = selectedTemplate.value.id
-    const saved = await api.saveTemplate(selectedTemplate.value)
+    const saved = await api.saveTemplate(selectedTemplate.value, makeDefault)
+    if (makeDefault)
+      localTemplates.value.forEach((item) => {
+        item.isDefault = false
+      })
     const index = localTemplates.value.findIndex((item) => item.id === previousId)
     if (index >= 0) localTemplates.value[index] = saved
     selectedId.value = saved.id
     draftTemplateIds.delete(previousId)
     dirtyTemplateIds.delete(previousId)
-    $q.notify({ type: 'positive', message: '模板已保存。' })
+    $q.notify({ type: 'positive', message: makeDefault ? '已设为默认模板。' : '模板已保存。' })
+    await queryClient.invalidateQueries({ queryKey: ['templates'] })
     emit('changed')
+  } catch (error) {
+    $q.notify({
+      type: 'negative',
+      message: error instanceof Error ? error.message : '模板保存失败。',
+    })
   } finally {
     saving.value = false
   }
@@ -372,6 +374,20 @@ const remove = async () => {
             class="template-editor__name"
             @update:model-value="markDirty"
           />
+          <AppButton
+            v-if="selectedTemplate"
+            variant="outline"
+            :label="selectedTemplate.isDefault ? '默认模板' : '设为默认模板'"
+            full-width
+            :loading="saving"
+            :disabled="
+              selectedTemplate.isDefault ||
+              !account ||
+              !selectedTemplate.name.trim() ||
+              (!selectedTemplate.versionId && !draftTemplateIds.has(selectedTemplate.id))
+            "
+            @click="save(true)"
+          />
           <div class="template-editor__list">
             <button
               v-for="template in localTemplates"
@@ -380,15 +396,7 @@ const remove = async () => {
               @click="selectedId = template.id"
             >
               <span>{{ template.name }}</span>
-              <q-toggle
-                :model-value="template.enabled"
-                dense
-                color="primary"
-                :disable="togglingIds.has(template.id)"
-                :aria-label="`${template.name}${template.enabled ? '已启用' : '已停用'}`"
-                @click.stop
-                @update:model-value="toggleEnabled(template, Boolean($event))"
-              />
+              <q-badge v-if="template.isDefault" color="primary" label="默认" />
             </button>
           </div>
           <AppButton
@@ -633,16 +641,13 @@ const remove = async () => {
       </div>
     </div>
     <template #actions>
-      <span class="template-editor__note"
-        >排版管理不受公众号连接状态影响，只在存草稿和发布时检查授权。</span
-      >
       <AppButton variant="ghost" label="取消" @click="$emit('update:modelValue', false)" />
       <AppButton variant="outline" label="查看整体结果" @click="mobileStep = 4" />
       <AppButton
         label="保存模板"
         :loading="saving"
         :disabled="!selectedTemplate || !selectedTemplate.name.trim()"
-        @click="save"
+        @click="save()"
       />
     </template>
   </AppDialog>
@@ -858,12 +863,6 @@ const remove = async () => {
     padding: 10px 16px;
     border-top: 1px solid var(--app-border-default);
   }
-
-  &__note {
-    margin-right: auto;
-    color: var(--app-text-secondary);
-    overflow-wrap: anywhere;
-  }
 }
 
 @media (max-width: 1023px) {
@@ -889,10 +888,6 @@ const remove = async () => {
       .q-chip {
         display: none;
       }
-    }
-
-    &__note {
-      width: 100%;
     }
   }
 }

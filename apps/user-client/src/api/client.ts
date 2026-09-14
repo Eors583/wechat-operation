@@ -1348,7 +1348,8 @@ const mapTemplate = (value: unknown): LayoutTemplate => {
         ? source.officialAccountId
         : null,
     name: textValue(source.name, '未命名模板'),
-    enabled: booleanValue(source.enabled),
+    enabled: Boolean(version.id),
+    isDefault: booleanValue(source.isDefault),
     sourceUrl: textValue(source.sourceUrl),
     status: templateStatus(source.extractionStatus),
     updatedAt: textValue(source.updatedAt, textValue(version.createdAt, now())),
@@ -3208,11 +3209,12 @@ export const remoteApi: UserApi = {
     }
     return template
   },
-  async saveTemplate(template: LayoutTemplate) {
+  async saveTemplate(template: LayoutTemplate, makeDefault = false) {
     const creating = template.id.startsWith('template_')
     const shared = {
       name: template.name,
-      enabled: template.enabled,
+      enabled: true,
+      isDefault: makeDefault,
       styleTokens: stylesToTokens(template.styles),
     }
     const payload = creating
@@ -3231,6 +3233,14 @@ export const remoteApi: UserApi = {
           }),
         )
     return mapTemplate(response)
+  },
+  setDefaultTemplate: async (id) => {
+    await openApiData(
+      openApi.PATCH('/api/v1/layout-templates/{template_id}', {
+        params: { path: { template_id: id } },
+        body: apiBody<'LayoutTemplatePatch'>({ isDefault: true }),
+      }),
+    )
   },
   deleteTemplate: async (id) => {
     await openApiData(

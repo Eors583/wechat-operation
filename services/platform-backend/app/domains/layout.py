@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
@@ -21,6 +21,8 @@ from app.models import (
     LayoutTemplate,
     LayoutTemplateVersion,
     OfficialAccount,
+    User,
+    utcnow,
 )
 from app.providers import (
     LayoutExtractionProvider,
@@ -228,7 +230,7 @@ async def save_layout_template(
     name: str,
     official_account_id: str | None,
     style_tokens: dict[str, Any],
-    enabled: bool = False,
+    enabled: bool = True,
 ) -> tuple[LayoutTemplate, LayoutTemplateVersion]:
     if not 1 <= len(name.strip()) <= 120:
         raise ApiError(422, "TEMPLATE_NAME_INVALID", "模板名称必须为1—120字符。")
@@ -244,7 +246,7 @@ async def save_layout_template(
         owner_id=owner_id,
         name=name.strip(),
         official_account_id=official_account_id,
-        enabled=enabled,
+        enabled=True,
         extraction_status="manual",
     )
     session.add(template)
@@ -261,6 +263,7 @@ async def add_template_version(
     source_snapshot: dict[str, Any] | None = None,
     extractor_version: str = "manual-v1",
 ) -> LayoutTemplateVersion:
+    template.enabled = True
     template.current_version_no += 1
     version = LayoutTemplateVersion(
         template_id=template.id,
@@ -272,6 +275,28 @@ async def add_template_version(
     session.add(version)
     await session.flush()
     return version
+
+
+async def set_default_layout_template(session: AsyncSession, template: LayoutTemplate) -> None:
+    if not template.official_account_id:
+        raise ApiError(422, "TEMPLATE_ACCOUNT_REQUIRED", "请先选择公众号。")
+    if template.current_version_no < 1:
+        raise ApiError(409, "TEMPLATE_NOT_READY", "模板尚未提取完成。")
+    # Serialize default changes for this owner; the partial index also enforces uniqueness.
+    await session.scalar(select(User.id).where(User.id == template.owner_id).with_for_update())
+    await session.execute(
+        update(LayoutTemplate)
+        .where(
+            LayoutTemplate.owner_id == template.owner_id,
+            LayoutTemplate.official_account_id == template.official_account_id,
+            LayoutTemplate.is_default.is_(True),
+        )
+        .values(is_default=False)
+    )
+    template.is_default = True
+    template.enabled = True
+    template.updated_at = utcnow()
+    await session.flush()
 
 
 async def process_layout_extraction(

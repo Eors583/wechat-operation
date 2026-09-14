@@ -6,11 +6,12 @@ export function defaultArticleTemplate(article: Article, templates: LayoutTempla
   const usable = templates.filter(
     (t) =>
       t.enabled &&
-      t.status === 'ready' &&
+      Boolean(t.versionId) &&
       (!article.accountId || t.accountId === null || t.accountId === article.accountId),
   )
   return (
     usable.find((t) => t.id === article.templateId) ??
+    usable.find((t) => t.isDefault && (!article.accountId || t.accountId === article.accountId)) ??
     usable.find((t) => Boolean(article.accountId) && t.accountId === article.accountId) ??
     usable.find((t) => t.accountId === null) ??
     usable[0] ??

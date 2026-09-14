@@ -467,11 +467,24 @@ class ArticleRevision(Base, IdMixin, TimestampMixin):
 
 class LayoutTemplate(Base, IdMixin, TimestampMixin, OwnerMixin):
     __tablename__ = "layout_templates"
-    __table_args__ = (Index("ix_layout_account_updated", "official_account_id", "updated_at"),)
+    __table_args__ = (
+        Index("ix_layout_account_updated", "official_account_id", "updated_at"),
+        Index(
+            "uq_layout_account_default",
+            "owner_id",
+            "official_account_id",
+            unique=True,
+            postgresql_where=text("is_default AND deleted_at IS NULL"),
+            sqlite_where=text("is_default AND deleted_at IS NULL"),
+        ),
+    )
 
     official_account_id: Mapped[str | None] = mapped_column(String(36))
     name: Mapped[str] = mapped_column(String(120), nullable=False)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     source_url: Mapped[str | None] = mapped_column(String(1000))
     extraction_status: Mapped[str] = mapped_column(String(32), default="manual", nullable=False)
     current_version_no: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

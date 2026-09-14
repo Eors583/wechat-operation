@@ -74,6 +74,7 @@ from app.domains.layout import (
     owned_template,
     process_layout_extraction,
     save_layout_template,
+    set_default_layout_template,
     validate_source_url,
 )
 from app.domains.revision import create_article_revision
@@ -2274,7 +2275,8 @@ async def public_settings(
 class LayoutTemplateCreate(BaseModel):
     official_account_id: str | None = None
     name: str = Field(min_length=1, max_length=120)
-    enabled: bool = False
+    enabled: bool = True
+    is_default: bool = False
     style_tokens: contract.StyleTokenPayload = Field(
         default_factory=lambda: contract.StyleTokenPayload.model_validate(DEFAULT_STYLE_TOKENS)
     )
@@ -2283,6 +2285,7 @@ class LayoutTemplateCreate(BaseModel):
 class LayoutTemplatePatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     enabled: bool | None = None
+    is_default: bool = False
     style_tokens: contract.StyleTokenPayload | None = None
 
 
@@ -2313,17 +2316,25 @@ async def list_layout_templates(
     if official_account_id:
         conditions.append(LayoutTemplate.official_account_id == official_account_id)
     if enabled_only:
-        conditions.append(LayoutTemplate.enabled.is_(True))
+        conditions.append(LayoutTemplate.current_version_no > 0)
     decoded = decode_cursor(cursor)
     if decoded:
         timestamp, identifier = decoded
+        cursor_default = bool(
+            await session.scalar(
+                select(LayoutTemplate.is_default).where(
+                    LayoutTemplate.id == identifier, LayoutTemplate.owner_id == user.id
+                )
+            )
+        )
+        older = or_(
+            LayoutTemplate.updated_at < timestamp,
+            and_(LayoutTemplate.updated_at == timestamp, LayoutTemplate.id < identifier),
+        )
         conditions.append(
             or_(
-                LayoutTemplate.updated_at < timestamp,
-                and_(
-                    LayoutTemplate.updated_at == timestamp,
-                    LayoutTemplate.id < identifier,
-                ),
+                and_(LayoutTemplate.is_default.is_(cursor_default), older),
+                LayoutTemplate.is_default.is_(False) if cursor_default else False,
             )
         )
     templates = list(
@@ -2331,7 +2342,11 @@ async def list_layout_templates(
             await session.scalars(
                 select(LayoutTemplate)
                 .where(*conditions)
-                .order_by(LayoutTemplate.updated_at.desc(), LayoutTemplate.id.desc())
+                .order_by(
+                    LayoutTemplate.is_default.desc(),
+                    LayoutTemplate.updated_at.desc(),
+                    LayoutTemplate.id.desc(),
+                )
                 .limit(limit + 1)
             )
         ).all()
@@ -2386,6 +2401,8 @@ async def create_layout_template(
         enabled=payload.enabled,
         style_tokens=payload.style_tokens.model_dump(exclude_none=True),
     )
+    if payload.is_default:
+        await set_default_layout_template(session, template)
     await session.commit()
     return {"template": model_dict(template), "version": model_dict(version)}
 
@@ -2527,8 +2544,7 @@ async def patch_layout_template(
     template = await owned_template(session, owner_id=user.id, template_id=template_id)
     if payload.name is not None:
         template.name = payload.name
-    if payload.enabled is not None:
-        template.enabled = payload.enabled
+    template.enabled = template.current_version_no > 0
     version = None
     if payload.style_tokens is not None:
         version = await add_template_version(
@@ -2536,6 +2552,8 @@ async def patch_layout_template(
             template=template,
             style_tokens=payload.style_tokens.model_dump(exclude_none=True),
         )
+    if payload.is_default:
+        await set_default_layout_template(session, template)
     await session.commit()
     return {
         "template": model_dict(template),
@@ -2552,6 +2570,7 @@ async def delete_layout_template(
     template = await owned_template(session, owner_id=user.id, template_id=template_id)
     template.deleted_at = utcnow()
     template.enabled = False
+    template.is_default = False
     await session.commit()
     return Response(status_code=204)
 

@@ -3474,9 +3474,14 @@ export interface components {
         readonly LayoutTemplateCreate: {
             /**
              * Enabled
-             * @default false
+             * @default true
              */
             readonly enabled: boolean;
+            /**
+             * Is Default
+             * @default false
+             */
+            readonly is_default: boolean;
             /** Name */
             readonly name: string;
             /** Official Account Id */
@@ -3509,6 +3514,8 @@ export interface components {
             readonly extraction_status: "manual" | "queued" | "completed" | "failed";
             /** Id */
             readonly id: string;
+            /** Is Default */
+            readonly is_default: boolean;
             /** Name */
             readonly name: string;
             /** Official Account Id */
@@ -3530,6 +3537,11 @@ export interface components {
         readonly LayoutTemplatePatch: {
             /** Enabled */
             readonly enabled?: boolean | null;
+            /**
+             * Is Default
+             * @default false
+             */
+            readonly is_default: boolean;
             /** Name */
             readonly name?: string | null;
             readonly style_tokens?: components["schemas"]["StyleTokenPayload"] | null;
@@ -3554,6 +3566,8 @@ export interface components {
             readonly extraction_status: "manual" | "queued" | "completed" | "failed";
             /** Id */
             readonly id: string;
+            /** Is Default */
+            readonly is_default: boolean;
             /** Name */
             readonly name: string;
             /** Official Account Id */

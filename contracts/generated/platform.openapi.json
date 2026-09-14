@@ -48,6 +48,11 @@
                   "additionalProperties": {
                     "type": "string"
                   },
+                  "type": "object",
+                  "title": "Response Liveness Health Live Get"
+                }
+              }
+            }
           }
         }
       }
@@ -28772,6 +28777,7 @@
       },
       "LayoutTemplateCreate": {
         "properties": {
+          "is_default": { "type": "boolean", "title": "Is Default", "default": false },
           "official_account_id": {
             "anyOf": [
               {
@@ -28792,7 +28798,7 @@
           "enabled": {
             "type": "boolean",
             "title": "Enabled",
-            "default": false
+            "default": true
           },
           "style_tokens": {
             "$ref": "#/components/schemas/StyleTokenPayload"
@@ -28827,6 +28833,7 @@
       },
       "LayoutTemplateListItem": {
         "properties": {
+          "is_default": { "type": "boolean", "title": "Is Default" },
           "official_account_id": {
             "anyOf": [
               {
@@ -28931,12 +28938,14 @@
           "updated_at",
           "owner_type",
           "owner_id",
-          "version"
+          "version",
+          "is_default"
         ],
         "title": "LayoutTemplateListItem"
       },
       "LayoutTemplatePatch": {
         "properties": {
+          "is_default": { "type": "boolean", "title": "Is Default", "default": false },
           "name": {
             "anyOf": [
               {
@@ -28977,6 +28986,7 @@
       },
       "LayoutTemplateResource": {
         "properties": {
+          "is_default": { "type": "boolean", "title": "Is Default" },
           "official_account_id": {
             "anyOf": [
               {
@@ -29070,7 +29080,8 @@
           "created_at",
           "updated_at",
           "owner_type",
-          "owner_id"
+          "owner_id",
+          "is_default"
         ],
         "title": "LayoutTemplateResource"
       },

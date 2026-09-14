@@ -223,11 +223,20 @@ const templates = computed(() =>
         ...(article.value?.layoutTemplate ? [article.value.layoutTemplate] : []),
       ].map((template) => [template.id, template]),
     ).values(),
-  ].filter((template) => template.enabled),
+  ].filter(
+    (template) =>
+      template.enabled &&
+      (template.accountId === selectedAccountId.value ||
+        (!template.accountId && template.id === article.value?.templateId)),
+  ),
 )
 const selectedTemplate = computed(
   () => templates.value.find((item) => item.id === selectedTemplateId.value) ?? null,
 )
+const templateChosen = ref(false)
+watch(selectedAccountId, () => {
+  templateChosen.value = false
+})
 const layoutDirty = computed(() =>
   Boolean(
     selectedTemplate.value?.versionId &&
@@ -282,7 +291,10 @@ watch(
     title.value = value.title
     if (initialLoad || !layoutDirty.value) selectedTemplateId.value = value.templateId
     selectedAccountId.value =
-      value.accountId ?? accounts.value.find((item) => item.status === 'connected')?.id ?? null
+      value.accountId ??
+      accounts.value.find((item) => item.status === 'connected')?.id ??
+      accounts.value[0]?.id ??
+      null
     await nextTick()
     if (editor.value?.getHTML() !== value.contentHtml)
       editor.value?.commands.setContent(value.contentJson ?? value.contentHtml, false)
@@ -344,7 +356,8 @@ watch(
   accounts,
   (value) => {
     if (!selectedAccountId.value)
-      selectedAccountId.value = value.find((item) => item.status === 'connected')?.id ?? null
+      selectedAccountId.value =
+        value.find((item) => item.status === 'connected')?.id ?? value[0]?.id ?? null
   },
   { immediate: true },
 )
@@ -352,11 +365,14 @@ watch(
 watch(
   templates,
   (value) => {
-    if (!value.some((item) => item.id === selectedTemplateId.value))
+    if (
+      !value.some((item) => item.id === selectedTemplateId.value) ||
+      (!templateChosen.value && !article.value?.templateId)
+    )
       selectedTemplateId.value =
         article.value?.templateId && value.some((item) => item.id === article.value?.templateId)
           ? article.value.templateId
-          : (value[0]?.id ?? null)
+          : (value.find((item) => item.isDefault)?.id ?? value[0]?.id ?? null)
   },
   { immediate: true },
 )
@@ -768,7 +784,7 @@ const openFinal = async (action: 'draft' | 'publish') => {
     return
   }
   if (!selectedAccount.value || !selectedTemplate.value) {
-    $q.notify({ type: 'warning', message: '请先选择目标公众号和已启用的排版模板。' })
+    $q.notify({ type: 'warning', message: '请先选择目标公众号和排版模板。' })
     return
   }
   if (selectedAccount.value.status !== 'connected') {
@@ -1132,7 +1148,7 @@ onBeforeUnmount(() => {
             <div class="layout-preview-pane__scroll">
               <div v-if="!selectedAccount || !selectedTemplate" class="render-message">
                 <q-icon name="info_outline" size="28px" /><span
-                  >选择目标公众号和已启用模板后生成排版预览。</span
+                  >选择目标公众号和模板后生成排版预览。</span
                 >
               </div>
               <div v-else-if="finalPreparing" class="render-message">
@@ -1207,11 +1223,12 @@ onBeforeUnmount(() => {
             >
             <q-select
               v-model="selectedTemplateId"
+              @update:model-value="templateChosen = true"
               :options="templates.map((item) => ({ label: item.name, value: item.id }))"
               emit-value
               map-options
               outlined
-              label="已启用模板"
+              label="排版模板"
               :loading="templatesQuery.isPending.value"
               :disable="Boolean(pendingOutcome)"
             >
@@ -1220,16 +1237,14 @@ onBeforeUnmount(() => {
                   <q-item-section
                     ><AppButton
                       variant="ghost"
-                      label="当前页没有已启用模板，加载更多"
+                      label="当前页没有可用模板，加载更多"
                       :loading="templatesQuery.isFetchingNextPage.value"
                       full-width
                       @click.stop="templatesQuery.fetchNextPage()"
                   /></q-item-section>
                 </q-item>
                 <q-item v-else
-                  ><q-item-section class="text-muted"
-                    >该公众号暂无已启用模板</q-item-section
-                  ></q-item
+                  ><q-item-section class="text-muted">该公众号暂无可用模板</q-item-section></q-item
                 >
               </template>
               <template #after-options>
