@@ -3599,6 +3599,8 @@ export interface components {
         readonly LayoutTemplatePatch: {
             /** Base Version No */
             readonly base_version_no?: number | null;
+            /** Content Blocks */
+            readonly content_blocks?: readonly components["schemas"]["LayoutContentBlock"][] | null;
             /** Enabled */
             readonly enabled?: boolean | null;
             /**

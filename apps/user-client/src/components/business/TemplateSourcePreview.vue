@@ -2,7 +2,11 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { LayoutTemplate, ModuleKey, ModuleStyle } from '@/api/types'
 import AppButton from '@/components/base/AppButton.vue'
-import { playTemplateVideo, prepareTemplateVideos, releaseTemplateVideos } from '@/utils/templateMedia'
+import {
+  playTemplateVideo,
+  prepareTemplateVideos,
+  releaseTemplateVideos,
+} from '@/utils/templateMedia'
 
 const props = defineProps<{
   blocks: NonNullable<LayoutTemplate['contentBlocks']>
@@ -19,6 +23,7 @@ const emit = defineEmits<{
   select: [ids: string[], endId: string]
   lock: [position: 'before_body' | 'after_body']
   unlock: [blockId: string]
+  edit: [blockId: string]
   clear: []
 }>()
 const frame = ref<HTMLIFrameElement | null>(null)
@@ -61,7 +66,7 @@ html[data-selecting=true],html[data-selecting=true] *{cursor:crosshair!important
 </style></head><body><main><h1 class="source-title"></h1>${props.blocks
     .map(
       (block, index) =>
-        `<section class="source-block" data-index="${index}"><button type="button" class="source-unlock" hidden></button><button type="button" class="source-select" aria-label="选择第 ${index + 1} 部分" aria-pressed="false"></button><div class="source-content">${block.html}</div></section>`,
+        `<section class="source-block" data-index="${index}"><button type="button" class="source-edit source-unlock" hidden>修改固定内容</button><button type="button" class="source-unlock" hidden></button><button type="button" class="source-select" aria-label="选择第 ${index + 1} 部分" aria-pressed="false"></button><div class="source-content">${block.html}</div></section>`,
     )
     .join('')}</main></body></html>`,
 )
@@ -112,7 +117,12 @@ const syncSelection = () => {
       button.setAttribute('aria-label', `选择第 ${index + 1} 部分`)
       button.title = `选择第 ${index + 1} 部分`
     }
-    const unlock = row.querySelector<HTMLButtonElement>(':scope > .source-unlock')
+    const edit = row.querySelector<HTMLButtonElement>(':scope > .source-edit')
+    if (edit) {
+      edit.hidden = !startsGroup
+      edit.disabled = props.busy
+    }
+    const unlock = row.querySelector<HTMLButtonElement>(':scope > .source-unlock:not(.source-edit)')
     if (unlock) {
       unlock.hidden = !startsGroup
       unlock.disabled = props.busy
@@ -452,6 +462,10 @@ const onLoad = () => {
       if (!row) return
       const index = Number(row.dataset.index)
       const block = props.blocks[index]
+      if (target?.closest('.source-edit')) {
+        if (block) emit('edit', block.id)
+        return
+      }
       if (target?.closest('.source-unlock')) {
         if (block) emit('unlock', block.id)
         return

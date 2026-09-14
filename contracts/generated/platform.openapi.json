@@ -29099,6 +29099,21 @@
       },
       "LayoutTemplatePatch": {
         "properties": {
+          "content_blocks": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LayoutContentBlock"
+                },
+                "maxItems": 10000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Blocks"
+          },
           "is_default": { "type": "boolean", "title": "Is Default", "default": false },
           "name": {
             "anyOf": [

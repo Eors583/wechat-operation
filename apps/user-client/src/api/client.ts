@@ -3365,6 +3365,7 @@ export const remoteApi: UserApi = {
       : ({
           ...shared,
           lockedBlocks: template.lockedBlocks,
+          contentBlocks: template.contentBlocks,
           baseVersionNo: template.versionNo || undefined,
         } satisfies LayoutTemplatePatchDto)
     const response = creating

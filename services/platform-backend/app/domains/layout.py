@@ -15,7 +15,7 @@ from app.config import Settings
 from app.errors import ApiError
 from app.heading_numbering import without_heading_numbers
 from app.layout_content import sanitize_content_html
-from app.layout_contracts import LayoutLockedBlock, LayoutSourceSnapshot
+from app.layout_contracts import LayoutContentBlock, LayoutLockedBlock, LayoutSourceSnapshot
 from app.model_gateway import ModelRouteExhausted, generate_with_frozen_route
 from app.models import (
     ArticleRender,
@@ -269,6 +269,7 @@ async def add_template_version(
     source_snapshot: dict[str, Any] | None = None,
     locked_blocks: list[LayoutLockedBlock] | None = None,
     extractor_version: str = "manual-v1",
+    content_blocks: list[LayoutContentBlock] | None = None,
 ) -> LayoutTemplateVersion:
     if source_snapshot is None:
         previous = await session.scalar(
@@ -280,6 +281,19 @@ async def add_template_version(
         source_snapshot = dict(previous.source_snapshot) if previous else {}
         if previous:
             extractor_version = previous.extractor_version
+    if content_blocks is not None:
+        original = LayoutSourceSnapshot.model_validate(source_snapshot)
+        allowed = {key for group in original.locked_blocks for key in group.block_ids}
+        allowed.update(key for group in (locked_blocks or []) for key in group.block_ids)
+        previous_blocks = {block.id: block for block in original.content_blocks}
+        if [block.id for block in content_blocks] != list(previous_blocks):
+            raise ApiError(422, "LAYOUT_EDIT_INVALID", "修改固定内容不能增删原文部分。")
+        for block in content_blocks:
+            if block != previous_blocks[block.id] and block.id not in allowed:
+                raise ApiError(422, "LAYOUT_EDIT_UNLOCKED", "只能修改已固定的内容。")
+        source_snapshot = {**source_snapshot, "content_blocks": [
+            block.model_dump() for block in content_blocks
+        ]}
     source_snapshot = validated_source_snapshot(source_snapshot, locked_blocks=locked_blocks)
     template.enabled = True
     template.current_version_no += 1
