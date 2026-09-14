@@ -115,6 +115,36 @@ def _safe_style(value: str) -> str:
     return ";".join(f"{name}:{raw}" for name, raw in declarations.items())
 
 
+
+def _profile_card(element: Tag) -> Tag:
+    """Render WeChat custom profile attributes as a single static article block."""
+    title = escape(str(element.get("data-nickname") or element.get("data-alias") or "公众号"))
+    signature = escape(str(element.get("data-signature") or ""))
+    avatar = _safe_url(str(element.get("data-headimg") or ""), image=True)
+    badge = (
+        '<span style="color:#1684fc;font-size:14px" aria-label="已认证"> ✓</span>'
+        if str(element.get("data-verify_status")) == "2" else ""
+    )
+    image = (
+        f'<img src="{escape(avatar, quote=True)}" alt="" width="48" '
+        'referrerpolicy="no-referrer" style="width:48px;max-width:100%;height:auto;'
+        'border-radius:50%"/>' if avatar else ""
+    )
+    markup = (
+        '<figure style="margin:16px 0;padding:16px;background:#f8f8f8;'
+        'border-radius:12px;text-align:left;' + _BOUNDS + '">'
+        '<table style="width:100%;table-layout:fixed;border-collapse:collapse"><tbody><tr>'
+        '<td style="width:56px;vertical-align:top;padding:0 8px 0 0">' + image + '</td>'
+        '<td style="vertical-align:top;min-width:0;overflow-wrap:anywhere">'
+        '<strong style="font-size:17px;font-weight:400;color:#222">' + title + badge + '</strong>'
+        '<p style="margin:4px 0 0;font-size:14px;line-height:1.6;color:#777">'
+        + signature + '</p></td></tr></tbody></table>'
+        '<figcaption style="margin-top:16px;padding-top:8px;border-top:1px solid #eee;'
+        'font-size:13px;color:#aaa">公众号</figcaption></figure>'
+    )
+    return BeautifulSoup(markup, "html.parser").figure
+
+
 def sanitize_content_html(value: str) -> str:
     """Allow static article markup only; never fetch any external resource."""
     soup = BeautifulSoup(value, "html.parser")
@@ -124,6 +154,9 @@ def sanitize_content_html(value: str) -> str:
         if element.parent is None:
             continue
         name = element.name.lower()
+        if name == "mp-common-profile":
+            element.replace_with(_profile_card(element))
+            continue
         if name in _DROP_TAGS:
             element.decompose()
             continue
