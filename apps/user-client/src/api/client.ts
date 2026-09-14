@@ -1407,7 +1407,10 @@ const mapTemplate = (value: unknown): LayoutTemplate => {
       id: textValue(block.id),
       html: textValue(block.html),
       text: textValue(block.text),
-      module: moduleKeys.includes(block.module as ModuleKey) ? (block.module as ModuleKey) : 'body',
+      module:
+        block.module !== 'emphasis' && moduleKeys.includes(block.module as ModuleKey)
+          ? (block.module as LayoutContentBlock['module'])
+          : 'body',
     }
   })
   const lockedBlocks: LayoutLockedBlock[] = (
