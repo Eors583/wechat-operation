@@ -1,7 +1,7 @@
 """add official account writing profile
 
 Revision ID: e93b2d5f7a10
-Revises: c4d2a71e8f90
+Revises: c82f4d719ab3
 Create Date: 2026-09-14
 """
 
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "e93b2d5f7a10"
-down_revision: str | None = "c4d2a71e8f90"
+down_revision: str | None = "c82f4d719ab3"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
