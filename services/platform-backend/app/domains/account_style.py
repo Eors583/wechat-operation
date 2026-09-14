@@ -10,6 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+PROFILE_SAMPLE_LIMIT = 10
 STYLE_VERSION = "account-profile-v3"
 METRICS_VERSION = "prose-v1"
 # Only standalone edge boilerplate is removed; a discussion of copyright or marketing is prose.

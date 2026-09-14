@@ -29,6 +29,7 @@ from app.wechat_open_platform import WechatOpenPlatformClient, ensure_authorizer
 from app.wechat_public_layout import WeChatPublicLayoutExtractionProvider
 
 from .account_style import (
+    PROFILE_SAMPLE_LIMIT,
     STYLE_VERSION,
     metric_ranges,
     prose_metrics,
@@ -85,7 +86,7 @@ class ProfileDimension(BaseModel):
 
     observation: str = Field(min_length=1, max_length=400)
     writing_guidance: str = Field(min_length=1, max_length=400)
-    evidence_article_ids: list[str] = Field(max_length=20)
+    evidence_article_ids: list[str] = Field(max_length=PROFILE_SAMPLE_LIMIT)
     confidence: Literal["low", "medium", "high"]
     consistency: Literal["stable", "mixed", "limited"]
     applicability: str = Field(min_length=1, max_length=300)
@@ -143,7 +144,11 @@ ARTICLE_STYLE_PROMPT = (
 
 
 def profile_needs_learning(learned: dict[str, Any]) -> bool:
-    return not learned or learned.get("prompt_version") != STYLE_VERSION
+    return (
+        not learned
+        or learned.get("prompt_version") != STYLE_VERSION
+        or learned.get("sample_limit") != PROFILE_SAMPLE_LIMIT
+    )
 
 
 async def enqueue_account_profile_learning(
@@ -227,6 +232,9 @@ async def enqueue_missing_account_profiles(session: AsyncSession) -> int:
                         OfficialAccount.writing_profile["prompt_version"].as_string().is_(None),
                         OfficialAccount.writing_profile["prompt_version"].as_string()
                         != STYLE_VERSION,
+                        OfficialAccount.writing_profile["sample_limit"].as_integer().is_(None),
+                        OfficialAccount.writing_profile["sample_limit"].as_integer()
+                        != PROFILE_SAMPLE_LIMIT,
                     ),
                     ~recent_or_running,
                 )
@@ -359,7 +367,9 @@ async def process_account_profile(
     if not job or job.status in {"completed", "failed", "cancelled"}:
         return job
     try:
-        publication = await client.recent_publication_records(access_token=access_token, limit=20)
+        publication = await client.recent_publication_records(
+            access_token=access_token, limit=PROFILE_SAMPLE_LIMIT
+        )
     except ProviderAuthenticationError as exc:
         if exc.code not in {40001, 40014, 42001}:
             raise
@@ -377,7 +387,9 @@ async def process_account_profile(
         )
         if not job or job.status in {"completed", "failed", "cancelled"}:
             return job
-        publication = await client.recent_publication_records(access_token=access_token, limit=20)
+        publication = await client.recent_publication_records(
+            access_token=access_token, limit=PROFILE_SAMPLE_LIMIT
+        )
     job.frozen_payload = {**job.frozen_payload, "selection": publication["selection"]}
     sources: list[dict[str, Any]] = []
     for article in publication["articles"]:
@@ -385,7 +397,7 @@ async def process_account_profile(
             content = await article_reader.fetch_article_markdown(source_url=article["url"])
         except Exception as exc:
             raise ApiError(
-                502, "WECHAT_PROFILE_ARTICLE_UNAVAILABLE", "最新20篇中有文章正文读取失败。"
+                502, "WECHAT_PROFILE_ARTICLE_UNAVAILABLE", "最新10篇中有文章正文读取失败。"
             ) from exc
         body = content.text
         if body:
@@ -401,8 +413,8 @@ async def process_account_profile(
                     "text": body,
                 }
             )
-    if len(sources) != 20:
-        raise ApiError(422, "WECHAT_PROFILE_INSUFFICIENT_ARTICLES", "未读取到完整的最新20篇。")
+    if len(sources) != PROFILE_SAMPLE_LIMIT:
+        raise ApiError(422, "WECHAT_PROFILE_INSUFFICIENT_ARTICLES", "未读取到完整的最新10篇。")
     if sum(item["source_characters"] for item in sources) > 2_000_000:
         raise ApiError(413, "WECHAT_PROFILE_SOURCE_LIMIT", "公众号文章超出本次学习容量。")
     for source in sources:
@@ -618,7 +630,7 @@ async def process_account_profile(
         "style_metrics": measured,
         "article_analyses": analyses,
         "sample_count": len(sources),
-        "sample_limit": 20,
+        "sample_limit": PROFILE_SAMPLE_LIMIT,
         "learned_at": utcnow().isoformat(),
         "source": "wechat_getarticletotaldetail",
         "prompt_version": STYLE_VERSION,

@@ -457,7 +457,7 @@ class WechatOpenPlatformClient:
         return status
 
     async def recent_publication_records(
-        self, *, access_token: str, limit: int = 20
+        self, *, access_token: str, limit: int = 10
     ) -> dict[str, Any]:
         """Select by official publication date, never by material update order."""
         if not 1 <= limit <= 20:
@@ -537,7 +537,7 @@ class WechatOpenPlatformClient:
                 # was published later when the boundary cuts across several daily batches.
                 raise WechatProfileSourceError(
                     "WECHAT_PROFILE_TIME_AMBIGUOUS",
-                    "第20篇所在日期有多批发表内容，官方仅提供日期，无法确认批次先后。",
+                    f"第{limit}篇所在日期有多批发表内容，官方仅提供日期，无法确认批次先后。",
                 )
             daily.sort(key=lambda a: (a["publication_group"], a["article_index"]))
             articles.extend(daily[:remaining])
@@ -545,7 +545,7 @@ class WechatOpenPlatformClient:
                 return {
                     "articles": articles,
                     "selection": {
-                        "policy": "latest-20-by-publication-date-v2",
+                        "policy": f"latest-{limit}-by-publication-date-v2",
                         "source": "wechat_getarticletotaldetail",
                         "as_of_date": cutoff.isoformat(),
                         "oldest_published_date": day.isoformat(),
@@ -558,7 +558,7 @@ class WechatOpenPlatformClient:
             day -= timedelta(days=1)
         raise WechatProfileSourceError(
             "WECHAT_PROFILE_INSUFFICIENT_ARTICLES",
-            f"官方可查询的发表记录仅找到{len(articles)}篇，未达到20篇。",
+            f"官方可查询的发表记录仅找到{len(articles)}篇，未达到{limit}篇。",
         )
 
     async def component_access_token(
