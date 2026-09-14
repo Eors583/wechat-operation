@@ -8,14 +8,15 @@ from datetime import UTC, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import select
+from sqlalchemy import cast, or_, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.errors import ApiError
 from app.long_context import context_budget, fit_context, summary_prompt
 from app.model_gateway import active_route_snapshot, generate_with_frozen_route
-from app.models import JobRecord, OfficialAccount, utcnow
+from app.models import JobRecord, OfficialAccount, User, utcnow
 from app.providers import (
     ContentSafetyProvider,
     ModelContractViolation,
@@ -124,6 +125,45 @@ async def enqueue_account_profile_learning(
         payload={"job_id": job.id},
     )
     return job
+
+
+async def enqueue_missing_account_profiles(session: AsyncSession) -> int:
+    recent_or_running = (
+        select(JobRecord.id)
+        .where(
+            JobRecord.job_type == PROFILE_JOB,
+            JobRecord.resource_id == OfficialAccount.id,
+            or_(
+                JobRecord.status.in_(["queued", "processing"]),
+                JobRecord.created_at > utcnow() - timedelta(hours=1),
+            ),
+        )
+        .exists()
+    )
+    accounts = list(
+        (
+            await session.scalars(
+                select(OfficialAccount)
+                .where(
+                    OfficialAccount.status == "connected",
+                    OfficialAccount.deleted_at.is_(None),
+                    OfficialAccount.owner_id.in_(
+                        select(User.id).where(User.status == "active", User.deleted_at.is_(None))
+                    ),
+                    cast(OfficialAccount.writing_profile, JSONB) == {},
+                    ~recent_or_running,
+                )
+                .order_by(OfficialAccount.created_at, OfficialAccount.id)
+                .limit(50)
+                .with_for_update(skip_locked=True)
+            )
+        ).all()
+    )
+    enqueued = 0
+    for account in accounts:
+        if await enqueue_account_profile_learning(session, account=account):
+            enqueued += 1
+    return enqueued
 
 
 def _parse_profile(result: ModelResult, article_ids: set[str]) -> WritingProfile:

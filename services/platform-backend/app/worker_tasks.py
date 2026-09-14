@@ -10,7 +10,11 @@ from app.config import Settings
 from app.database import Database
 from app.dependencies import _wechat_article_api_configs
 from app.domains.account_deletion import purge_account
-from app.domains.account_profile import PROFILE_JOB, process_account_profile
+from app.domains.account_profile import (
+    PROFILE_JOB,
+    enqueue_missing_account_profiles,
+    process_account_profile,
+)
 from app.domains.ai import (
     fail_ai_run,
     persist_live_run_event,
@@ -69,6 +73,22 @@ def _configured_secrets(config: Settings) -> EnvironmentSecretProvider:
 def process_account_profile_task(job_id: str, message_id: str | None = None) -> dict[str, Any]:
     del message_id  # The locked durable job is the idempotency boundary, including admin retries.
     return _run(_process_account_profile(job_id))
+
+
+@celery.task(name="app.worker_tasks.enqueue_missing_account_profiles_task")
+def enqueue_missing_account_profiles_task() -> dict[str, Any]:
+    return _run(_enqueue_missing_account_profiles())
+
+
+async def _enqueue_missing_account_profiles() -> dict[str, Any]:
+    database = Database(Settings.from_env())
+    try:
+        async with database.session_maker() as session:
+            enqueued = await enqueue_missing_account_profiles(session)
+            await session.commit()
+            return {"enqueued": enqueued}
+    finally:
+        await database.dispose()
 
 
 async def _process_account_profile(job_id: str) -> dict[str, Any]:

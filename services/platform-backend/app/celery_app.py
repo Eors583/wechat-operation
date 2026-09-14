@@ -34,6 +34,7 @@ celery.conf.update(
     broker_transport_options={"confirm_publish": True},
     task_routes={
         "app.worker_tasks.process_account_profile_task": {"queue": "sync"},
+        "app.worker_tasks.enqueue_missing_account_profiles_task": {"queue": "maintenance"},
         "app.worker_tasks.process_ai_run_task": {"queue": "ai"},
         "app.worker_tasks.process_ai_run_memory_task": {"queue": "ai"},
         "app.worker_tasks.process_article_revision_task": {"queue": "ai"},
@@ -49,6 +50,10 @@ celery.conf.update(
         "app.worker_tasks.purge_due_accounts_task": {"queue": "maintenance"},
     },
     beat_schedule={
+        "enqueue-missing-account-profiles": {
+            "task": "app.worker_tasks.enqueue_missing_account_profiles_task",
+            "schedule": 60.0,
+        },
         "relay-transactional-outbox": {
             "task": "app.worker_tasks.relay_outbox_task",
             "schedule": 2.0,
