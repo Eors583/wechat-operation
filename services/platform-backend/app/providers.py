@@ -13,6 +13,14 @@ class ProviderUnavailable(RuntimeError):
     pass
 
 
+class DocumentProcessingError(ProviderUnavailable):
+    """A classified, user-safe document failure; never include parser exception text."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class ModelContractViolation(ProviderUnavailable):
     def __init__(self, message: str, *, code: str = "MODEL_OUTPUT_INVALID") -> None:
         super().__init__(message)

@@ -336,6 +336,11 @@ let pageActive = true
 let prependingMessages = false
 
 const friendlyRunError = (code?: string, message?: string) => {
+  if (
+    code === 'CLIENT_GENERATION_ERROR' &&
+    /failed to fetch|load failed|networkerror/i.test(message ?? '')
+  )
+    return '网络连接中断，暂未确认请求结果。请恢复网络后继续原请求，避免重复创建任务。'
   if (code === 'ModelRouteExhausted' || code === 'ProviderUnavailable')
     return selectedModelId.value
       ? '所选模型和备用模型本次均未能完成生成。你可以切回“自动（稳定优先）”后重新生成。'

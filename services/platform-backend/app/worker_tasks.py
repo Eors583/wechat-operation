@@ -45,7 +45,7 @@ from app.models import (
     utcnow,
 )
 from app.provider_factory import build_providers
-from app.providers import EnvironmentSecretProvider, ProviderUnavailable
+from app.providers import DocumentProcessingError, EnvironmentSecretProvider, ProviderUnavailable
 from app.retrieval_routing import build_route_aware_retrieval_service
 from app.web_references import SafeHttpWebReferenceProvider
 from app.wechat_open_platform import WechatOpenPlatformClient, ensure_authorizer_access_token
@@ -454,12 +454,20 @@ async def _process_document(document_id: str, message_id: str | None = None) -> 
                         aggregate_id=document.id,
                         payload={"document_id": document.id},
                     )
-            except ProviderUnavailable:
+            except ProviderUnavailable as exc:
                 asset = await session.get(Asset, document.asset_id)
-                document.status = "blocked_external"
-                document.error_code = "DOCUMENT_INDEX_PROVIDER_UNAVAILABLE"
+                document.status = "failed"
+                document.error_code = (
+                    exc.code
+                    if isinstance(exc, DocumentProcessingError)
+                    else "DOCUMENT_PROCESSING_PROVIDER_UNAVAILABLE"
+                )
                 if asset:
-                    asset.scan_status = "blocked_external"
+                    asset.scan_status = (
+                        "rejected"
+                        if document.error_code == "DOCUMENT_SECURITY_REJECTED"
+                        else "failed"
+                    )
                 library_item = await session.scalar(
                     select(LibraryItem).where(
                         LibraryItem.item_type == "document",
@@ -477,8 +485,12 @@ async def _process_document(document_id: str, message_id: str | None = None) -> 
                 if job:
                     job.status = "failed"
                     job.stage = "provider_required"
-                    job.error_code = "DOCUMENT_INDEX_PROVIDER_UNAVAILABLE"
-                    job.error_message = "Document processing or retrieval indexing failed."
+                    job.error_code = document.error_code
+                    job.error_message = (
+                        str(exc)
+                        if isinstance(exc, DocumentProcessingError)
+                        else "文件处理服务暂时不可用，请稍后重试。"
+                    )
             result = {"document_id": document.id, "status": document.status}
             remember_inbox_message(session, consumer=consumer, message_id=message_id, result=result)
             await session.commit()

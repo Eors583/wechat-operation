@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
+import json
 import posixpath
+import subprocess
+import sys
 import zipfile
 from typing import Protocol
 from xml.etree import ElementTree
 
 from app.providers import (
+    DocumentProcessingError,
     DocumentProcessingResult,
     DocumentSectionResult,
     ProviderUnavailable,
@@ -15,6 +20,7 @@ from app.providers import (
 )
 
 PPTX_MIME = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 TEXT_MIME_TYPES = {"text/plain", "text/markdown", "text/csv", "text/html"}
 MAX_DOCUMENT_BYTES = 100 * 1024 * 1024
 MAX_ZIP_ENTRIES = 10_000
@@ -30,7 +36,7 @@ class BuiltInDocumentScanner:
     async def scan(self, content: bytes) -> None:
         eicar_marker = b"EICAR-STANDARD-ANTIVIRUS-TEST-FILE"
         if eicar_marker in content or content.startswith((b"MZ", b"\x7fELF")):
-            raise ProviderUnavailable("文件未通过安全检查。")
+            raise DocumentProcessingError("DOCUMENT_SECURITY_REJECTED", "文件未通过安全检查。")
 
 
 class LocalDocumentProcessingProvider:
@@ -66,9 +72,63 @@ class LocalDocumentProcessingProvider:
                 page_count=1,
                 sections=(DocumentSectionResult("page", extracted, page_no=1),),
             )
-        if mime_type == PPTX_MIME:
-            return self._process_pptx(content)
-        raise ProviderUnavailable("当前文档格式暂不支持解析。")
+        if mime_type in {"application/pdf", DOCX_MIME, PPTX_MIME}:
+            return await asyncio.to_thread(self._process_document_text, content, mime_type)
+        raise DocumentProcessingError("DOCUMENT_FORMAT_UNSUPPORTED", "当前文档格式暂不支持解析。")
+
+    @staticmethod
+    def _process_document_text(content: bytes, mime_type: str) -> DocumentProcessingResult:
+        kind = (
+            "pdf"
+            if mime_type == "application/pdf"
+            else "pptx"
+            if mime_type == PPTX_MIME
+            else "docx"
+        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "app.document_text", kind],
+                input=content,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=60,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise DocumentProcessingError(
+                "DOCUMENT_PARSE_LIMIT", "文档解析超时，请拆分文件后重试。"
+            ) from exc
+        except OSError as exc:
+            raise DocumentProcessingError(
+                "DOCUMENT_PROCESSING_PROVIDER_UNAVAILABLE", "文档解析进程暂时无法启动，请稍后重试。"
+            ) from exc
+        if result.returncode:
+            raise DocumentProcessingError(
+                "DOCUMENT_PARSE_LIMIT", "文档解析超出资源限制，请拆分文件后重试。"
+            )
+        try:
+            payload = json.loads(result.stdout)
+        except (ValueError, UnicodeError) as exc:
+            raise DocumentProcessingError(
+                "DOCUMENT_PARSE_FAILED", "文档解析结果无效，请重新解析。"
+            ) from exc
+        if payload.get("error_code"):
+            raise DocumentProcessingError(payload["error_code"], payload["message"])
+        sections = tuple(
+            DocumentSectionResult(
+                "document" if kind == "docx" else "page",
+                text,
+                "正文与表格" if kind == "docx" else f"第 {number} 页",
+                page_no=None if kind == "docx" else number,
+            )
+            for number, text in enumerate(payload["pages"], start=1)
+        )
+        return DocumentProcessingResult(
+            extracted_text="\n\n".join(section.text for section in sections if section.text),
+            parser_version=f"local-{kind}-v1",
+            page_count=None if kind == "docx" else len(sections),
+            sections=sections,
+        )
 
     @staticmethod
     def _validate_archive(archive: zipfile.ZipFile) -> None:
@@ -97,9 +157,7 @@ class LocalDocumentProcessingProvider:
     def _process_pptx(cls, content: bytes) -> DocumentProcessingResult:
         drawing_ns = "http://schemas.openxmlformats.org/drawingml/2006/main"
         rels_ns = "http://schemas.openxmlformats.org/package/2006/relationships"
-        document_rels_ns = (
-            "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-        )
+        document_rels_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
                 cls._validate_archive(archive)
@@ -124,16 +182,11 @@ class LocalDocumentProcessingProvider:
                 for page_no, path in enumerate(paths, start=1):
                     root = ElementTree.fromstring(archive.read(path))
                     text = "\n".join(
-                        "".join(
-                            node.text or ""
-                            for node in paragraph.iter(f"{{{drawing_ns}}}t")
-                        )
+                        "".join(node.text or "" for node in paragraph.iter(f"{{{drawing_ns}}}t"))
                         for paragraph in root.iter(f"{{{drawing_ns}}}p")
                     ).strip()
                     sections.append(
-                        DocumentSectionResult(
-                            "page", text, f"第 {page_no} 页", page_no=page_no
-                        )
+                        DocumentSectionResult("page", text, f"第 {page_no} 页", page_no=page_no)
                     )
         except (KeyError, zipfile.BadZipFile, ElementTree.ParseError, OSError) as exc:
             raise ProviderUnavailable("PPTX 文件结构无效或无法读取。") from exc

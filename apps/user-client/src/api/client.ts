@@ -528,6 +528,29 @@ const isManualReplayOperation = (request: Request) => {
   )
 }
 
+const fetchWithReadRecovery = async (request: Request): Promise<Response> => {
+  const maxAttempts = ['GET', 'HEAD'].includes(request.method) ? 4 : 1
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(request.clone())
+      if (![502, 503, 504].includes(response.status) || attempt === maxAttempts - 1) return response
+      await response.body?.cancel()
+    } catch (error) {
+      if (request.signal.aborted || !(error instanceof TypeError)) throw error
+      if (attempt === maxAttempts - 1)
+        throw new ApiError(
+          '网络连接中断，暂未确认请求结果。请恢复网络后继续原请求，已提交的任务不要重复创建。',
+          503,
+          'NETWORK_CONNECTION_FAILED',
+          undefined,
+          true,
+        )
+    }
+    await abortableDelay(500 * 2 ** attempt, request.signal)
+  }
+  throw new ApiError('网络连接暂时不可用。', 503, 'NETWORK_CONNECTION_FAILED', undefined, true)
+}
+
 const authenticatedFetch = async (input: Request): Promise<Response> => {
   const headers = new Headers(input.headers)
   const cached = readCachedSession()
@@ -538,7 +561,7 @@ const authenticatedFetch = async (input: Request): Promise<Response> => {
     if (csrf) headers.set('X-CSRF-Token', decodeURIComponent(csrf))
   }
   const request = new Request(input, { headers, credentials: 'include' })
-  const response = await fetch(request)
+  const response = await fetchWithReadRecovery(request)
   const isRefreshable =
     !pathname.includes('/api/v1/auth/') || pathname.endsWith('/api/v1/auth/logout')
   if (response.status !== 401 || !isRefreshable) return response
@@ -560,7 +583,7 @@ const authenticatedFetch = async (input: Request): Promise<Response> => {
   }
   const refreshed = readCachedSession()
   if (refreshed?.accessToken) headers.set('Authorization', `Bearer ${refreshed.accessToken}`)
-  return fetch(new Request(input, { headers, credentials: 'include' }))
+  return fetchWithReadRecovery(new Request(request, { headers, credentials: 'include' }))
 }
 
 const openApi = createClient<paths, 'application/json'>({
@@ -1585,6 +1608,7 @@ const uploadRemoteFile = async (
     return attachment(command.documentId, command.assetId)
   } catch (error) {
     if (
+      !command.documentId &&
       error instanceof ApiError &&
       !error.retryable &&
       error.status !== 408 &&
@@ -1592,6 +1616,14 @@ const uploadRemoteFile = async (
       error.status < 500
     )
       writePendingUpload(null, fingerprint)
+    if (error instanceof TypeError)
+      throw new ApiError(
+        '文件上传连接中断。请恢复网络后重试，将继续使用原上传记录。',
+        503,
+        'UPLOAD_NETWORK_ERROR',
+        { filename: file.name },
+        true,
+      )
     throw error
   }
 }
@@ -1627,12 +1659,26 @@ const waitForDocument = async (documentId: string, signal?: AbortSignal) => {
     if (status === 'completed') return
     if (status === 'failed' || status === 'blocked_external' || status === 'deleted') {
       const errorCode = textValue(document.errorCode, 'DOCUMENT_PROCESSING_FAILED')
+      const documentErrors: Record<string, string> = {
+        DOCUMENT_INDEX_PROVIDER_UNAVAILABLE: '文件解析未完成，请在文章库重新解析后再使用。',
+        DOCUMENT_PROCESSING_PROVIDER_UNAVAILABLE: '文件处理服务暂时不可用，请稍后重新解析。',
+        RETRIEVAL_INDEX_PROVIDER_UNAVAILABLE: '资料文字已解析，但检索索引暂不可用，请稍后重试。',
+        DOCUMENT_FORMAT_UNSUPPORTED:
+          '当前文件格式不支持解析，请转换为 PDF、DOCX、PPTX 或文本后上传。',
+        DOCUMENT_SECURITY_REJECTED: '文件未通过安全检查，不能用于生成。',
+        DOCUMENT_ENCRYPTED: 'PDF 已加密，请解密后重新上传。',
+        DOCUMENT_OCR_REQUIRED: 'PDF 没有可提取的文字，请先进行 OCR 或上传文字版。',
+        DOCUMENT_TEXT_EMPTY: '文件中没有可提取的文字，请上传包含正文的文档。',
+        DOCUMENT_PARSE_LIMIT: '文档解析超出资源或时间限制，请拆分后上传。',
+        DOCUMENT_PARSE_FAILED: '文件损坏或无法解析，请重新导出后上传。',
+      }
       throw new ApiError(
-        errorCode === 'FILE_PROVIDER_NOT_CONFIGURED'
-          ? '资料解析服务尚未配置，文件已保存但暂时不能用于 AI 创作。'
-          : status === 'blocked_external'
-            ? '资料包含需要人工确认的外部内容，暂不能用于生成。'
-            : '资料解析没有完成，请删除后重新上传。',
+        documentErrors[errorCode] ??
+          (errorCode === 'FILE_PROVIDER_NOT_CONFIGURED'
+            ? '资料解析服务尚未配置，文件已保存但暂时不能用于 AI 创作。'
+            : status === 'blocked_external'
+              ? '资料包含需要人工确认的外部内容，暂不能用于生成。'
+              : '资料解析没有完成，请重新解析或上传。'),
         409,
         errorCode,
         { documentId, status },
