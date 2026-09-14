@@ -12,7 +12,7 @@ import zlib
 from dataclasses import dataclass
 from datetime import UTC, date, timedelta
 from typing import Any, cast
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 from xml.etree import ElementTree
 
 import httpx
@@ -64,23 +64,50 @@ class WechatApiError(ProviderUnavailable):
 
 
 def _compatible_draft_html(html: str) -> str:
+    """Clean the final WeChat payload without changing the saved article preview."""
     soup = BeautifulSoup(html, "html.parser")
-    changed = False
+    removed_links = 0
+    removed_elements = 0
+    removed_attributes = 0
+    for element in soup.find_all(["script", "style", "iframe", "object", "embed", "link", "meta"]):
+        element.decompose()
+        removed_elements += 1
     for link in soup.find_all("a", href=True):
         try:
-            url = urlsplit(str(link["href"]))
+            url = urlsplit(str(link["href"]).strip())
+            path = unquote(url.path).lower()
+            restricted = (
+                url.scheme.lower() not in {"", "http", "https"}
+                or (
+                    url.hostname in {None, "mp.weixin.qq.com"}
+                    and (path == "/mp" or path.startswith("/mp/"))
+                )
+            )
         except ValueError:
-            continue
-        query = dict(parse_qsl(url.query))
-        if (
-            url.hostname == "mp.weixin.qq.com"
-            and url.path == "/mp/readtemplate"
-            and (query.get("t") == "pages/video_player_tmpl" or query.get("action") == "mpvideo")
-        ):
-            # Keep the preview image and text; this internal player URL causes 45166.
+            restricted = True
+        if restricted:
+            # Internal WeChat player links are not public article links. Keep their
+            # cover/text, including when the template predates the current extractor.
             link.unwrap()
-            changed = True
-    return str(soup) if changed else html
+            removed_links += 1
+    for element in soup.find_all(True):
+        for attribute in list(element.attrs):
+            if attribute.lower().startswith("on") or attribute.lower() == "srcdoc":
+                del element[attribute]
+                removed_attributes += 1
+        # Native mp-common-profile data-* attributes carry the account identity;
+        # removing them would turn a real account card into an empty component.
+    if not (removed_links or removed_elements or removed_attributes):
+        return html
+    cleaned = str(soup)
+    logger.info(
+        "wechat_draft_html_cleaned links=%d elements=%d attributes=%d sha256=%s",
+        removed_links,
+        removed_elements,
+        removed_attributes,
+        hashlib.sha256(cleaned.encode("utf-8")).hexdigest(),
+    )
+    return cleaned
 
 
 class WechatPublishedContentError(ProviderUnavailable):
