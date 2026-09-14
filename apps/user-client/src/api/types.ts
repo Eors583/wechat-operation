@@ -273,6 +273,7 @@ export interface ModuleStyle {
 
 export type LayoutContentBlock = Required<Camelized<BackendSchemas['LayoutContentBlock']>>
 export type LayoutLockedBlock = Required<Camelized<BackendSchemas['LayoutLockedBlock']>>
+export type LayoutComponentGroup = Required<Camelized<BackendSchemas['LayoutComponentGroup']>>
 
 export interface LayoutTemplate {
   isDefault?: boolean
@@ -280,6 +281,7 @@ export interface LayoutTemplate {
   versionNo?: number
   sourceTitle?: string
   contentBlocks?: LayoutContentBlock[]
+  componentGroups?: LayoutComponentGroup[]
   lockedBlocks?: LayoutLockedBlock[]
   lockedBlockCount?: number
   id: string

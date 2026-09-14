@@ -78,7 +78,14 @@ class LayoutModuleEvidence(StyleContractModel):
     list: EvidenceList | None = None
 
 
+class LayoutComponentDecision(StyleContractModel):
+    group_id: str = Field(pattern=r"^group-[1-9][0-9]{0,3}$")
+    kind: Literal["lead_card", "credits", "decorated_heading", "body"]
+    confidence: float = Field(ge=0, le=1)
+
+
 class LayoutAgentResponse(StyleContractModel):
     style_tokens: StyleTokenPayload
     confidence: float = Field(ge=0, le=1)
     module_evidence: LayoutModuleEvidence
+    component_decisions: list[LayoutComponentDecision] = Field(default_factory=list, max_length=100)

@@ -29099,6 +29099,7 @@
       },
       "LayoutTemplatePatch": {
         "properties": {
+          "component_groups": { "anyOf": [ { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/LayoutComponentGroup" } }, { "type": "null" } ] },
           "content_blocks": {
             "anyOf": [
               {
@@ -35305,11 +35306,112 @@
           }
         }
       },
+      "LayoutCreditField": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 120,
+            "default": ""
+          }
+        }
+      },
+      "LayoutComponentGroup": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind",
+          "block_ids"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^group-[1-9][0-9]{0,3}$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "lead_card",
+              "credits",
+              "decorated_heading",
+              "body",
+              "fixed"
+            ]
+          },
+          "block_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^content-[1-9][0-9]{0,5}$"
+            },
+            "minItems": 1,
+            "maxItems": 100
+          },
+          "confirmed": {
+            "type": "boolean",
+            "default": false
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "default": 0
+          },
+          "container_style": {
+            "$ref": "#/components/schemas/StyleProperties"
+          },
+          "text_style": {
+            "$ref": "#/components/schemas/StyleProperties"
+          },
+          "label_style": {
+            "$ref": "#/components/schemas/StyleProperties"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LayoutCreditField"
+            },
+            "maxItems": 12
+          },
+          "image_width": {
+            "type": "integer",
+            "minimum": 24,
+            "maximum": 680,
+            "default": 120
+          },
+          "sequence": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
       "LayoutSourceSnapshot": {
         "additionalProperties": true,
         "type": "object",
         "title": "LayoutSourceSnapshot",
         "properties": {
+          "component_groups": { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/LayoutComponentGroup" } },
           "content_blocks": {
             "type": "array",
             "items": {

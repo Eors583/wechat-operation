@@ -1448,6 +1448,9 @@ const mapTemplate = (value: unknown): LayoutTemplate => {
     versionNo: numberValue(version.versionNo, numberValue(source.currentVersionNo)),
     sourceTitle: textValue(sourceSnapshot.title),
     contentBlocks: Array.isArray(sourceSnapshot.contentBlocks) ? contentBlocks : undefined,
+    componentGroups: Array.isArray(sourceSnapshot.componentGroups)
+      ? sourceSnapshot.componentGroups as LayoutTemplate['componentGroups']
+      : [],
     lockedBlocks: Array.isArray(sourceSnapshot.lockedBlocks) ? lockedBlocks : undefined,
     lockedBlockCount: numberValue(envelope.lockedBlockCount, lockedBlocks.length),
     sourcePreview: sourcePreviewFromSnapshot(version.sourceSnapshot),
@@ -3371,6 +3374,7 @@ export const remoteApi: UserApi = {
           ...shared,
           lockedBlocks: template.lockedBlocks,
           contentBlocks: template.contentBlocks,
+          componentGroups: template.componentGroups,
           baseVersionNo: template.versionNo || undefined,
         } satisfies LayoutTemplatePatchDto)
     const response = creating

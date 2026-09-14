@@ -4,11 +4,12 @@ import { useQuasar } from 'quasar'
 import { api } from '@/api/client'
 import { queryClient } from '@/boot/query'
 import { createDefaultStyles } from '@/api/styleDefaults'
-import type { LayoutTemplate, ModuleKey, ModuleStyle, OfficialAccount } from '@/api/types'
+import type { LayoutComponentGroup, LayoutTemplate, ModuleKey, ModuleStyle, OfficialAccount } from '@/api/types'
 import AppButton from '@/components/base/AppButton.vue'
 import AppDialog from '@/components/base/AppDialog.vue'
 import LockedContentEditor from '@/components/business/LockedContentEditor.vue'
 import TemplateSourcePreview from '@/components/business/TemplateSourcePreview.vue'
+import LayoutComponentGroups from '@/components/business/LayoutComponentGroups.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -216,6 +217,22 @@ const previewCopy = {
 } as const
 const markDirty = () => {
   if (selectedTemplate.value) dirtyTemplateIds.add(selectedTemplate.value.id)
+}
+const updateComponentGroups = (groups: LayoutComponentGroup[]) => {
+  if (!selectedTemplate.value || saving.value) return
+  selectedTemplate.value.componentGroups = groups
+  markDirty()
+}
+const addComponentGroup = () => {
+  const groups = selectedTemplate.value?.componentGroups ?? []
+  if (!selectedBlockIds.value.length || selectedBlockIds.value.length > 100 || groups.length >= 100) return
+  let index = 1
+  while (groups.some(group => group.id === `group-${index}`)) index += 1
+  updateComponentGroups([...groups, {
+    id: `group-${index}`, kind: 'lead_card', blockIds: [...selectedBlockIds.value],
+    confirmed: false, enabled: false, confidence: 0,
+    containerStyle: {}, textStyle: {}, labelStyle: {}, fields: [], imageWidth: 120, sequence: null,
+  }])
 }
 const markStyleDirty = () => {
   const keys = editedModules.value[selectedId.value] ?? []
@@ -878,6 +895,15 @@ const remove = async (target: LayoutTemplate) => {
           </q-tabs>
           <template v-if="previewMode === 'source'">
             <div v-if="sourceBlocks.length" class="template-editor__source">
+              <LayoutComponentGroups
+                :groups="selectedTemplate?.componentGroups ?? []"
+                :blocks="sourceBlocks"
+                :selected-ids="selectedBlockIds"
+                :disabled="saving"
+                @update="updateComponentGroups"
+                @add="addComponentGroup"
+                @select="(ids) => { selectedBlockIds = ids; lastSelectedBlockId = ids[ids.length - 1] ?? '' }"
+              />
               <TemplateSourcePreview
                 :key="selectedId"
                 :blocks="sourceBlocks"

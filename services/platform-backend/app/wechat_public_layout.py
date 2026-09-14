@@ -13,6 +13,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from markdownify import markdownify
 
+from app.layout_components import recognize_component_groups
 from app.layout_content import extract_content_blocks
 from app.providers import LayoutExtractionResult, ProviderUnavailable, WebReferenceContent
 
@@ -122,6 +123,7 @@ class WeChatPublicLayoutExtractionProvider:
                 "text_sample_count": len(samples),
                 "image_count": parser.image_count,
                 "content_blocks": parser.content_blocks,
+                "component_groups": recognize_component_groups(parser.content_blocks),
                 "layout_observation": {
                     "schema_version": 1,
                     "sample_count": min(len(samples), _MAX_LAYOUT_SAMPLES),

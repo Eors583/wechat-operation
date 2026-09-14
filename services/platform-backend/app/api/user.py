@@ -99,7 +99,7 @@ from app.domains.workspace import (
     set_project_requirements,
 )
 from app.errors import ApiError
-from app.layout_contracts import LayoutContentBlock, LayoutLockedBlock
+from app.layout_contracts import LayoutComponentGroup, LayoutContentBlock, LayoutLockedBlock
 from app.model_files import MAX_FILE_BYTES
 from app.model_gateway import active_route_snapshot
 from app.models import (
@@ -2295,6 +2295,7 @@ class LayoutTemplatePatch(BaseModel):
     style_tokens: contract.StyleTokenPayload | None = None
     locked_blocks: list[LayoutLockedBlock] | None = Field(default=None, max_length=100)
     content_blocks: list[LayoutContentBlock] | None = Field(default=None, max_length=10_000)
+    component_groups: list[LayoutComponentGroup] | None = Field(default=None, max_length=100)
     base_version_no: int | None = Field(default=None, ge=1)
 
 
@@ -2652,7 +2653,9 @@ async def patch_layout_template(
         and payload.base_version_no != template.current_version_no
     ):
         raise ApiError(409, "LAYOUT_VERSION_CONFLICT", "模板已更新，请重新打开后再修改。")
-    if payload.content_blocks is not None and payload.base_version_no is None:
+    if (
+        payload.content_blocks is not None or payload.component_groups is not None
+    ) and payload.base_version_no is None:
         raise ApiError(422, "LAYOUT_VERSION_REQUIRED", "请重新打开模板后修改固定内容。")
     if payload.name is not None:
         template.name = payload.name
@@ -2664,8 +2667,10 @@ async def patch_layout_template(
         )
     )
     if (
-        payload.style_tokens is not None or payload.locked_blocks is not None
+        payload.style_tokens is not None
+        or payload.locked_blocks is not None
         or payload.content_blocks is not None
+        or payload.component_groups is not None
     ):
         version = await add_template_version(
             session,
@@ -2673,20 +2678,32 @@ async def patch_layout_template(
             style_tokens=(
                 payload.style_tokens.model_dump(exclude_none=True)
                 if payload.style_tokens is not None
-                else version.style_tokens if version else DEFAULT_STYLE_TOKENS
+                else version.style_tokens
+                if version
+                else DEFAULT_STYLE_TOKENS
             ),
             locked_blocks=payload.locked_blocks,
             content_blocks=payload.content_blocks,
+            component_groups=payload.component_groups,
         )
-    if payload.locked_blocks is not None or payload.content_blocks is not None:
+    if (
+        payload.locked_blocks is not None
+        or payload.content_blocks is not None
+        or payload.component_groups is not None
+    ):
         audit(
-            session, actor_type="user", actor_id=user.id,
-            action="layout_template.update_locked_content", target_type="layout_template",
-            target_id=template.id, request_id=None,
+            session,
+            actor_type="user",
+            actor_id=user.id,
+            action="layout_template.update_locked_content",
+            target_type="layout_template",
+            target_id=template.id,
+            request_id=None,
             details={
                 "version_no": template.current_version_no,
                 "groups": len(payload.locked_blocks or []),
                 "edited_blocks": len(payload.content_blocks or []),
+                "components": len(payload.component_groups or []),
             },
         )
     if payload.is_default:

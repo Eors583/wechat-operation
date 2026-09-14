@@ -3463,6 +3463,25 @@ export interface components {
             readonly updated_at: string;
         };
         readonly JsonValue: unknown;
+        readonly LayoutComponentGroup: {
+            readonly block_ids: readonly string[];
+            /** @default 0 */
+            readonly confidence: number;
+            /** @default false */
+            readonly confirmed: boolean;
+            readonly container_style?: components["schemas"]["StyleProperties"];
+            /** @default false */
+            readonly enabled: boolean;
+            readonly fields?: readonly components["schemas"]["LayoutCreditField"][];
+            readonly id: string;
+            /** @default 120 */
+            readonly image_width: number;
+            /** @enum {string} */
+            readonly kind: "lead_card" | "credits" | "decorated_heading" | "body" | "fixed";
+            readonly label_style?: components["schemas"]["StyleProperties"];
+            readonly sequence?: number | null;
+            readonly text_style?: components["schemas"]["StyleProperties"];
+        };
         /** LayoutContentBlock */
         readonly LayoutContentBlock: {
             /** Html */
@@ -3477,6 +3496,11 @@ export interface components {
             readonly module: "title" | "lead" | "heading_marker" | "heading1" | "heading2" | "body" | "highlight" | "quote" | "list" | "caption" | "divider" | "table_header" | "table_cell";
             /** Text */
             readonly text: string;
+        };
+        readonly LayoutCreditField: {
+            readonly label: string;
+            /** @default  */
+            readonly value: string;
         };
         /** LayoutExtractionResponse */
         readonly LayoutExtractionResponse: {
@@ -3525,6 +3549,7 @@ export interface components {
         };
         /** LayoutSourceSnapshot */
         readonly LayoutSourceSnapshot: {
+            readonly component_groups?: readonly components["schemas"]["LayoutComponentGroup"][];
             /** Content Blocks */
             readonly content_blocks?: readonly components["schemas"]["LayoutContentBlock"][];
             /** Locked Blocks */
@@ -3599,6 +3624,7 @@ export interface components {
         readonly LayoutTemplatePatch: {
             /** Base Version No */
             readonly base_version_no?: number | null;
+            readonly component_groups?: readonly components["schemas"]["LayoutComponentGroup"][] | null;
             /** Content Blocks */
             readonly content_blocks?: readonly components["schemas"]["LayoutContentBlock"][] | null;
             /** Enabled */
