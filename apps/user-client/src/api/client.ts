@@ -37,6 +37,8 @@ import type {
   Attachment,
   FileReadStatus,
   LayoutTemplate,
+  LayoutContentBlock,
+  LayoutLockedBlock,
   LibraryFilters,
   LibraryItem,
   LibraryPage,
@@ -1152,6 +1154,7 @@ const mapArticle = (value: unknown): Article => {
     ? mapTemplate({
         template: { ...layout, id: layout.templateId, enabled: true, extractionStatus: 'manual' },
         version: { id: layout.templateVersionId, styleTokens: layout.styleTokens },
+        lockedBlockCount: numberValue(layout.lockedBlockCount),
       })
     : undefined
   return {
@@ -1358,6 +1361,30 @@ const mapTemplate = (value: unknown): LayoutTemplate => {
   const version = isRecord(envelope.version) ? envelope.version : record(versions[0])
   const sourceSnapshot = record(version.sourceSnapshot)
   const modelAssist = record(sourceSnapshot.modelAssist)
+  const contentBlocks: LayoutContentBlock[] = (
+    Array.isArray(sourceSnapshot.contentBlocks) ? sourceSnapshot.contentBlocks : []
+  ).map((value) => {
+    const block = record(value)
+    return {
+      id: textValue(block.id),
+      html: textValue(block.html),
+      text: textValue(block.text),
+      module: moduleKeys.includes(block.module as ModuleKey) ? (block.module as ModuleKey) : 'body',
+    }
+  })
+  const lockedBlocks: LayoutLockedBlock[] = (
+    Array.isArray(sourceSnapshot.lockedBlocks) ? sourceSnapshot.lockedBlocks : []
+  ).map((value) => {
+    const group = record(value)
+    return {
+      blockIds: stringList(group.blockIds),
+      position:
+        group.position === 'after_body' || group.position === 'after_paragraph'
+          ? group.position
+          : 'before_body',
+      paragraphIndex: numberValue(group.paragraphIndex, 1),
+    }
+  })
   const extractionMode =
     modelAssist.status === 'completed'
       ? 'agent'
@@ -1377,6 +1404,11 @@ const mapTemplate = (value: unknown): LayoutTemplate => {
     status: templateStatus(source.extractionStatus),
     updatedAt: textValue(source.updatedAt, textValue(version.createdAt, now())),
     versionId: optionalText(version.id),
+    versionNo: numberValue(version.versionNo, numberValue(source.currentVersionNo)),
+    sourceTitle: textValue(sourceSnapshot.title),
+    contentBlocks,
+    lockedBlocks,
+    lockedBlockCount: numberValue(envelope.lockedBlockCount, lockedBlocks.length),
     sourcePreview: sourcePreviewFromSnapshot(version.sourceSnapshot),
     extractionMode,
     styles: stylesFromTokens(version.styleTokens),
@@ -3265,7 +3297,11 @@ export const remoteApi: UserApi = {
     }
     const payload = creating
       ? ({ ...shared, officialAccountId: template.accountId } satisfies LayoutTemplateCreateDto)
-      : (shared satisfies LayoutTemplatePatchDto)
+      : ({
+          ...shared,
+          lockedBlocks: template.lockedBlocks,
+          baseVersionNo: template.versionNo || undefined,
+        } satisfies LayoutTemplatePatchDto)
     const response = creating
       ? await openApiData(
           openApi.POST('/api/v1/layout-templates', {

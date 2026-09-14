@@ -13,6 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.errors import ApiError
+from app.layout_content import sanitize_content_html
+from app.layout_contracts import LayoutLockedBlock, LayoutSourceSnapshot
 from app.model_gateway import ModelRouteExhausted, generate_with_frozen_route
 from app.models import (
     ArticleRender,
@@ -213,15 +215,14 @@ def _validated_module_evidence(value: Any) -> dict[str, list[str]]:
 
 
 async def owned_template(
-    session: AsyncSession, *, owner_id: str, template_id: str
+    session: AsyncSession, *, owner_id: str, template_id: str, for_update: bool = False
 ) -> LayoutTemplate:
-    template = await session.scalar(
-        select(LayoutTemplate).where(
-            LayoutTemplate.id == template_id,
-            LayoutTemplate.owner_id == owner_id,
-            LayoutTemplate.deleted_at.is_(None),
-        )
+    statement = select(LayoutTemplate).where(
+        LayoutTemplate.id == template_id,
+        LayoutTemplate.owner_id == owner_id,
+        LayoutTemplate.deleted_at.is_(None),
     )
+    template = await session.scalar(statement.with_for_update() if for_update else statement)
     if not template:
         raise ApiError(404, "LAYOUT_TEMPLATE_NOT_FOUND", "排版模板不存在。")
     return template
@@ -265,20 +266,63 @@ async def add_template_version(
     template: LayoutTemplate,
     style_tokens: dict[str, Any],
     source_snapshot: dict[str, Any] | None = None,
+    locked_blocks: list[LayoutLockedBlock] | None = None,
     extractor_version: str = "manual-v1",
 ) -> LayoutTemplateVersion:
+    if source_snapshot is None:
+        previous = await session.scalar(
+            select(LayoutTemplateVersion).where(
+                LayoutTemplateVersion.template_id == template.id,
+                LayoutTemplateVersion.version_no == template.current_version_no,
+            )
+        )
+        source_snapshot = dict(previous.source_snapshot) if previous else {}
+        if previous:
+            extractor_version = previous.extractor_version
+    source_snapshot = validated_source_snapshot(source_snapshot, locked_blocks=locked_blocks)
     template.enabled = True
     template.current_version_no += 1
     version = LayoutTemplateVersion(
         template_id=template.id,
         version_no=template.current_version_no,
         style_tokens=validate_style_tokens(style_tokens),
-        source_snapshot=source_snapshot or {},
+        source_snapshot=source_snapshot,
         extractor_version=extractor_version,
     )
     session.add(version)
     await session.flush()
     return version
+
+
+def validated_source_snapshot(
+    snapshot: dict[str, Any], *, locked_blocks: list[LayoutLockedBlock] | None = None
+) -> dict[str, Any]:
+    try:
+        content = LayoutSourceSnapshot.model_validate(snapshot)
+    except ValidationError as exc:
+        raise ApiError(422, "LAYOUT_CONTENT_INVALID", "模板原文数据无效，请重新提取。") from exc
+    if locked_blocks is not None:
+        content.locked_blocks = locked_blocks
+    block_ids = [block.id for block in content.content_blocks]
+    if len(set(block_ids)) != len(block_ids):
+        raise ApiError(422, "LAYOUT_CONTENT_INVALID", "模板原文存在重复内容标识。")
+    if sum(len(block.html) for block in content.content_blocks) > 5_000_000:
+        raise ApiError(422, "LAYOUT_CONTENT_TOO_LARGE", "模板原文过大，请换一篇文章。")
+    available = set(block_ids)
+    selected: set[str] = set()
+    for group in content.locked_blocks:
+        group_ids = set(group.block_ids)
+        if len(group_ids) != len(group.block_ids) or selected.intersection(group_ids):
+            raise ApiError(422, "LAYOUT_LOCK_OVERLAP", "同一部分不能重复锁定。")
+        if not group_ids.issubset(available):
+            raise ApiError(422, "LAYOUT_LOCK_INVALID", "锁定内容已不存在，请重新选择。")
+        selected.update(group_ids)
+        group.block_ids = [block_id for block_id in block_ids if block_id in group_ids]
+    for block in content.content_blocks:
+        block.html = sanitize_content_html(block.html)
+    if sum(len(block.html) for block in content.content_blocks) > 5_000_000:
+        raise ApiError(422, "LAYOUT_CONTENT_TOO_LARGE", "模板原文过大，请换一篇文章。")
+    return content.model_dump()
 
 
 async def set_default_layout_template(session: AsyncSession, template: LayoutTemplate) -> None:
@@ -340,7 +384,10 @@ async def process_layout_extraction(
             purpose="layout_extraction",
             prompt=LAYOUT_AGENT_PROMPT,
             context={
-                "untrusted_layout_observation": result.source_snapshot,
+                "untrusted_layout_observation": {
+                    key: value for key, value in result.source_snapshot.items()
+                    if key not in {"content_blocks", "locked_blocks"}
+                },
                 "deterministic_baseline_style_tokens": baseline_tokens,
                 "output_contract": {
                     "allowed_modules": sorted(ALLOWED_MODULES),
@@ -653,6 +700,45 @@ def _node_html(node: Any, tokens: dict[str, Any], heading_index: list[int] | Non
     return f'<p style="{_css(tokens.get("body", {}))}">{content}</p>'
 
 
+def _document_with_locked_content(
+    document: dict[str, Any], tokens: dict[str, Any], snapshot: dict[str, Any]
+) -> str:
+    groups = snapshot.get("locked_blocks", [])
+    if not groups:
+        return _node_html(document, tokens)
+    snapshot = validated_source_snapshot(snapshot)
+    blocks = {block["id"]: block["html"] for block in snapshot["content_blocks"]}
+    before: list[str] = []
+    after: list[str] = []
+    between: dict[int, list[str]] = {}
+    for group in snapshot["locked_blocks"]:
+        fragment = "".join(blocks[block_id] for block_id in group["block_ids"])
+        fragment = f'<section data-template-locked="true">{fragment}</section>'
+        if group["position"] == "before_body":
+            before.append(fragment)
+        elif group["position"] == "after_body":
+            after.append(fragment)
+        else:
+            between.setdefault(group["paragraph_index"], []).append(fragment)
+    nodes = list(document.get("content", []))
+    parts: list[str] = []
+    heading_index = [0]
+    # A title embedded in legacy article content still precedes the template header.
+    if nodes and nodes[0].get("type") == "heading" and nodes[0].get("attrs", {}).get("level") == 1:
+        parts.append(_node_html(nodes.pop(0), tokens, heading_index))
+    parts.extend(before)
+    paragraph_index = 0
+    for node in nodes:
+        parts.append(_node_html(node, tokens, heading_index))
+        if node.get("type") in {"paragraph", "lead", "intro", "highlight"}:
+            paragraph_index += 1
+            parts.extend(between.pop(paragraph_index, []))
+    for index in sorted(between):
+        parts.extend(between[index])
+    parts.extend(after)
+    return "".join(parts)
+
+
 async def create_render(
     session: AsyncSession,
     *,
@@ -674,22 +760,6 @@ async def create_render(
     )
     if not article_version:
         raise ApiError(404, "ARTICLE_VERSION_NOT_FOUND", "文章版本不存在。")
-    if max_article_images is not None:
-
-        def image_count(value: Any) -> int:
-            if isinstance(value, list):
-                return sum(image_count(item) for item in value)
-            if not isinstance(value, dict):
-                return 0
-            return int(value.get("type") == "image") + image_count(value.get("content", []))
-
-        if image_count(article_version.content_json) > max_article_images:
-            raise ApiError(
-                422,
-                "ARTICLE_IMAGE_LIMIT_EXCEEDED",
-                "文章图片数量超过当前系统限制。",
-                details={"max_images": max_article_images},
-            )
     template_version: LayoutTemplateVersion | None = None
     tokens = DEFAULT_STYLE_TOKENS
     saved_layout = article_version.layout_snapshot
@@ -718,7 +788,18 @@ async def create_render(
         if not template_version:
             raise ApiError(409, "LAYOUT_TEMPLATE_EMPTY", "模板还没有可用版本。")
         tokens = validate_style_tokens(template_version.style_tokens)
-    document_html = _node_html(article_version.content_json, tokens)
+    document_html = _document_with_locked_content(
+        article_version.content_json, tokens,
+        template_version.source_snapshot if template_version else {},
+    )
+    if (
+        max_article_images is not None
+        and len(re.findall(r"<img\b", document_html)) > max_article_images
+    ):
+        raise ApiError(
+            422, "ARTICLE_IMAGE_LIMIT_EXCEEDED", "文章与固定内容的图片总数超过当前系统限制。",
+            details={"max_images": max_article_images},
+        )
     checksum_payload = {
         "article_version_id": article_version.id,
         "article_hash": article_version.content_hash,
@@ -726,6 +807,7 @@ async def create_render(
         "tokens": tokens,
         "official_account_id": official_account_id,
         "cover_asset_id": cover_asset_id,
+        "document_hash": hashlib.sha256(document_html.encode()).hexdigest(),
     }
     checksum = hashlib.sha256(
         json.dumps(checksum_payload, sort_keys=True, ensure_ascii=False).encode()

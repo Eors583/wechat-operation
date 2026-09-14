@@ -25706,6 +25706,13 @@
           },
           "style_tokens": {
             "$ref": "#/components/schemas/StyleTokenPayload"
+          },
+          "locked_block_count": {
+            "type": "integer",
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Locked Block Count",
+            "default": 0
           }
         },
         "additionalProperties": false,
@@ -28979,6 +28986,33 @@
                 "type": "null"
               }
             ]
+          },
+          "locked_blocks": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LayoutLockedBlock"
+                },
+                "maxItems": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Locked Blocks"
+          },
+          "base_version_no": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Version No"
           }
         },
         "type": "object",
@@ -29099,7 +29133,7 @@
             "$ref": "#/components/schemas/StyleTokenPayload"
           },
           "source_snapshot": {
-            "$ref": "#/components/schemas/JsonValue"
+            "$ref": "#/components/schemas/LayoutSourceSnapshot"
           },
           "extractor_version": {
             "type": "string",
@@ -34556,10 +34590,7 @@
             "type": "string",
             "title": "Status"
           },
-          "is_default": {
-            "type": "boolean",
-            "title": "Is Default"
-          },
+          "is_default": { "type": "boolean", "title": "Is Default" },
           "last_tested_at": {
             "anyOf": [
               {
@@ -35016,6 +35047,113 @@
           "ticket_callback_url"
         ],
         "title": "WechatPlatformConfigUpsert"
+      },
+      "LayoutContentBlock": {
+        "additionalProperties": false,
+        "type": "object",
+        "title": "LayoutContentBlock",
+        "required": [
+          "id",
+          "html",
+          "text"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^content-[1-9][0-9]{0,5}$",
+            "title": "Id"
+          },
+          "html": {
+            "type": "string",
+            "maxLength": 5000000,
+            "title": "Html"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 5000000,
+            "title": "Text"
+          },
+          "module": {
+            "type": "string",
+            "enum": [
+              "title",
+              "lead",
+              "heading_marker",
+              "heading1",
+              "heading2",
+              "body",
+              "highlight",
+              "quote",
+              "list",
+              "caption",
+              "divider",
+              "table_header",
+              "table_cell"
+            ],
+            "title": "Module",
+            "default": "body"
+          }
+        }
+      },
+      "LayoutLockedBlock": {
+        "additionalProperties": false,
+        "type": "object",
+        "title": "LayoutLockedBlock",
+        "required": [
+          "block_ids"
+        ],
+        "properties": {
+          "block_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^content-[1-9][0-9]{0,5}$"
+            },
+            "minItems": 1,
+            "maxItems": 10000,
+            "title": "Block Ids"
+          },
+          "position": {
+            "type": "string",
+            "enum": [
+              "before_body",
+              "after_body",
+              "after_paragraph"
+            ],
+            "default": "before_body",
+            "title": "Position"
+          },
+          "paragraph_index": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 1,
+            "title": "Paragraph Index"
+          }
+        }
+      },
+      "LayoutSourceSnapshot": {
+        "additionalProperties": true,
+        "type": "object",
+        "title": "LayoutSourceSnapshot",
+        "properties": {
+          "content_blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LayoutContentBlock"
+            },
+            "maxItems": 10000,
+            "title": "Content Blocks"
+          },
+          "locked_blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LayoutLockedBlock"
+            },
+            "maxItems": 100,
+            "title": "Locked Blocks"
+          }
+        }
       }
     },
     "securitySchemes": {

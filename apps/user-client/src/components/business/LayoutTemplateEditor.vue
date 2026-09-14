@@ -7,6 +7,7 @@ import { createDefaultStyles } from '@/api/styleDefaults'
 import type { LayoutTemplate, ModuleKey, ModuleStyle, OfficialAccount } from '@/api/types'
 import AppButton from '@/components/base/AppButton.vue'
 import AppDialog from '@/components/base/AppDialog.vue'
+import TemplateSourcePreview from '@/components/business/TemplateSourcePreview.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -33,6 +34,10 @@ const sourceUrl = ref('')
 const extracting = ref(false)
 const saving = ref(false)
 const mobileStep = ref(1)
+const previewMode = ref<'source' | 'styles'>('source')
+const selectedBlockIds = ref<string[]>([])
+const editedModules = ref<Record<string, ModuleKey[]>>({})
+const lastSelectedBlockId = ref('')
 const draftTemplateIds = new Set<string>()
 const dirtyTemplateIds = new Set<string>()
 const dirtyNameIds = new Set<string>()
@@ -91,6 +96,15 @@ watch(
               updatedAt: item.updatedAt,
               isDefault: item.isDefault,
               enabled: item.enabled,
+              ...(!local.versionId && item.versionId
+                ? {
+                    versionId: item.versionId,
+                    versionNo: item.versionNo,
+                    sourceTitle: item.sourceTitle,
+                    contentBlocks: item.contentBlocks,
+                    sourcePreview: item.sourcePreview,
+                  }
+                : {}),
             }
           : item
       })
@@ -105,6 +119,32 @@ watch(
 
 const selectedTemplate = computed(
   () => localTemplates.value.find((item) => item.id === selectedId.value) ?? null,
+)
+const sourceBlocks = computed(() => selectedTemplate.value?.contentBlocks ?? [])
+const lockedGroups = computed(() => selectedTemplate.value?.lockedBlocks ?? [])
+const lockedBlockIds = computed(
+  () => new Set(lockedGroups.value.flatMap((group) => group.blockIds)),
+)
+const sourceStyles = computed(() => {
+  const template = selectedTemplate.value
+  return Object.fromEntries(
+    (editedModules.value[selectedId.value] ?? []).map((key) => [key, template?.styles[key]]),
+  ) as Partial<Record<ModuleKey, ModuleStyle>>
+})
+const positionOptions = [
+  { label: '正文前', value: 'before_body' },
+  { label: '正文后', value: 'after_body' },
+  { label: '指定段落后', value: 'after_paragraph' },
+]
+watch(
+  selectedId,
+  () => {
+    selectedBlockIds.value = []
+    lastSelectedBlockId.value = ''
+    previewMode.value = 'source'
+    sourceUrl.value = selectedTemplate.value?.sourceUrl ?? ''
+  },
+  { immediate: true },
 )
 watch(
   () => props.modelValue,
@@ -143,11 +183,93 @@ const previewCopy = {
 const markDirty = () => {
   if (selectedTemplate.value) dirtyTemplateIds.add(selectedTemplate.value.id)
 }
+const markStyleDirty = () => {
+  const keys = editedModules.value[selectedId.value] ?? []
+  if (!keys.includes(activeModule.value))
+    editedModules.value[selectedId.value] = [...keys, activeModule.value]
+  markDirty()
+}
+
+const toggleSourceBlock = (id: string, extend: boolean) => {
+  if (lockedBlockIds.value.has(id)) return
+  const ids = sourceBlocks.value.map((block) => block.id)
+  const start = ids.indexOf(lastSelectedBlockId.value)
+  const end = ids.indexOf(id)
+  if (extend && start >= 0 && end >= 0) {
+    selectedBlockIds.value = [
+      ...new Set([
+        ...selectedBlockIds.value,
+        ...ids
+          .slice(Math.min(start, end), Math.max(start, end) + 1)
+          .filter((key) => !lockedBlockIds.value.has(key)),
+      ]),
+    ]
+  } else {
+    selectedBlockIds.value = selectedBlockIds.value.includes(id)
+      ? selectedBlockIds.value.filter((key) => key !== id)
+      : [...selectedBlockIds.value, id]
+  }
+  lastSelectedBlockId.value = id
+}
+
+const lockSelection = () => {
+  const template = selectedTemplate.value
+  if (!template || lockedGroups.value.length >= 100) return
+  const selected = new Set(selectedBlockIds.value)
+  const blockIds = sourceBlocks.value
+    .filter((block) => selected.has(block.id) && !lockedBlockIds.value.has(block.id))
+    .map((block) => block.id)
+  if (!blockIds.length) return
+  const firstIndex = sourceBlocks.value.findIndex((block) => block.id === blockIds[0])
+  template.lockedBlocks = [
+    ...lockedGroups.value,
+    {
+      blockIds,
+      position: firstIndex < sourceBlocks.value.length / 2 ? 'before_body' : 'after_body',
+      paragraphIndex: 1,
+    },
+  ]
+  selectedBlockIds.value = []
+  markDirty()
+}
+
+const unlockGroup = (index: number) => {
+  if (!selectedTemplate.value) return
+  selectedTemplate.value.lockedBlocks = lockedGroups.value.filter(
+    (_, groupIndex) => groupIndex !== index,
+  )
+  markDirty()
+}
+
+const updateGroupPosition = (
+  index: number,
+  position: 'before_body' | 'after_body' | 'after_paragraph',
+) => {
+  const group = lockedGroups.value[index]
+  if (!group) return
+  group.position = position
+  markDirty()
+}
+
+const updateParagraphIndex = (index: number, value: string | number | null) => {
+  const group = lockedGroups.value[index]
+  if (!group) return
+  group.paragraphIndex = Math.max(1, Math.min(10000, Math.floor(Number(value) || 1)))
+  markDirty()
+}
+
+const groupSummary = (blockIds: string[]) => {
+  const selected = new Set(blockIds)
+  return sourceBlocks.value
+    .filter((block) => selected.has(block.id))
+    .map((block) => block.text.trim() || '无文字内容')
+    .join(' · ')
+}
 
 const setStyle = <K extends keyof ModuleStyle>(key: K, value: ModuleStyle[K]) => {
   if (activeStyle.value) {
     activeStyle.value[key] = value
-    markDirty()
+    markStyleDirty()
   }
 }
 
@@ -155,7 +277,7 @@ const setBorder = (value: ModuleStyle['border']) => {
   if (!activeStyle.value) return
   activeStyle.value.border = value
   activeStyle.value.borderLeft = value === 'left' ? '4px solid #059669' : undefined
-  markDirty()
+  markStyleDirty()
 }
 
 const moduleStyle = (key: ModuleKey) => {
@@ -204,6 +326,11 @@ const addTemplate = () => {
     template.status = 'idle'
     template.updatedAt = new Date().toISOString()
     template.sourcePreview = []
+    template.sourceTitle = ''
+    template.contentBlocks = []
+    template.lockedBlocks = []
+    template.versionNo = undefined
+    template.versionId = undefined
     template.extractionMode = 'manual'
   }
   localTemplates.value.push(template)
@@ -311,6 +438,8 @@ const saveName = () => {
         if (local && created) {
           local.id = created.id
           local.status = created.status
+          local.versionNo = created.versionNo
+          local.versionId = created.versionId
           draftTemplateIds.delete(id)
           if (dirtyTemplateIds.delete(id)) dirtyTemplateIds.add(created.id)
           if (selectedId.value === id) selectedId.value = created.id
@@ -624,72 +753,179 @@ const remove = async () => {
           v-show="!$q.screen.lt.md || mobileStep === 4"
           class="template-editor__pane template-editor__preview"
         >
-          <h3>文章预览</h3>
-          <div class="template-editor__paper">
-            <h1 :style="moduleStyle('title')">
-              {{ previewCopy.title }}
-            </h1>
-            <p :style="moduleStyle('lead')">
-              {{ previewCopy.lead }}
-            </p>
-            <p
-              v-if="selectedTemplate?.styles.heading_marker.enabled"
-              class="template-editor__marker"
-              :style="moduleStyle('heading_marker')"
-            >
-              {{ previewCopy.headingMarker }}
-            </p>
-            <h2 :style="moduleStyle('heading1')">
-              {{ previewCopy.heading1 }}
-            </h2>
-            <p :style="moduleStyle('body')">
-              {{ previewCopy.body }}
-            </p>
-            <p :style="moduleStyle('highlight')">
-              {{ previewCopy.highlight }}
-            </p>
-            <blockquote :style="moduleStyle('quote')">
-              {{ previewCopy.quote }}
-            </blockquote>
-            <h3 :style="moduleStyle('heading2')">
-              {{ previewCopy.heading2 }}
-            </h3>
-            <ul :style="moduleStyle('list')">
-              <li>{{ previewCopy.list }}</li>
-              <li>{{ previewCopy.listSecond }}</li>
-            </ul>
-            <div class="template-editor__image"><q-icon name="image" size="42px" /></div>
-            <p :style="moduleStyle('caption')">
-              {{ previewCopy.caption }}
-            </p>
-            <hr :style="moduleStyle('divider')" />
-            <div class="template-editor__table-wrap" aria-label="表格样式预览">
-              <table>
-                <thead>
-                  <tr>
-                    <th
-                      v-for="label in ['方案', '特点', '适用场景']"
-                      :key="label"
-                      :style="moduleStyle('table_header')"
-                    >
-                      {{ label }}
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    v-for="(row, index) in [
-                      ['方案 A', '信息清晰，方便对比', '知识科普文章'],
-                      ['方案 B', '突出数据与结论', '行业分析文章'],
-                    ]"
-                    :key="index"
+          <q-tabs
+            v-model="previewMode"
+            dense
+            active-color="primary"
+            indicator-color="primary"
+            align="left"
+            class="template-editor__preview-tabs"
+          >
+            <q-tab name="source" label="完整原文与固定部分" />
+            <q-tab name="styles" label="排版样式预览" />
+          </q-tabs>
+          <template v-if="previewMode === 'source'">
+            <div v-if="sourceBlocks.length" class="template-editor__source">
+              <div class="template-editor__selection">
+                <span aria-live="polite">已选 {{ selectedBlockIds.length }} 部分</span>
+                <AppButton
+                  icon="lock"
+                  label="锁定所选"
+                  :disabled="!selectedBlockIds.length || lockedGroups.length >= 100 || saving"
+                  @click="lockSelection"
+                />
+                <AppButton
+                  v-if="selectedBlockIds.length"
+                  variant="ghost"
+                  label="清除选择"
+                  @click="selectedBlockIds = []"
+                />
+              </div>
+              <q-expansion-item
+                v-if="lockedGroups.length"
+                default-opened
+                icon="lock_outline"
+                :label="`固定部分（${lockedGroups.length} 组）`"
+                class="template-editor__locked-list"
+              >
+                <div class="template-editor__locked-scroll">
+                  <div
+                    v-for="(group, index) in lockedGroups"
+                    :key="group.blockIds.join(',')"
+                    class="template-editor__locked-group"
                   >
-                    <td v-for="(cell, col) in row" :key="col" :style="moduleStyle('table_cell')">
-                      {{ cell }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                    <div class="template-editor__locked-heading">
+                      <strong>固定部分 {{ index + 1 }} · {{ group.blockIds.length }} 项</strong>
+                      <AppButton
+                        variant="ghost"
+                        label="解锁"
+                        :aria-label="`解锁固定部分 ${index + 1}`"
+                        :disabled="saving"
+                        @click="unlockGroup(index)"
+                      />
+                    </div>
+                    <p :title="groupSummary(group.blockIds)">{{ groupSummary(group.blockIds) }}</p>
+                    <div class="template-editor__locked-placement">
+                      <q-select
+                        :model-value="group.position"
+                        :options="positionOptions"
+                        outlined
+                        dense
+                        emit-value
+                        map-options
+                        label="插入位置"
+                        :disable="saving"
+                        @update:model-value="updateGroupPosition(index, $event)"
+                      />
+                      <q-input
+                        v-if="group.position === 'after_paragraph'"
+                        :model-value="group.paragraphIndex"
+                        type="number"
+                        min="1"
+                        max="10000"
+                        step="1"
+                        outlined
+                        dense
+                        label="第几段后"
+                        :disable="saving"
+                        @update:model-value="updateParagraphIndex(index, $event)"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </q-expansion-item>
+              <p class="template-editor__source-hint">
+                点击左侧编号多选，Shift 连选；锁定部分保留原样。
+              </p>
+              <TemplateSourcePreview
+                :key="selectedId"
+                :blocks="sourceBlocks"
+                :title="selectedTemplate?.sourceTitle"
+                :selected-ids="selectedBlockIds"
+                :locked-groups="lockedGroups"
+                :edited-styles="sourceStyles"
+                @toggle="toggleSourceBlock"
+              />
+            </div>
+            <q-banner v-else rounded class="template-editor__source-empty">
+              <template v-if="selectedTemplate?.status === 'extracting'"
+                >正在提取完整文章，完成后可选择固定部分。</template
+              >
+              <template v-else-if="selectedTemplate?.sourceUrl"
+                >此模板尚无完整原文，请用上方原链接重新提取。已有排版样式仍可编辑。</template
+              >
+              <template v-else
+                >提取文章后可预览全文并锁定一个或多个部分；也可切换到排版样式预览。</template
+              >
+            </q-banner>
+          </template>
+          <div v-else class="template-editor__sample">
+            <div class="template-editor__paper">
+              <h1 :style="moduleStyle('title')">
+                {{ previewCopy.title }}
+              </h1>
+              <p :style="moduleStyle('lead')">
+                {{ previewCopy.lead }}
+              </p>
+              <p
+                v-if="selectedTemplate?.styles.heading_marker.enabled"
+                class="template-editor__marker"
+                :style="moduleStyle('heading_marker')"
+              >
+                {{ previewCopy.headingMarker }}
+              </p>
+              <h2 :style="moduleStyle('heading1')">
+                {{ previewCopy.heading1 }}
+              </h2>
+              <p :style="moduleStyle('body')">
+                {{ previewCopy.body }}
+              </p>
+              <p :style="moduleStyle('highlight')">
+                {{ previewCopy.highlight }}
+              </p>
+              <blockquote :style="moduleStyle('quote')">
+                {{ previewCopy.quote }}
+              </blockquote>
+              <h3 :style="moduleStyle('heading2')">
+                {{ previewCopy.heading2 }}
+              </h3>
+              <ul :style="moduleStyle('list')">
+                <li>{{ previewCopy.list }}</li>
+                <li>{{ previewCopy.listSecond }}</li>
+              </ul>
+              <div class="template-editor__image"><q-icon name="image" size="42px" /></div>
+              <p :style="moduleStyle('caption')">
+                {{ previewCopy.caption }}
+              </p>
+              <hr :style="moduleStyle('divider')" />
+              <div class="template-editor__table-wrap" aria-label="表格样式预览">
+                <table>
+                  <thead>
+                    <tr>
+                      <th
+                        v-for="label in ['方案', '特点', '适用场景']"
+                        :key="label"
+                        :style="moduleStyle('table_header')"
+                      >
+                        {{ label }}
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="(row, index) in [
+                        ['方案 A', '信息清晰，方便对比', '知识科普文章'],
+                        ['方案 B', '突出数据与结论', '行业分析文章'],
+                      ]"
+                      :key="index"
+                    >
+                      <td v-for="(cell, col) in row" :key="col" :style="moduleStyle('table_cell')">
+                        {{ cell }}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </section>
@@ -737,7 +973,7 @@ const remove = async () => {
 }
 .template-editor {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   height: min(74vh, 820px);
@@ -764,10 +1000,7 @@ const remove = async () => {
 
   &__grid {
     display: grid;
-    grid-template-columns: minmax(170px, 0.8fr) minmax(160px, 0.75fr) minmax(220px, 0.9fr) minmax(
-        360px,
-        2.4fr
-      );
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 0.75fr) minmax(0, 0.9fr) minmax(0, 2.4fr);
     min-width: 0;
     min-height: 0;
   }
@@ -884,7 +1117,113 @@ const remove = async () => {
   }
 
   &__preview {
+    display: flex;
+    flex-direction: column;
     background: var(--app-bg-subtle);
+  }
+
+  &__preview-tabs {
+    flex: 0 0 auto;
+    min-width: 0;
+    margin-bottom: 12px;
+  }
+
+  &__source {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+    min-height: 0;
+
+    > iframe {
+      flex: 1 1 auto;
+      min-height: 16rem;
+    }
+  }
+
+  &__selection,
+  &__locked-heading {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+
+    > span,
+    > strong {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+  }
+
+  &__locked-list {
+    flex: 0 0 auto;
+    min-width: 0;
+    background: var(--app-bg-surface);
+    border: 1px solid var(--app-border-default);
+    border-radius: 10px;
+  }
+
+  &__locked-scroll {
+    min-width: 0;
+    min-height: 0;
+    max-height: min(28vh, 240px);
+    padding-inline: 12px;
+    overflow-y: auto;
+  }
+
+  &__locked-group {
+    min-width: 0;
+    padding-bottom: 12px;
+
+    & + & {
+      padding-top: 12px;
+      border-top: 1px solid var(--app-border-default);
+    }
+
+    p {
+      max-width: 100%;
+      margin: 0 0 8px;
+      overflow: hidden;
+      color: var(--app-text-secondary);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  &__locked-placement {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+    gap: 8px;
+    min-width: 0;
+
+    :deep(.q-field),
+    :deep(.q-field__control),
+    :deep(.q-field__control-container),
+    :deep(.q-field__native) {
+      min-width: 0;
+      max-width: 100%;
+    }
+  }
+
+  &__source-hint,
+  &__source-empty {
+    flex: 0 0 auto;
+    min-width: 0;
+    margin: 0;
+    color: var(--app-text-secondary);
+    overflow-wrap: anywhere;
+    font-size: 12px;
+  }
+
+  &__sample {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
   }
 
   &__paper {
@@ -932,6 +1271,8 @@ const remove = async () => {
 
 @media (max-width: 1023px) {
   .template-editor {
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+
     &__grid {
       display: block;
     }
@@ -944,7 +1285,7 @@ const remove = async () => {
 
 @media (max-width: 599px) {
   .template-editor {
-    height: calc(100vh - 69px);
+    height: 72dvh;
 
     &__extract {
       grid-template-columns: minmax(0, 1fr) auto;
