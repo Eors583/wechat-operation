@@ -778,6 +778,19 @@ async def patch_model_provider(
         values["base_url"] = str(values["base_url"])
     if values.get("status") == "active" and not provider.last_test_result.get("passed"):
         raise ApiError(409, "PROVIDER_TEST_REQUIRED", "供应商需要先通过真实连接测试。")
+    if any(
+        key in values and values[key] != getattr(provider, key)
+        for key in ("base_url", "secret_ref", "status")
+    ):
+        deployments = (
+            await session.scalars(
+                select(ModelDeployment)
+                .where(ModelDeployment.provider_id == provider.id)
+                .with_for_update()
+            )
+        ).all()
+        for deployment in deployments:
+            await _require_unused_model(session, deployment.id)
     for key, value in values.items():
         setattr(provider, key, value)
     audit(
@@ -819,7 +832,8 @@ async def test_model_provider(
         passed = True
     except ProviderUnavailable:
         message = "密钥不可用或供应商连接测试失败。"
-    provider.status = "testing"
+    if provider.status != "active":
+        provider.status = "testing"
     provider.last_tested_at = utcnow()
     provider.last_test_result = {
         "passed": passed,
@@ -1039,6 +1053,41 @@ async def _provider_deployment_count(session: AsyncSession, provider_id: str) ->
     return int(count or 0)
 
 
+async def _require_unused_model(
+    session: AsyncSession, deployment_id: str, *, include_history: bool = False
+) -> None:
+    statement = select(ModelRouteVersion)
+    if not include_history:
+        statement = statement.where(ModelRouteVersion.status == "published")
+    routes = (await session.scalars(statement)).all()
+    references = [
+        {"purpose": route.purpose, "version": route.version_no}
+        for route in routes
+        if deployment_id in [route.primary_deployment_id, *route.fallback_deployment_ids]
+    ]
+    if references:
+        purposes = "、".join(sorted({item["purpose"] for item in references}))
+        raise ApiError(
+            409,
+            "MODEL_CONFIGURATION_IN_USE",
+            (
+                f"模型仍被路由引用（{purposes}），不能删除。请先发布替代路由，再停用旧模型保留历史。"
+                if include_history
+                else f"模型正在被路由使用（{purposes}）。请先发布替代路由，再修改或停用。"
+            ),
+            details={"routes": references},
+        )
+
+
+def _validate_model_capacity(context_window: int | None, max_output_tokens: int | None) -> None:
+    if not context_window or not max_output_tokens or max_output_tokens >= context_window:
+        raise ApiError(
+            422,
+            "MODEL_CAPACITY_REQUIRED",
+            "请在模型容量中填写有效的上下文窗口和最大输出 Token；最大输出必须小于上下文窗口。",
+        )
+
+
 @router.get("/model-deployments", response_model=contract.ModelDeploymentListResponse)
 async def list_deployments(
     admin: Admin = Depends(require_admin_permission("ai_config:read")),
@@ -1086,10 +1135,20 @@ async def patch_deployment(
     admin: Admin = Depends(require_admin_permission("ai_config:write")),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    deployment = await session.get(ModelDeployment, deployment_id)
+    deployment = await session.get(ModelDeployment, deployment_id, with_for_update=True)
     if not deployment:
         raise ApiError(404, "MODEL_DEPLOYMENT_NOT_FOUND", "模型部署不存在。")
     values = payload.model_dump(exclude_unset=True)
+    if any(
+        key in values and values[key] != getattr(deployment, key)
+        for key in ("provider_id", "model_id", "model_type", "status")
+    ):
+        await _require_unused_model(session, deployment.id)
+    if {"context_window", "max_output_tokens"} & values.keys():
+        _validate_model_capacity(
+            values.get("context_window", deployment.context_window),
+            values.get("max_output_tokens", deployment.max_output_tokens),
+        )
     provider_id = values.get("provider_id", deployment.provider_id)
     if not isinstance(provider_id, str):
         raise ApiError(422, "MODEL_PROVIDER_REQUIRED", "模型供应商不能为空。")
@@ -1150,7 +1209,8 @@ async def test_deployment(
         passed = True
     except ProviderUnavailable:
         message = "密钥不可用，或模型能力/结构化输出连接测试失败。"
-    deployment.status = "testing" if passed else "draft"
+    if deployment.status != "available":
+        deployment.status = "testing" if passed else "draft"
     result = {
         "passed": passed,
         "secret_available": secret_available,
@@ -1362,6 +1422,8 @@ async def patch_model_configuration(
         deployment_changes["alias"] = values["name"]
     connection_changed = bool(provider_changes.keys() & {"base_url", "secret_ref", "adapter"})
     model_changed = bool(deployment_changes.keys() & {"model_id", "model_type"})
+    if connection_changed or model_changed:
+        await _require_unused_model(session, deployment.id)
     shared_provider = await _provider_deployment_count(session, provider.id) > 1
     provider_cloned = False
 
@@ -1415,33 +1477,7 @@ async def delete_model_configuration(
     session: AsyncSession = Depends(get_session),
 ) -> Response:
     deployment, provider = await _model_configuration_records(session, configuration_id, lock=True)
-    routes = list((await session.scalars(select(ModelRouteVersion).with_for_update())).all())
-    route_changes: list[dict[str, Any]] = []
-    for route in routes:
-        fallbacks = [item for item in route.fallback_deployment_ids if item != deployment.id]
-        if route.primary_deployment_id == deployment.id:
-            if fallbacks:
-                route.primary_deployment_id = fallbacks[0]
-                route.fallback_deployment_ids = fallbacks[1:]
-                route_changes.append(
-                    {
-                        "route_id": route.id,
-                        "purpose": route.purpose,
-                        "action": "promoted_fallback",
-                        "replacement_deployment_id": fallbacks[0],
-                    }
-                )
-            else:
-                await session.delete(route)
-                route_changes.append(
-                    {"route_id": route.id, "purpose": route.purpose, "action": "deleted"}
-                )
-        elif deployment.id in route.fallback_deployment_ids:
-            route.fallback_deployment_ids = fallbacks
-            route_changes.append(
-                {"route_id": route.id, "purpose": route.purpose, "action": "removed_fallback"}
-            )
-    await session.flush()
+    await _require_unused_model(session, deployment.id, include_history=True)
     delete_provider = await _provider_deployment_count(session, provider.id) == 1
     await session.delete(deployment)
     await session.flush()
@@ -1455,7 +1491,7 @@ async def delete_model_configuration(
         target_type="model_deployment",
         target_id=configuration_id,
         request_id=request.state.request_id,
-        details={"provider_deleted": delete_provider, "route_changes": route_changes},
+        details={"provider_deleted": delete_provider},
     )
     await session.commit()
     return Response(status_code=204)
@@ -1481,6 +1517,9 @@ async def test_model_configuration(
             adapter=provider.adapter,
             base_url=provider.base_url,
             secret_ref=provider.secret_ref,
+            status=provider.status,
+            last_tested_at=provider.last_tested_at,
+            last_test_result=dict(provider.last_test_result),
         )
         session.add(provider)
         await session.flush()
@@ -1513,8 +1552,9 @@ async def test_model_configuration(
         "configuration_id": deployment.id,
         "configuration_fingerprint": _model_configuration_fingerprint(provider, deployment),
     }
-    provider.status = "active" if passed else "draft"
-    deployment.status = "available" if passed else "draft"
+    if passed or deployment.status != "available":
+        provider.status = "active" if passed else "draft"
+        deployment.status = "available" if passed else "draft"
     audit(
         session,
         actor_type="admin",
@@ -1563,6 +1603,7 @@ async def patch_model_configuration_status(
         provider.status = "active"
         deployment.status = "available"
     else:
+        await _require_unused_model(session, deployment.id)
         deployment.status = "disabled"
         siblings = await session.scalar(
             select(func.count(ModelDeployment.id)).where(
@@ -1646,7 +1687,7 @@ async def create_model_route(
     deployments = list(
         (
             await session.scalars(
-                select(ModelDeployment).where(ModelDeployment.id.in_(deployment_ids))
+                select(ModelDeployment).where(ModelDeployment.id.in_(deployment_ids)).with_for_update()
             )
         ).all()
     )
@@ -4022,7 +4063,8 @@ async def test_model_route(
             message = "排版智能体返回了结果，但未通过 StyleToken 结构校验。"
     except (ApiError, ProviderUnavailable):
         pass
-    route.status = "testing" if passed else "draft"
+    if route.status != "published":
+        route.status = "testing" if passed else "draft"
     result = {
         "passed": passed,
         "checked_deployments": deployment_ids,
@@ -4055,6 +4097,24 @@ async def publish_model_route(
     route = await session.get(ModelRouteVersion, route_id)
     if not route:
         raise ApiError(404, "MODEL_ROUTE_NOT_FOUND", "模型路由不存在。")
+    deployment_ids = [route.primary_deployment_id, *route.fallback_deployment_ids]
+    deployments = list(
+        (
+            await session.scalars(
+                select(ModelDeployment)
+                .where(ModelDeployment.id.in_(deployment_ids))
+                .with_for_update()
+            )
+        ).all()
+    )
+    for deployment in deployments:
+        provider = await session.get(ModelProviderRecord, deployment.provider_id)
+        if (
+            deployment.model_type in {"chat", "vision"}
+            and provider
+            and provider.adapter != "manus_v2"
+        ):
+            _validate_model_capacity(deployment.context_window, deployment.max_output_tokens)
     try:
         await freeze_route_snapshot(session, route=route)
     except ApiError as exc:
@@ -4063,14 +4123,6 @@ async def publish_model_route(
             "MODEL_ROUTE_NOT_TESTED",
             "路由中的供应商或模型部署尚未全部可用。",
         ) from exc
-    deployment_ids = [route.primary_deployment_id, *route.fallback_deployment_ids]
-    deployments = list(
-        (
-            await session.scalars(
-                select(ModelDeployment).where(ModelDeployment.id.in_(deployment_ids))
-            )
-        ).all()
-    )
     if len(deployments) != len(set(deployment_ids)) or any(
         deployment.status != "available" for deployment in deployments
     ):

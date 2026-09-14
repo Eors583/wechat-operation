@@ -15,7 +15,7 @@ FROM base AS build
 RUN pnpm install --frozen-lockfile
 COPY . .
 ENV VITE_BASE_PATH=/admin/
-RUN pnpm build
+RUN pnpm exec vite build
 
 FROM nginx:1.29-alpine AS production
 COPY nginx.conf /etc/nginx/conf.d/default.conf

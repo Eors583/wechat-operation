@@ -30,9 +30,24 @@ const modelTypeOptions: Array<{ label: string; value: ModelConfiguration['model_
 
 const tab = ref<Tab>('models')
 const models = ref<ModelConfiguration[]>([])
-const routePurpose = ref<'layout_extraction' | 'rerank'>('rerank')
-const routeLabel = computed(() =>
-  routePurpose.value === 'rerank' ? '资料重排序' : '排版学习智能体',
+const routePurposes: Array<{ value: ModelRoute['purpose']; label: string }> = [
+  { value: 'intent_detection', label: '意图识别' },
+  { value: 'fast_task', label: '快捷任务' },
+  { value: 'article_planning', label: '文章规划' },
+  { value: 'article_generation', label: '文章生成' },
+  { value: 'article_revision', label: '文章改写' },
+  { value: 'file_extraction', label: '资料提取' },
+  { value: 'content_check', label: '内容检查' },
+  { value: 'vision', label: '视觉理解' },
+  { value: 'memory_summary', label: '偏好与记忆总结' },
+  { value: 'layout_extraction', label: '排版学习智能体' },
+  { value: 'embedding', label: '资料向量化' },
+  { value: 'rerank', label: '资料重排序' },
+]
+const routePurpose = ref<ModelRoute['purpose']>('article_generation')
+const routeLabel = computed(
+  () =>
+    routePurposes.find((item) => item.value === routePurpose.value)?.label ?? routePurpose.value,
 )
 const allRoutes = ref<ModelRoute[]>([])
 const layoutRoutes = computed(() =>
@@ -56,6 +71,18 @@ const creditCost = ref(1)
 const creditSaving = ref(false)
 const testingId = ref<string | null>(null)
 const modelDialog = ref(false)
+const capacityDialog = ref(false)
+const capacityLoading = ref(false)
+const capacitySaving = ref(false)
+const capacityModel = ref<ModelConfiguration | null>(null)
+const capacity = reactive({ context_window: 0, max_output_tokens: 0 })
+const capacityReady = computed(
+  () =>
+    Number.isSafeInteger(capacity.context_window) &&
+    Number.isSafeInteger(capacity.max_output_tokens) &&
+    capacity.max_output_tokens > 0 &&
+    capacity.context_window > capacity.max_output_tokens,
+)
 const testingDraft = ref(false)
 const validationToken = ref('')
 const testedSignature = ref('')
@@ -84,7 +111,7 @@ const layoutModelOptions = computed(() =>
   models.value.filter((model) => routeModelTypes.value.includes(model.model_type)),
 )
 const routeModelTypes = computed(() =>
-  routePurpose.value === 'rerank' ? ['rerank'] : ['chat', 'vision'],
+  ['rerank', 'embedding'].includes(routePurpose.value) ? [routePurpose.value] : ['chat', 'vision'],
 )
 const selectedLayoutRoute = computed(
   () => layoutRoutes.value.find((route) => route.id === selectedLayoutRouteId.value) ?? null,
@@ -478,7 +505,7 @@ function requestStatusChange(item: ModelConfiguration, status: PublishedStatus):
 
 function requestDelete(item: ModelConfiguration): void {
   confirmDialog.title = '删除模型配置'
-  confirmDialog.description = `确定永久删除“${item.name}”吗？模型配置、连接测试记录以及未被其他模型共用的密钥配置都会删除。相关路由将自动移除该模型；主模型有备用时会自动切换，没有备用时会删除该路由。`
+  confirmDialog.description = `确定永久删除“${item.name}”吗？被路由引用的模型不能删除，请先发布替代路由，再停用旧模型保留历史。`
   confirmDialog.tone = 'negative'
   confirmDialog.confirmLabel = '删除'
   confirmDialog.action = () => void deleteModel(item)
@@ -524,13 +551,62 @@ async function saveCreditCost(): Promise<void> {
     creditSaving.value = false
   }
 }
+
+function modelUsage(id: string): string {
+  return (
+    routePurposes
+      .filter((purpose) =>
+        allRoutes.value.some(
+          (route) =>
+            route.status === 'published' &&
+            route.purpose === purpose.value &&
+            [route.primary_deployment_id, ...route.fallback_deployment_ids].includes(id),
+        ),
+      )
+      .map((purpose) => purpose.label)
+      .join('、') || '未被生效路由使用'
+  )
+}
+
+async function openCapacity(model: ModelConfiguration): Promise<void> {
+  if (capacityLoading.value) return
+  capacityLoading.value = true
+  try {
+    const deployment = (await adminRepository.modelDeployments()).find(
+      (item) => item.id === model.id,
+    )
+    if (!deployment) throw new Error('模型配置不存在，请刷新。')
+    capacityModel.value = model
+    capacity.context_window = deployment.context_window
+    capacity.max_output_tokens = deployment.max_output_tokens
+    capacityDialog.value = true
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '模型容量加载失败。')
+  } finally {
+    capacityLoading.value = false
+  }
+}
+
+async function saveCapacity(): Promise<void> {
+  if (!capacityModel.value || !capacityReady.value || capacitySaving.value) return
+  capacitySaving.value = true
+  try {
+    await adminRepository.saveModelCapacity(capacityModel.value.id, { ...capacity })
+    capacityDialog.value = false
+    ElMessage.success('模型容量已保存，对新任务生效。')
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '模型容量保存失败。')
+  } finally {
+    capacitySaving.value = false
+  }
+}
 </script>
 
 <template>
   <section class="admin-page">
     <PageHeader
-      title="模型、排版智能体与积分"
-      description="集中管理模型调用、排版学习智能体路由和单次 AI 运行积分。发布后的调整只作用于新任务。"
+      title="模型、路由与积分"
+      description="配置模型容量及各业务用途的调用路由。发布后的调整只作用于新任务。"
       eyebrow="AI 配置"
     >
       <template #actions>
@@ -559,6 +635,7 @@ async function saveCreditCost(): Promise<void> {
               <template #default="{ row }">
                 <strong>{{ row.name }}</strong>
                 <div class="cell-subtext cell-wrap">{{ row.model_id }}</div>
+                <div class="cell-subtext cell-wrap">{{ modelUsage(row.id) }}</div>
               </template>
             </el-table-column>
             <el-table-column label="接口" min-width="300">
@@ -584,6 +661,13 @@ async function saveCreditCost(): Promise<void> {
             <el-table-column label="操作" width="270" fixed="right" align="right">
               <template #default="{ row }">
                 <div class="table-actions">
+                  <el-button
+                    v-if="['chat', 'vision'].includes(row.model_type)"
+                    link
+                    :disabled="capacityLoading"
+                    @click="openCapacity(row)"
+                    >容量</el-button
+                  >
                   <el-button
                     v-if="row.model_type === 'rerank'"
                     link
@@ -648,8 +732,12 @@ async function saveCreditCost(): Promise<void> {
                     :disabled="routeBusy"
                     @change="selectRoutePurpose"
                   >
-                    <el-option label="资料重排序" value="rerank" />
-                    <el-option label="排版学习智能体" value="layout_extraction" />
+                    <el-option
+                      v-for="purpose in routePurposes"
+                      :key="purpose.value"
+                      :value="purpose.value"
+                      :label="`${purpose.label}${allRoutes.some((route) => route.purpose === purpose.value && route.status === 'published') ? ' · 已配置' : ' · 未配置'}`"
+                    />
                   </el-select>
                 </el-form-item>
               </el-form>
@@ -666,7 +754,7 @@ async function saveCreditCost(): Promise<void> {
                 type="warning"
                 :closable="false"
                 show-icon
-                :title="`还没有可用的${routePurpose === 'rerank' ? '重排' : '对话或视觉'}模型，请先在模型配置中添加并启用。`"
+                :title="`${routeLabel}没有可用模型，请先在模型配置中添加并启用对应类型的模型。`"
               />
 
               <el-alert
@@ -833,7 +921,7 @@ async function saveCreditCost(): Promise<void> {
                 <StatusBadge :status="route.status" />
               </button>
             </div>
-            <el-empty v-else description="尚未创建排版智能体路由" />
+            <el-empty v-else description="尚未创建此用途的路由" />
           </el-card>
         </section>
       </el-tab-pane>
@@ -997,6 +1085,44 @@ async function saveCreditCost(): Promise<void> {
           >
         </div>
       </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="capacityDialog"
+      :title="`${capacityModel?.name ?? ''} · 模型容量`"
+      width="min(680px, calc(100vw - 24px))"
+      class="model-dialog"
+      align-center
+      :close-on-click-modal="!capacitySaving"
+      :show-close="!capacitySaving"
+      :close-on-press-escape="!capacitySaving"
+    >
+      <el-alert
+        type="info"
+        :closable="false"
+        show-icon
+        title="按供应商文档填写实际 Token 上限，不能靠调大数值绕过限制。0 表示尚未配置；普通对话模型发布新路由前必须补齐。Manus v2 任务协议不强制要求这两个参数。"
+      />
+      <el-form label-position="top" class="layout-agent-form" :disabled="capacitySaving">
+        <el-form-item label="上下文窗口（Token）"
+          ><el-input-number v-model="capacity.context_window" :min="1" :precision="0"
+        /></el-form-item>
+        <el-form-item label="最大输出（Token）"
+          ><el-input-number v-model="capacity.max_output_tokens" :min="1" :precision="0"
+        /></el-form-item>
+      </el-form>
+      <template #footer
+        ><div class="dialog-actions">
+          <el-button :disabled="capacitySaving" @click="capacityDialog = false">返回</el-button>
+          <el-button
+            type="primary"
+            :loading="capacitySaving"
+            :disabled="!capacityReady"
+            @click="saveCapacity"
+            >保存容量</el-button
+          >
+        </div></template
+      >
     </el-dialog>
 
     <ConfirmActionDialog

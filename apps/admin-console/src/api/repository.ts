@@ -20,6 +20,7 @@ import type {
   WechatPlatformConfig,
 } from "./contracts";
 import { adminOpenApi, adminOpenApiData, requestId } from "./client";
+import type { components } from "./generated/schema";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -276,6 +277,27 @@ export const adminRepository = {
         updated_at: item.published_at ?? item.created_at,
       };
     });
+  },
+
+  async modelDeployments() {
+    return (await adminOpenApiData(
+      adminOpenApi.GET("/admin-api/v1/model-deployments"),
+    )).items;
+  },
+
+  async saveModelCapacity(
+    deploymentId: string,
+    capacity: Pick<
+      components["schemas"]["DeploymentPatch"],
+      "context_window" | "max_output_tokens"
+    >,
+  ): Promise<void> {
+    await adminOpenApiData(
+      adminOpenApi.PATCH("/admin-api/v1/model-deployments/{deployment_id}", {
+        params: { path: { deployment_id: deploymentId } },
+        body: capacity,
+      }),
+    );
   },
 
   async testRoute(
