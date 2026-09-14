@@ -465,7 +465,6 @@ async def prepare_model_files(
             ):
                 cache.setdefault(str(item.get("document_id")), item)
     results: list[dict[str, Any]] = []
-    used = 0
     for identifier in document_ids:
         _, asset = by_id[identifier]
         asset_purpose = _moonshot_file_purpose(asset.filename, asset.mime_type)
@@ -541,12 +540,5 @@ async def prepare_model_files(
                 "provider_file_purpose": asset_purpose,
                 "uploaded_at": time.time(),
             }
-        used += len(str(item.get("content", "")))
-        if used > 2_000_000:
-            raise ApiError(
-                422,
-                "MODEL_FILE_CONTEXT_LIMIT",
-                "文件文字总量超过200万字符的分段处理上限，请分批处理；不会静默截断。",
-            )
         results.append(item)
     return results

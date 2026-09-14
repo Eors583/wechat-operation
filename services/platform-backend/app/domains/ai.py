@@ -50,7 +50,14 @@ from app.domains.user_preference_memory import (
 )
 from app.errors import ApiError
 from app.external_knowledge import search_external_knowledge
-from app.long_context import context_budget, fit_context, requires_local_compaction, summary_prompt
+from app.long_context import (
+    context_budget,
+    fit_context,
+    model_context_data,
+    prepare_context_route,
+    requires_local_compaction,
+    summary_prompt,
+)
 from app.model_files import conversation_file_ids, file_input_route, prepare_model_files
 from app.model_gateway import (
     ModelExecutionAttempt,
@@ -91,6 +98,7 @@ from app.providers import (
     ContentSafetyProvider,
     DocumentProcessingResult,
     DocumentSectionResult,
+    ModelContractViolation,
     ModelProvider,
     ModelResult,
     ProviderUnavailable,
@@ -717,100 +725,49 @@ async def _resolve_untrusted_references(
                 details={"document_ids": pending},
             )
 
-    chunks: list[DocumentChunk] = []
-    retrieval_hits = []
-    if document_ids and retrieval.enabled:
-        try:
-            retrieval_hits = await retrieval.search(
-                owner_id=owner_id,
-                task_id=task_id,
-                project_id=project_id,
-                document_ids=document_ids,
-                query=query,
-            )
-        except ProviderUnavailable as exc:
-            raise ApiError(
-                503,
-                "RETRIEVAL_PROVIDER_UNAVAILABLE",
-                "参考资料检索服务暂不可用，请稍后重试。",
-                retryable=True,
-            ) from exc
-    elif document_ids:
-        chunks = list(
+    # Explicitly attached documents are read in full; worker-side map/reduce
+    # handles capacity without dropping later pages or selected documents.
+    missing_text_ids = [row.id for row in documents if not row.extracted_text]
+    chunks = (
+        list(
             (
                 await session.scalars(
                     select(DocumentChunk)
                     .where(
                         DocumentChunk.owner_id == owner_id,
-                        DocumentChunk.document_id.in_(document_ids),
+                        DocumentChunk.document_id.in_(missing_text_ids),
                         DocumentChunk.indexing_status.in_(["completed", "indexed", "ready"]),
                     )
                     .order_by(DocumentChunk.document_id, DocumentChunk.chunk_no)
-                    .limit(40)
                 )
             ).all()
         )
+        if missing_text_ids
+        else []
+    )
     chunk_map: dict[str, list[dict[str, Any]]] = {}
-    remaining_characters = document_character_budget
-    for hit in retrieval_hits:
-        if remaining_characters <= 0:
-            break
-        excerpt = hit.text[: min(4000, remaining_characters)]
-        remaining_characters -= len(excerpt)
-        chunk_map.setdefault(hit.document_id, []).append(
-            {
-                "chunk_id": hit.chunk_id,
-                "chunk_no": hit.chunk_no,
-                "text": excerpt,
-                "source_name": hit.source_name,
-                "source_type": hit.source_type,
-                "section_id": hit.section_id,
-                "section_title": hit.section_title,
-                "page_no": hit.page_no,
-                "start_ms": hit.start_ms,
-                "end_ms": hit.end_ms,
-                "retrieval_score": hit.rerank_score,
-            }
-        )
     for chunk in chunks:
-        if remaining_characters <= 0:
-            break
-        excerpt = chunk.text[: min(4000, remaining_characters)]
-        remaining_characters -= len(excerpt)
         chunk_map.setdefault(chunk.document_id, []).append(
             {
                 "chunk_id": chunk.id,
                 "chunk_no": chunk.chunk_no,
-                "text": excerpt,
-                "section_id": chunk.section_id,
+                "text": chunk.text,
                 "section_title": chunk.section_title,
                 "page_no": chunk.page_no,
                 "start_ms": chunk.start_ms,
                 "end_ms": chunk.end_ms,
             }
         )
-    document_context: list[dict[str, Any]] = []
-    for document in documents:
-        excerpts = chunk_map.get(document.id, [])
-        if not excerpts and document.extracted_text and remaining_characters > 0:
-            excerpt = document.extracted_text[: min(4000, remaining_characters)]
-            remaining_characters -= len(excerpt)
-            excerpts = [{"chunk_id": None, "chunk_no": None, "text": excerpt}]
-        document_context.append(
-            {"document_id": document.id, "title": document.title, "excerpts": excerpts}
-        )
-    if retrieval_hits:
-        document_context.sort(
-            key=lambda item: max(
-                (
-                    float(excerpt.get("retrieval_score") or 0)
-                    for excerpt in item.get("excerpts", [])
-                    if isinstance(excerpt, dict)
-                ),
-                default=0,
-            ),
-            reverse=True,
-        )
+    document_context: list[dict[str, Any]] = [
+        {
+            "document_id": document.id,
+            "title": document.title,
+            "excerpts": [{"chunk_id": None, "chunk_no": None, "text": document.extracted_text}]
+            if document.extracted_text
+            else chunk_map.get(document.id, []),
+        }
+        for document in documents
+    ]
 
     raw_links = content.get("links", [])
     if not isinstance(raw_links, list):
@@ -873,8 +830,7 @@ async def _resolve_untrusted_references(
                 storage=storage,
             )
             document_ids.append(document.id)
-            excerpt = fetched.text[: max(0, remaining_characters)]
-            remaining_characters -= len(excerpt)
+            excerpt = fetched.text
             document_context.append(
                 {
                     "document_id": document.id,
@@ -1442,8 +1398,8 @@ async def create_ai_run(
             recovered_draft = None
     elif retry_run_id:
         raise ApiError(409, "RETRY_MESSAGE_MISSING", "找不到原消息，请刷新对话后重试。")
-    if not text.strip() or len(text) > 2_000_000:
-        raise ApiError(422, "AI_INPUT_INVALID", "请输入有效且不超过限制的内容。")
+    if not text.strip():
+        raise ApiError(422, "AI_INPUT_INVALID", "请输入有效内容。")
     content = {
         key: value
         for key, value in content.items()
@@ -1794,21 +1750,7 @@ async def prepare_ai_run(
         max_output_tokens = 4_096
     input_budget = max(2_048, context_window - max_output_tokens - 2_048)
     latest_input_tokens = estimate_tokens(text)
-    if len(text) > 2_000_000:
-        raise ApiError(
-            422,
-            "AI_INPUT_CONTEXT_LIMIT_EXCEEDED",
-            "本轮要求超过模型可用上下文，请缩短后重试；系统不会静默截断你的要求。",
-            details={"estimated_tokens": latest_input_tokens, "max_input_tokens": input_budget},
-        )
-    skill_tokens = estimate_tokens(json.dumps(selected_skills, ensure_ascii=False))
-    if skill_tokens > input_budget // 2:
-        raise ApiError(
-            422, "SKILL_CONTEXT_LIMIT_EXCEEDED", "所选技能内容超出模型容量，请减少技能后重试。"
-        )
-    remaining_context_tokens = (
-        input_budget - min(latest_input_tokens, input_budget // 4) - skill_tokens
-    )
+    remaining_context_tokens = max(2048, input_budget - min(latest_input_tokens, input_budget // 4))
     weights = context_weights(
         run_type, current_article_snapshot is not None, local_revision_requested(text)
     )
@@ -1899,58 +1841,15 @@ async def prepare_ai_run(
         )
     document_ids = list(dict.fromkeys([*file_ids, *document_ids]))
     current_article_budget = max(0, int(remaining_context_tokens * weights["article"]))
-    if current_article_snapshot:
-        current_article_snapshot["plain_text"] = truncate_to_token_budget(
-            str(current_article_snapshot.get("plain_text", "")), current_article_budget
-        )
     external_budget = max(0, int(document_token_budget * 0.25))
-    document_context = trim_document_context(
-        document_context, max(0, document_token_budget - external_budget)
-    )
-    complete_links = {
-        item.get("source_url")
-        for item in document_context
-        if item.get("fetch_status") == "completed"
-        and item.get("source_characters", 0) > 0
-        and sum(len(excerpt["text"]) for excerpt in item["excerpts"])
-        == item.get("source_characters")
-    }
-    if any(link not in complete_links for link in reference_links):
-        raise ApiError(
-            422,
-            "REFERENCE_CONTENT_CONTEXT_LIMIT_EXCEEDED",
-            "已提取文章，但正文总长度超过当前模型的参考资料预算。"
-            "请减少链接、粘贴需要处理的段落或选择更大上下文的模型；系统不会截断原文后改写。",
-        )
     external_context = trim_external_context(external_context, external_budget)
-    message_budget = max(0, int(remaining_context_tokens * weights["messages"]))
-    selected_recent_messages: list[Message] = []
-    ranked_messages = sorted(
-        recent_messages,
-        key=lambda item: (
-            item.role == "user"
-            and bool(re.search(r"保留|不要|不能|必须|只改|不许", item.plain_text)),
-            item.created_at,
-        ),
-        reverse=True,
-    )
-    for recent in ranked_messages:
-        if recent.role == "assistant" and recent.content_json.get("response_kind") == "ai_error":
-            continue
-        cost = estimate_tokens(recent.plain_text)
-        if cost > message_budget:
-            continue
-        selected_recent_messages.append(recent)
-        message_budget -= cost
+    selected_recent_messages = [
+        item
+        for item in recent_messages
+        if not (item.role == "assistant" and item.content_json.get("response_kind") == "ai_error")
+    ]
     selected_recent_messages.sort(key=lambda item: item.created_at, reverse=True)
-    preference_budget = max(0, int(remaining_context_tokens * weights["styles"]))
-    selected_preferences: list[UserPreference] = []
-    for preference in preferences:
-        cost = estimate_tokens(preference.value)
-        if cost > preference_budget:
-            continue
-        selected_preferences.append(preference)
-        preference_budget -= cost
+    selected_preferences = preferences
     frozen_context = {
         "untrusted_user_input": text,
         "untrusted_message_content": content,
@@ -2258,6 +2157,7 @@ async def process_ai_run(
         compact: bool = True,
         stream: bool = False,
         preference_mode: str | None = None,
+        result_validator: Callable[[ModelResult], None] | None = None,
     ) -> ModelResult:
         nonlocal writer_preference
         await ensure_not_cancelled()
@@ -2268,15 +2168,32 @@ async def process_ai_run(
             prompt += "\n\n" + PRIORITY
         if context.get("untrusted_account_profile"):
             prompt += "\n\n" + ACCOUNT_PROFILE_INSTRUCTIONS
+        context = model_context_data(context)
+        if requires_local_compaction(snapshot):
+            snapshot = prepare_context_route(snapshot, purpose, context)
         if compact and requires_local_compaction(snapshot):
 
             async def summarize(part: dict[str, Any]) -> str:
+                def validate_summary(reply: ModelResult) -> None:
+                    note = reply.text.strip()
+                    if not note:
+                        raise ModelContractViolation(
+                            "资料整理返回空内容", code="CONTEXT_SUMMARY_EMPTY"
+                        )
+                    if len(note.encode()) >= len(str(part["untrusted_source"]).encode()):
+                        raise ModelContractViolation(
+                            "资料整理未压缩内容", code="CONTEXT_SUMMARY_NOT_REDUCED"
+                        )
+
                 reply = await execute_model_call(
                     purpose="memory_summary",
                     prompt=summary_prompt(part),
                     context=part,
                     snapshot=snapshot,
                     compact=False,
+                    result_validator=validate_summary
+                    if part.get("compression_retry", 0) >= 2
+                    else None,
                 )
                 return reply.text
 
@@ -2289,6 +2206,42 @@ async def process_ai_run(
                         **part,
                     },
                 )
+
+            available = context_budget(snapshot, prompt, purpose=purpose, context=context)
+            if available < 4096:
+                # Keep machine contracts, security boundaries and preference protocol verbatim.
+                protected = [article_output_contract(), PRIORITY, ACCOUNT_PROFILE_INSTRUCTIONS]
+                if preference_mode:
+                    protected.append(output_instruction(preference_mode))
+                fixed = []
+                instructions = prompt
+                for contract in protected:
+                    if contract in instructions:
+                        fixed.append(contract)
+                        instructions = instructions.replace(contract, "")
+                fixed_prompt = "\n\n".join(fixed)
+                available = context_budget(snapshot, fixed_prompt, purpose=purpose, context=context)
+                if available < 6144:
+                    raise ApiError(
+                        503,
+                        "MODEL_CONFIGURATION_INVALID",
+                        "当前模型配置无法容纳必要的输出协议，请联系管理员检查模型容量配置。",
+                    )
+                await emit(
+                    "warning",
+                    {
+                        "code": "LONG_CONTEXT_READING",
+                        "message": "正在整理技能和创作要求，自动调整模型可用空间。",
+                    },
+                )
+                compiled = await fit_context(
+                    {"instruction_document": instructions},
+                    budget=available // 3,
+                    summarize=summarize,
+                    progress=reading_progress,
+                    cache=long_context_cache,
+                )
+                prompt = str(compiled["instruction_document"]) + "\n\n" + fixed_prompt
 
             context = await fit_context(
                 context,
@@ -2315,6 +2268,7 @@ async def process_ai_run(
                 default_timeout_seconds=model_timeout_seconds,
                 session=session,
                 on_text=stream_visible if stream else None,
+                result_validator=result_validator,
             )
         except ModelRouteExhausted as exc:
             offset = len(execution_attempts)
@@ -2410,7 +2364,7 @@ async def process_ai_run(
                 context=model_context,
                 snapshot=pipeline_route("vision"),
             )
-            model_context["untrusted_vision_analysis"] = vision.text[:4000]
+            model_context["untrusted_vision_analysis"] = vision.text
         if conversation_action and conversation_action.get("then_article"):
             recovered_step = model_context.get("recoverable_action") or {}
             method = str(conversation_action.get("value") or recovered_step.get("value") or "")
@@ -2459,7 +2413,7 @@ async def process_ai_run(
                     context=auxiliary_model_context(model_context),
                     snapshot=pipeline_route("article_planning"),
                 )
-                model_context["article_plan"] = planning.text[:4000]
+                model_context["article_plan"] = planning.text
             else:
                 model_context["article_plan"] = "无需独立规划；直接围绕用户要求组织完整文章。"
         await stage("clarifying" if is_preference_only(user_input) else "generating")
