@@ -431,6 +431,12 @@ const save = async (makeDefault = false) => {
   }
 }
 
+const setDefault = (template: LayoutTemplate) => {
+  if (saving.value || template.isDefault || !props.account) return
+  selectedId.value = template.id
+  void save(true)
+}
+
 const saveName = (template: LayoutTemplate) => {
   if (!template || nameSaves.has(template.id) || !dirtyNameIds.has(template.id)) return
   const name = template.name.trim()
@@ -640,10 +646,7 @@ const remove = async (target: LayoutTemplate) => {
                         !template.name.trim() ||
                         (!template.versionId && !draftTemplateIds.has(template.id))
                       "
-                      @click="
-                        selectedId = template.id
-                        save(true)
-                      "
+                      @click="setDefault(template)"
                     >
                       <q-item-section>{{
                         template.isDefault ? '默认模板' : '设为默认模板'
