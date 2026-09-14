@@ -560,6 +560,7 @@ export interface UserApi {
   extractTemplate(accountId: string | null | undefined, url: string): Promise<LayoutTemplate>
   saveTemplate(template: LayoutTemplate, makeDefault?: boolean): Promise<LayoutTemplate>
   setDefaultTemplate(id: string): Promise<void>
+  renameTemplate(id: string, name: string): Promise<void>
   deleteTemplate(id: string): Promise<void>
   listPreferencesPage(cursor?: string, limit?: number): Promise<PreferencePage>
   savePreference(text: string, id?: string, status?: 'candidate' | 'confirmed'): Promise<Preference>

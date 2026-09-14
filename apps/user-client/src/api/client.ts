@@ -3242,6 +3242,14 @@ export const remoteApi: UserApi = {
       }),
     )
   },
+  renameTemplate: async (id, name) => {
+    await openApiData(
+      openApi.PATCH('/api/v1/layout-templates/{template_id}', {
+        params: { path: { template_id: id } },
+        body: apiBody<'LayoutTemplatePatch'>({ name }),
+      }),
+    )
+  },
   deleteTemplate: async (id) => {
     await openApiData(
       openApi.DELETE('/api/v1/layout-templates/{template_id}', {

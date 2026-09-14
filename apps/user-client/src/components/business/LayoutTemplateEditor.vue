@@ -35,6 +35,9 @@ const saving = ref(false)
 const mobileStep = ref(1)
 const draftTemplateIds = new Set<string>()
 const dirtyTemplateIds = new Set<string>()
+const dirtyNameIds = new Set<string>()
+const nameSaves = new Map<string, Promise<void>>()
+const savingNameIds = ref(new Set<string>())
 const notifiedFailedTemplateIds = new Set<string>()
 let activeAccountId = ''
 const templateAccountId = computed(() => props.account?.id ?? null)
@@ -66,6 +69,7 @@ watch(
       selectedId.value = value[0]?.id ?? ''
       draftTemplateIds.clear()
       dirtyTemplateIds.clear()
+      dirtyNameIds.clear()
       notifiedFailedTemplateIds.clear()
       return
     }
@@ -80,7 +84,7 @@ watch(
     localTemplates.value = incoming
       .map((item) => {
         const local = localTemplates.value.find((candidate) => candidate.id === item.id)
-        return local && dirtyTemplateIds.has(item.id)
+        return local && (dirtyTemplateIds.has(item.id) || dirtyNameIds.has(item.id))
           ? {
               ...local,
               status: item.status,
@@ -235,6 +239,10 @@ const extract = async () => {
 }
 
 const save = async (makeDefault = false) => {
+  const target = selectedTemplate.value
+  if (!target) return
+  await nameSaves.get(target.id)
+  if (selectedId.value !== target.id) return
   if (!selectedTemplate.value || !selectedTemplate.value.name.trim() || saving.value) return
   saving.value = true
   try {
@@ -261,6 +269,7 @@ const save = async (makeDefault = false) => {
     selectedId.value = saved.id
     draftTemplateIds.delete(previousId)
     dirtyTemplateIds.delete(previousId)
+    dirtyNameIds.delete(previousId)
     $q.notify({ type: 'positive', message: makeDefault ? '已设为默认模板。' : '模板已保存。' })
     await queryClient.invalidateQueries({ queryKey: ['templates'] })
     emit('changed')
@@ -274,7 +283,60 @@ const save = async (makeDefault = false) => {
   }
 }
 
+const saveName = () => {
+  const template = selectedTemplate.value
+  if (!template || nameSaves.has(template.id) || !dirtyNameIds.has(template.id)) return
+  const name = template.name.trim()
+  if (!name) {
+    $q.notify({ type: 'negative', message: '模板名称不能为空。' })
+    return
+  }
+  const id = template.id
+  if (props.templates.find((item) => item.id === id)?.name === name) {
+    template.name = name
+    dirtyNameIds.delete(id)
+    return
+  }
+  const scope = templateScopeKey.value
+  template.name = name
+  savingNameIds.value.add(id)
+  const pending = (async () => {
+    try {
+      // New local templates need creation first; existing templates only patch their name.
+      const created = draftTemplateIds.has(id)
+        ? await api.saveTemplate(clone(template))
+        : (await api.renameTemplate(id, name), null)
+      if (templateScopeKey.value === scope) {
+        const local = localTemplates.value.find((item) => item.id === id)
+        if (local && created) {
+          local.id = created.id
+          local.status = created.status
+          draftTemplateIds.delete(id)
+          if (dirtyTemplateIds.delete(id)) dirtyTemplateIds.add(created.id)
+          if (selectedId.value === id) selectedId.value = created.id
+        }
+        dirtyNameIds.delete(id)
+      }
+      await queryClient.invalidateQueries({ queryKey: ['templates'] })
+      emit('changed')
+    } catch (error) {
+      $q.notify({
+        type: 'negative',
+        message: error instanceof Error ? error.message : '名称保存失败，请重试。',
+      })
+    } finally {
+      nameSaves.delete(id)
+      savingNameIds.value.delete(id)
+    }
+  })()
+  nameSaves.set(id, pending)
+}
+
 const remove = async () => {
+  const target = selectedTemplate.value
+  if (!target) return
+  await nameSaves.get(target.id)
+  if (selectedId.value !== target.id) return
   if (!selectedTemplate.value || localTemplates.value.length === 1) return
   const removedId = selectedTemplate.value.id
   const isDraft = draftTemplateIds.has(removedId)
@@ -372,7 +434,10 @@ const remove = async () => {
             maxlength="80"
             label="当前模板名称"
             class="template-editor__name"
-            @update:model-value="markDirty"
+            :readonly="savingNameIds.has(selectedTemplate.id) || saving"
+            :loading="savingNameIds.has(selectedTemplate.id)"
+            @update:model-value="dirtyNameIds.add(selectedTemplate.id)"
+            @blur="saveName"
           />
           <AppButton
             v-if="selectedTemplate"
