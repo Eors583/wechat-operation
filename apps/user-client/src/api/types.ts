@@ -1,4 +1,5 @@
 import type { components } from './generated/schema'
+import type { Camelized } from './contract'
 
 type BackendSchemas = components['schemas']
 
@@ -270,9 +271,17 @@ export interface ModuleStyle {
   borderLeft?: string
 }
 
+export type LayoutContentBlock = Required<Camelized<BackendSchemas['LayoutContentBlock']>>
+export type LayoutLockedBlock = Required<Camelized<BackendSchemas['LayoutLockedBlock']>>
+
 export interface LayoutTemplate {
   isDefault?: boolean
   versionId?: string
+  versionNo?: number
+  sourceTitle?: string
+  contentBlocks?: LayoutContentBlock[]
+  lockedBlocks?: LayoutLockedBlock[]
+  lockedBlockCount?: number
   id: string
   accountId: string | null
   name: string

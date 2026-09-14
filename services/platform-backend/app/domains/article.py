@@ -405,6 +405,7 @@ async def save_article_version(
             "name": template.name,
             "official_account_id": template.official_account_id,
             "style_tokens": template_version.style_tokens,
+            "locked_block_count": len(template_version.source_snapshot.get("locked_blocks", [])),
         }
     content = canonical_article_content(content)
     next_no = article.current_version_no + 1

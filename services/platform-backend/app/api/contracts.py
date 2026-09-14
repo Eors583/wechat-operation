@@ -15,6 +15,7 @@ from pydantic import (
 from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, Numeric, inspect
 from sqlalchemy.orm import DeclarativeBase
 
+from app.layout_contracts import LayoutSourceSnapshot
 from app.models import (
     AIRun,
     Article,
@@ -205,6 +206,7 @@ class ArticleLayoutSnapshot(ContractModel):
     name: str
     official_account_id: str | None
     style_tokens: StyleTokenPayload
+    locked_block_count: int = Field(default=0, ge=0, le=100)
 
 
 class TiptapDocument(ContractModel):
@@ -449,7 +451,10 @@ LayoutTemplateResource = orm_contract(
 LayoutTemplateVersionResource = orm_contract(
     "LayoutTemplateVersionResource",
     LayoutTemplateVersion,
-    overrides={"style_tokens": (StyleTokenPayload, ...)},
+    overrides={
+        "style_tokens": (StyleTokenPayload, ...),
+        "source_snapshot": (LayoutSourceSnapshot, ...),
+    },
 )
 ArticleRenderResource = orm_contract("ArticleRenderResource", ArticleRender)
 ArticleConfirmationResource = orm_contract("ArticleConfirmationResource", ArticleConfirmation)

@@ -2544,6 +2544,11 @@ export interface components {
         };
         /** ArticleLayoutSnapshot */
         readonly ArticleLayoutSnapshot: {
+            /**
+             * Locked Block Count
+             * @default 0
+             */
+            readonly locked_block_count: number;
             /** Name */
             readonly name: string;
             /** Official Account Id */
@@ -3441,6 +3446,21 @@ export interface components {
             readonly updated_at: string;
         };
         readonly JsonValue: unknown;
+        /** LayoutContentBlock */
+        readonly LayoutContentBlock: {
+            /** Html */
+            readonly html: string;
+            /** Id */
+            readonly id: string;
+            /**
+             * Module
+             * @default body
+             * @enum {string}
+             */
+            readonly module: "title" | "lead" | "heading_marker" | "heading1" | "heading2" | "body" | "highlight" | "quote" | "list" | "caption" | "divider" | "table_header" | "table_cell";
+            /** Text */
+            readonly text: string;
+        };
         /** LayoutExtractionResponse */
         readonly LayoutExtractionResponse: {
             /** Message */
@@ -3469,6 +3489,31 @@ export interface components {
             readonly save_template: boolean;
             /** Source Url */
             readonly source_url: string;
+        };
+        /** LayoutLockedBlock */
+        readonly LayoutLockedBlock: {
+            /** Block Ids */
+            readonly block_ids: readonly string[];
+            /**
+             * Paragraph Index
+             * @default 1
+             */
+            readonly paragraph_index: number;
+            /**
+             * Position
+             * @default before_body
+             * @enum {string}
+             */
+            readonly position: "before_body" | "after_body" | "after_paragraph";
+        };
+        /** LayoutSourceSnapshot */
+        readonly LayoutSourceSnapshot: {
+            /** Content Blocks */
+            readonly content_blocks?: readonly components["schemas"]["LayoutContentBlock"][];
+            /** Locked Blocks */
+            readonly locked_blocks?: readonly components["schemas"]["LayoutLockedBlock"][];
+        } & {
+            readonly [key: string]: unknown;
         };
         /** LayoutTemplateCreate */
         readonly LayoutTemplateCreate: {
@@ -3535,6 +3580,8 @@ export interface components {
         };
         /** LayoutTemplatePatch */
         readonly LayoutTemplatePatch: {
+            /** Base Version No */
+            readonly base_version_no?: number | null;
             /** Enabled */
             readonly enabled?: boolean | null;
             /**
@@ -3542,6 +3589,8 @@ export interface components {
              * @default false
              */
             readonly is_default: boolean;
+            /** Locked Blocks */
+            readonly locked_blocks?: readonly components["schemas"]["LayoutLockedBlock"][] | null;
             /** Name */
             readonly name?: string | null;
             readonly style_tokens?: components["schemas"]["StyleTokenPayload"] | null;
@@ -3595,7 +3644,7 @@ export interface components {
             readonly extractor_version: string;
             /** Id */
             readonly id: string;
-            readonly source_snapshot: components["schemas"]["JsonValue"];
+            readonly source_snapshot: components["schemas"]["LayoutSourceSnapshot"];
             readonly style_tokens: components["schemas"]["StyleTokenPayload"];
             /** Template Id */
             readonly template_id: string;

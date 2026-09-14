@@ -12,6 +12,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from app.layout_content import extract_content_blocks
 from app.providers import LayoutExtractionResult, ProviderUnavailable, WebReferenceContent
 
 _WECHAT_HOST = "mp.weixin.qq.com"
@@ -119,6 +120,7 @@ class WeChatPublicLayoutExtractionProvider:
                 "text_samples": text_samples[:20],
                 "text_sample_count": len(samples),
                 "image_count": parser.image_count,
+                "content_blocks": parser.content_blocks,
                 "layout_observation": {
                     "schema_version": 1,
                     "sample_count": min(len(samples), _MAX_LAYOUT_SAMPLES),
@@ -134,7 +136,7 @@ class WeChatPublicLayoutExtractionProvider:
                     ],
                 },
             },
-            extractor_version="wechat-public-dom-v2",
+            extractor_version="wechat-public-dom-v3",
         )
 
     async def fetch_reference(self, *, source_url: str) -> WebReferenceContent:
@@ -157,13 +159,18 @@ class WeChatPublicLayoutExtractionProvider:
         page = await self._fetch_page(url)
         parser = _WeChatContentParser()
         try:
-            parser.feed(page[:_MAX_HTML_CHARS])
+            parser.feed(page)
             parser.close()
+            parser.content_blocks = extract_content_blocks(page)
         except Exception as exc:
             raise ProviderUnavailable("微信公众号文章 HTML 解析失败") from exc
+        if len(parser.content_blocks) > 10_000 or sum(
+            len(block["html"]) for block in parser.content_blocks
+        ) > _MAX_HTML_CHARS:
+            raise ProviderUnavailable("微信公众号完整文章内容过大，无法提取为模板。")
         samples = parser.samples
         text_samples = [sample.text for sample in samples if sample.text]
-        if len("".join(text_samples)) < 20:
+        if len("".join(text_samples)) < 20 and not parser.content_blocks:
             raise ProviderUnavailable("没有读取到微信公众号正文，请确认文章链接仍然有效。")
         return parser
 
@@ -307,6 +314,7 @@ class _WeChatContentParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.samples: list[_Sample] = []
+        self.content_blocks: list[dict[str, str]] = []
         self.title = ""
         self.account_name = ""
         self.image_count = 0

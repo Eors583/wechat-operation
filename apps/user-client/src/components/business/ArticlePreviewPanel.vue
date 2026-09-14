@@ -45,14 +45,29 @@ const saving = ref(false)
 const saveState = ref<'saved' | 'saving' | 'failed'>('saved')
 const versionNo = ref(props.article.versionNo)
 const title = ref(props.article.title)
+const view = ref<'edit' | 'layout'>('edit')
+const editorReady = ref(false)
+const fullPreviewHtml = ref('')
+const fullPreviewLoading = ref(false)
+const fullPreviewError = ref('')
+const hasLockedBlocks = computed(() =>
+  Boolean(props.template?.lockedBlocks?.length || props.template?.lockedBlockCount),
+)
+let previewRequest = 0
 let editRevision = 0
 const savedTemplateVersionId = ref(props.article.layoutTemplate?.versionId)
 const layoutDirty = computed(() =>
   Boolean(props.template?.versionId && props.template.versionId !== savedTemplateVersionId.value),
 )
 const canSave = computed(() => (dirty.value || layoutDirty.value) && !saving.value)
+const invalidateFullPreview = () => {
+  previewRequest += 1
+  fullPreviewHtml.value = ''
+  fullPreviewError.value = ''
+}
 const markDirty = () => {
   if (props.readOnly) return
+  invalidateFullPreview()
   editRevision += 1
   dirty.value = true
   saveState.value = 'failed'
@@ -76,33 +91,43 @@ const editor = useEditor({
       instance.commands.setContent(separated.content, false)
       markDirty()
     }
+    editorReady.value = true
   },
   onUpdate: markDirty,
 })
 
-watch(
-  () => props.article.id,
-  () => {
-    versionNo.value = props.article.versionNo
-    savedTemplateVersionId.value = props.article.layoutTemplate?.versionId
-    dirty.value = false
-    saveState.value = 'saved'
-    editor.value?.commands.setContent(props.article.contentJson ?? props.article.contentHtml, false)
-    title.value = props.article.title
-    if (editor.value) {
-      const separated = separateArticleTitle(editor.value.getJSON(), props.article.title)
-      title.value = separated.title
-      if (separated.separated) {
-        editor.value.commands.setContent(separated.content, false)
-        markDirty()
-      }
+const hydrateArticle = () => {
+  invalidateFullPreview()
+  versionNo.value = props.article.versionNo
+  savedTemplateVersionId.value = props.article.layoutTemplate?.versionId
+  dirty.value = false
+  saveState.value = 'saved'
+  editor.value?.commands.setContent(props.article.contentJson ?? props.article.contentHtml, false)
+  title.value = props.article.title
+  if (editor.value) {
+    const separated = separateArticleTitle(editor.value.getJSON(), props.article.title)
+    title.value = separated.title
+    if (separated.separated) {
+      editor.value.commands.setContent(separated.content, false)
+      markDirty()
     }
+  }
+}
+
+watch(() => props.article.id, hydrateArticle)
+watch(
+  () => props.article.versionNo,
+  () => {
+    invalidateFullPreview()
+    if (!dirty.value && !saving.value && props.article.versionNo !== versionNo.value)
+      hydrateArticle()
   },
 )
 
 watch(
-  () => props.template?.versionId,
+  () => [props.template?.id, props.template?.versionId],
   () => {
+    invalidateFullPreview()
     if (layoutDirty.value) markDirty()
   },
 )
@@ -115,6 +140,7 @@ const saveNow = async () => {
     $q.notify({ type: 'negative', message: '请填写 1—120 字的文章标题。' })
     return null
   }
+  invalidateFullPreview()
   saving.value = true
   saveState.value = 'saving'
   const revision = editRevision
@@ -165,6 +191,70 @@ const chooseTitle = async (value: string) => {
   await saveNow()
 }
 
+const loadFullPreview = async () => {
+  if (saving.value || fullPreviewLoading.value || !editorReady.value) return
+  invalidateFullPreview()
+  fullPreviewLoading.value = true
+  const articleId = props.article.id
+  const articleVersionNo = props.article.versionNo
+  const templateId = props.template?.id ?? null
+  const templateVersionId = props.template?.versionId
+  const accountId = props.template?.accountId ?? props.article.accountId
+  const revision = editRevision
+  let request: number | undefined
+  try {
+    const saved = props.readOnly ? props.article : await saveNow()
+    if (
+      !editorReady.value ||
+      articleId !== props.article.id ||
+      templateId !== (props.template?.id ?? null) ||
+      templateVersionId !== props.template?.versionId ||
+      revision !== editRevision
+    )
+      return
+    if (!saved) {
+      fullPreviewError.value = '正文尚未保存，请保存后重新预览。'
+      return
+    }
+    if (props.article.versionNo !== articleVersionNo && props.article.versionNo !== saved.versionNo)
+      return
+    request = ++previewRequest
+    const render = await api.prepareArticleRender(
+      articleId,
+      accountId,
+      templateId,
+      null,
+      saved.versionNo,
+    )
+    if (request === previewRequest) fullPreviewHtml.value = render.html
+  } catch (error) {
+    if (request === previewRequest)
+      fullPreviewError.value = error instanceof Error ? error.message : '完整排版加载失败。'
+  } finally {
+    fullPreviewLoading.value = false
+  }
+}
+
+const selectView = (value: 'edit' | 'layout') => {
+  view.value = value
+  if (value === 'layout' && !fullPreviewHtml.value) void loadFullPreview()
+}
+
+watch(
+  () => [props.article.id, props.template?.versionId, hasLockedBlocks.value, editorReady.value],
+  () => {
+    if (editorReady.value && (hasLockedBlocks.value || view.value === 'layout'))
+      selectView('layout')
+  },
+  { immediate: true, flush: 'post' },
+)
+
+const fullPreviewDocument = computed(
+  () => `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><style>
+    *{box-sizing:border-box}html,body{margin:0;min-width:0}body{padding:1.5rem;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;overflow-wrap:anywhere}body>section{max-width:100%}img{max-width:100%;height:auto}table{max-width:100%;table-layout:fixed}pre{white-space:pre-wrap;overflow-wrap:anywhere}
+  </style></head><body>${fullPreviewHtml.value}</body></html>`,
+)
+
 const setLink = () => {
   if (!editor.value) return
   const url = window.prompt('请输入链接地址', 'https://')
@@ -179,23 +269,23 @@ const setLink = () => {
 }
 
 defineExpose({ canSave, dirty, saveNow, saving, saveState, versionNo })
-onBeforeUnmount(() => editor.value?.destroy())
+onBeforeUnmount(() => {
+  editorReady.value = false
+  invalidateFullPreview()
+  editor.value?.destroy()
+})
 </script>
 
 <template>
   <section class="article-panel" aria-label="文章预览编辑区">
-    <div
-      v-if="!readOnly"
-      class="article-panel__toolbar"
-      role="toolbar"
-      aria-label="文章预览编辑工具栏"
-    >
+    <div class="article-panel__toolbar" role="toolbar" aria-label="文章预览编辑工具栏">
       <q-select
+        v-if="!readOnly"
         class="article-panel__template-select"
         :model-value="template?.id ?? null"
         :options="templates.map((item) => ({ label: item.name, value: item.id }))"
         :loading="templatesLoading"
-        :disable="templatesLoading || !templates.length"
+        :disable="saving || templatesLoading || !templates.length"
         emit-value
         map-options
         dense
@@ -213,145 +303,165 @@ onBeforeUnmount(() => editor.value?.destroy())
       <span v-else-if="!templatesLoading" class="article-panel__template-status">
         {{ templatesError || '暂无可用排版模板，当前使用基础样式' }}
       </span>
-      <q-separator vertical />
-      <q-btn
-        flat
-        round
+      <q-btn-toggle
+        :model-value="view"
+        class="article-panel__view-toggle"
+        :options="[
+          { label: readOnly ? '正文阅读' : '正文编辑', value: 'edit' },
+          { label: '完整排版', value: 'layout' },
+        ]"
         dense
-        icon="undo"
-        aria-label="撤销"
-        :disable="!editor?.can().undo()"
-        @click="editor?.chain().focus().undo().run()"
+        no-caps
+        unelevated
+        toggle-color="primary"
+        aria-label="切换文章预览方式"
+        @update:model-value="selectView"
       />
-      <q-btn
-        flat
-        round
-        dense
-        icon="redo"
-        aria-label="重做"
-        :disable="!editor?.can().redo()"
-        @click="editor?.chain().focus().redo().run()"
-      />
-      <q-separator vertical />
-      <q-btn flat dense no-caps label="正文" aria-label="正文样式">
-        <q-menu>
-          <q-list>
-            <q-item
-              clickable
-              v-close-popup
-              @click="editor?.chain().focus().setNode('paragraph', { module: 'body' }).run()"
-              ><q-item-section>正文</q-item-section></q-item
-            >
-            <q-item
-              clickable
-              v-close-popup
-              @click="editor?.chain().focus().setNode('paragraph', { module: 'lead' }).run()"
-              ><q-item-section>导语</q-item-section></q-item
-            >
-            <q-item
-              clickable
-              v-close-popup
-              @click="editor?.chain().focus().setNode('paragraph', { module: 'highlight' }).run()"
-              ><q-item-section>重点论点</q-item-section></q-item
-            >
-            <q-item
-              clickable
-              v-close-popup
-              @click="editor?.chain().focus().setNode('paragraph', { module: 'caption' }).run()"
-              ><q-item-section>图片说明</q-item-section></q-item
-            >
-            <q-separator />
-            <q-item
-              clickable
-              v-close-popup
-              @click="editor?.chain().focus().toggleHeading({ level: 2 }).run()"
-              ><q-item-section>一级标题</q-item-section></q-item
-            >
-            <q-item
-              clickable
-              v-close-popup
-              @click="editor?.chain().focus().toggleHeading({ level: 3 }).run()"
-              ><q-item-section>二级标题</q-item-section></q-item
-            >
-          </q-list>
-        </q-menu>
-      </q-btn>
-      <q-separator vertical />
-      <q-btn
-        flat
-        round
-        dense
-        icon="format_bold"
-        aria-label="加粗"
-        :class="{ active: editor?.isActive('bold') }"
-        @click="editor?.chain().focus().toggleBold().run()"
-      />
-      <q-btn
-        flat
-        round
-        dense
-        icon="format_italic"
-        aria-label="斜体"
-        :class="{ active: editor?.isActive('italic') }"
-        @click="editor?.chain().focus().toggleItalic().run()"
-      />
-      <q-btn flat round dense icon="format_underlined" aria-label="下划线" disable />
-      <q-btn
-        flat
-        round
-        dense
-        icon="strikethrough_s"
-        aria-label="删除线"
-        :class="{ active: editor?.isActive('strike') }"
-        @click="editor?.chain().focus().toggleStrike().run()"
-      />
-      <q-btn
-        flat
-        round
-        dense
-        icon="format_list_bulleted"
-        aria-label="无序列表"
-        @click="editor?.chain().focus().toggleBulletList().run()"
-      />
-      <q-btn
-        flat
-        round
-        dense
-        icon="format_list_numbered"
-        aria-label="有序列表"
-        @click="editor?.chain().focus().toggleOrderedList().run()"
-      />
-      <q-btn
-        flat
-        round
-        dense
-        icon="format_quote"
-        aria-label="引用"
-        @click="editor?.chain().focus().toggleBlockquote().run()"
-      />
-      <q-btn
-        flat
-        round
-        dense
-        icon="horizontal_rule"
-        aria-label="分割线"
-        @click="editor?.chain().focus().setHorizontalRule().run()"
-      />
-      <q-separator vertical />
-      <q-btn flat round dense icon="link" aria-label="添加链接" @click="setLink" />
-      <q-btn flat round dense icon="image" aria-label="图片占位" disable />
-      <ArticleTableMenu :editor="editor" />
-      <q-btn
-        flat
-        round
-        dense
-        icon="code"
-        aria-label="代码块"
-        @click="editor?.chain().focus().toggleCodeBlock().run()"
-      />
-      <q-btn flat round dense icon="sentiment_satisfied" aria-label="表情占位" disable />
+      <template v-if="!readOnly && view === 'edit'">
+        <q-separator vertical />
+        <q-btn
+          flat
+          round
+          dense
+          icon="undo"
+          aria-label="撤销"
+          :disable="!editor?.can().undo()"
+          @click="editor?.chain().focus().undo().run()"
+        />
+        <q-btn
+          flat
+          round
+          dense
+          icon="redo"
+          aria-label="重做"
+          :disable="!editor?.can().redo()"
+          @click="editor?.chain().focus().redo().run()"
+        />
+        <q-separator vertical />
+        <q-btn flat dense no-caps label="正文" aria-label="正文样式">
+          <q-menu>
+            <q-list>
+              <q-item
+                clickable
+                v-close-popup
+                @click="editor?.chain().focus().setNode('paragraph', { module: 'body' }).run()"
+                ><q-item-section>正文</q-item-section></q-item
+              >
+              <q-item
+                clickable
+                v-close-popup
+                @click="editor?.chain().focus().setNode('paragraph', { module: 'lead' }).run()"
+                ><q-item-section>导语</q-item-section></q-item
+              >
+              <q-item
+                clickable
+                v-close-popup
+                @click="editor?.chain().focus().setNode('paragraph', { module: 'highlight' }).run()"
+                ><q-item-section>重点论点</q-item-section></q-item
+              >
+              <q-item
+                clickable
+                v-close-popup
+                @click="editor?.chain().focus().setNode('paragraph', { module: 'caption' }).run()"
+                ><q-item-section>图片说明</q-item-section></q-item
+              >
+              <q-separator />
+              <q-item
+                clickable
+                v-close-popup
+                @click="editor?.chain().focus().toggleHeading({ level: 2 }).run()"
+                ><q-item-section>一级标题</q-item-section></q-item
+              >
+              <q-item
+                clickable
+                v-close-popup
+                @click="editor?.chain().focus().toggleHeading({ level: 3 }).run()"
+                ><q-item-section>二级标题</q-item-section></q-item
+              >
+            </q-list>
+          </q-menu>
+        </q-btn>
+        <q-separator vertical />
+        <q-btn
+          flat
+          round
+          dense
+          icon="format_bold"
+          aria-label="加粗"
+          :class="{ active: editor?.isActive('bold') }"
+          @click="editor?.chain().focus().toggleBold().run()"
+        />
+        <q-btn
+          flat
+          round
+          dense
+          icon="format_italic"
+          aria-label="斜体"
+          :class="{ active: editor?.isActive('italic') }"
+          @click="editor?.chain().focus().toggleItalic().run()"
+        />
+        <q-btn flat round dense icon="format_underlined" aria-label="下划线" disable />
+        <q-btn
+          flat
+          round
+          dense
+          icon="strikethrough_s"
+          aria-label="删除线"
+          :class="{ active: editor?.isActive('strike') }"
+          @click="editor?.chain().focus().toggleStrike().run()"
+        />
+        <q-btn
+          flat
+          round
+          dense
+          icon="format_list_bulleted"
+          aria-label="无序列表"
+          @click="editor?.chain().focus().toggleBulletList().run()"
+        />
+        <q-btn
+          flat
+          round
+          dense
+          icon="format_list_numbered"
+          aria-label="有序列表"
+          @click="editor?.chain().focus().toggleOrderedList().run()"
+        />
+        <q-btn
+          flat
+          round
+          dense
+          icon="format_quote"
+          aria-label="引用"
+          @click="editor?.chain().focus().toggleBlockquote().run()"
+        />
+        <q-btn
+          flat
+          round
+          dense
+          icon="horizontal_rule"
+          aria-label="分割线"
+          @click="editor?.chain().focus().setHorizontalRule().run()"
+        />
+        <q-separator vertical />
+        <q-btn flat round dense icon="link" aria-label="添加链接" @click="setLink" />
+        <q-btn flat round dense icon="image" aria-label="图片占位" disable />
+        <ArticleTableMenu :editor="editor" />
+        <q-btn
+          flat
+          round
+          dense
+          icon="code"
+          aria-label="代码块"
+          @click="editor?.chain().focus().toggleCodeBlock().run()"
+        />
+        <q-btn flat round dense icon="sentiment_satisfied" aria-label="表情占位" disable />
+      </template>
     </div>
-    <div class="article-panel__body" :class="{ 'article-panel__body--readonly': readOnly }">
+    <div
+      v-show="view === 'edit'"
+      class="article-panel__body"
+      :class="{ 'article-panel__body--readonly': readOnly }"
+    >
       <ArticleTitleChoices
         v-if="!readOnly"
         :article="{ ...article, versionNo }"
@@ -385,6 +495,36 @@ onBeforeUnmount(() => editor.value?.destroy())
           </header>
           <EditorContent :editor="editor" />
         </div>
+      </div>
+    </div>
+    <div v-if="view === 'layout'" class="article-panel__full-preview">
+      <h2 class="article-panel__full-title text-h6">{{ title }}</h2>
+      <div
+        v-if="fullPreviewLoading"
+        class="article-panel__preview-state"
+        role="status"
+        aria-live="polite"
+      >
+        <q-spinner color="primary" size="32px" aria-hidden="true" />
+        <span>{{ saving ? '正在保存正文…' : '正在加载完整排版…' }}</span>
+      </div>
+      <iframe
+        v-else-if="fullPreviewHtml"
+        class="article-panel__full-frame"
+        :srcdoc="fullPreviewDocument"
+        sandbox=""
+        referrerpolicy="no-referrer"
+        :title="`${title}完整排版预览`"
+      />
+      <div v-else class="article-panel__preview-state" aria-live="polite">
+        <span>{{ fullPreviewError || '内容已更新，请重新预览。' }}</span>
+        <q-btn
+          outline
+          color="primary"
+          label="重新预览"
+          :disable="saving || !editorReady"
+          @click="loadFullPreview"
+        />
       </div>
     </div>
   </section>
@@ -444,6 +584,58 @@ onBeforeUnmount(() => editor.value?.destroy())
     overflow-wrap: anywhere;
   }
 
+  &__view-toggle {
+    min-width: 0;
+    max-width: 100%;
+    margin-left: auto;
+  }
+
+  &__full-preview {
+    display: flex;
+    flex-direction: column;
+    gap: space.$space-3;
+    min-width: 0;
+    min-height: 0;
+    padding: space.$space-4;
+    background: var(--app-bg-subtle);
+  }
+
+  &__full-title {
+    min-width: 0;
+    max-height: 25%;
+    margin: 0;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
+  }
+
+  &__full-frame {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    border: 1px solid var(--app-border-default);
+    background: var(--app-bg-surface);
+  }
+
+  &__preview-state {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: space.$space-3;
+    min-width: 0;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
+    text-align: center;
+  }
+
+  &__preview-state > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
   &__scroll {
     min-width: 0;
     min-height: 0;
@@ -492,7 +684,6 @@ onBeforeUnmount(() => editor.value?.destroy())
     line-height: var(--article-title-line-height);
     overflow-wrap: anywhere;
   }
-
 }
 
 @media (max-width: 599px) {
