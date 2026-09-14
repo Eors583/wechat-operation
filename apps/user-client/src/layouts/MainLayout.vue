@@ -91,7 +91,6 @@ const removeProject = (project: Project) => {
     title: '删除项目',
     message: `删除“${project.name}”后，其中任务、文章和资料将转为“未分类”，不会一并删除。`,
     cancel: true,
-    persistent: true,
   }).onOk(async () => {
     try {
       await api.deleteProject(project.id)
@@ -121,7 +120,6 @@ const renameProject = (project: Project) => {
       isValid: (value) => Boolean(String(value).trim()),
     },
     cancel: true,
-    persistent: true,
   }).onOk(async (value: string) => {
     const name = value.trim()
     if (!name || name === project.name) return
@@ -152,7 +150,6 @@ const renameTask = (task: Task) => {
       isValid: (value) => Boolean(String(value).trim()),
     },
     cancel: true,
-    persistent: true,
   }).onOk(async (value: string) => {
     const title = value.trim()
     if (!title || title === task.title) return
@@ -175,7 +172,6 @@ const removeTask = (task: Task) => {
     title: '删除创作',
     message: `确定删除“${task.title}”吗？删除后不会继续显示在左侧列表。`,
     cancel: true,
-    persistent: true,
   }).onOk(async () => {
     try {
       await api.deleteTask(task.id)

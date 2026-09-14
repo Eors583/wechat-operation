@@ -534,7 +534,7 @@ const remove = async () => {
     :model-value="modelValue"
     title="文章排版设置"
     width="96vw"
-    persistent
+    :persistent="saving || extracting || savingNameIds.size > 0"
     @update:model-value="$emit('update:modelValue', $event)"
   >
     <div class="template-editor">

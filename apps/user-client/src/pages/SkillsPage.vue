@@ -147,7 +147,6 @@ const remove = () => {
     title: '删除技能',
     message: `确定删除“${selected.value.name}”吗？历史任务不会改变。`,
     cancel: true,
-    persistent: true,
   }).onOk(async () => {
     await api.deleteSkill(selected.value!.id)
     detailDialog.value = false

@@ -233,7 +233,6 @@ const rename = (item: LibraryItem) => {
     title: '重命名',
     prompt: { model: item.title, type: 'text' },
     cancel: true,
-    persistent: true,
   }).onOk(async (value: string) => {
     if (!value.trim()) return
     await api.updateLibraryItemTitle(item.id, value)
@@ -249,7 +248,6 @@ const remove = (item: LibraryItem) => {
         ? '删除资料后，曾参考它的文章仍可查看，但后续 AI 不再引用该资料。'
         : '删除文章不会删除原任务对话。确定继续吗？',
     cancel: true,
-    persistent: true,
   }).onOk(async () => {
     await api.deleteLibraryItem(item.id)
     await queryClient.invalidateQueries({ queryKey: ['library'] })

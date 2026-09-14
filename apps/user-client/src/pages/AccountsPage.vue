@@ -236,7 +236,6 @@ const disconnect = () => {
     title: '解除公众号连接',
     message: `解除“${selected.value.name}”后不能再写入草稿或发布，已有文章和模板仍保留。`,
     cancel: true,
-    persistent: true,
   }).onOk(async () => {
     await api.disconnectOfficialAccount(selected.value!.id)
     detailDialog.value = false
@@ -414,7 +413,6 @@ const disconnect = () => {
       v-model="authDialog"
       :title="selected ? '重新扫码绑定公众号' : '授权新公众号'"
       width="650px"
-      persistent
     >
       <div class="authorize-dialog">
         <div class="authorize-dialog__steps">

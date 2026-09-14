@@ -107,7 +107,6 @@ const removePreference = (preference: Preference) => {
     title: '删除写作偏好',
     message: '删除后，之后的新创作不再使用这条偏好。',
     cancel: true,
-    persistent: true,
   }).onOk(async () => {
     await api.deletePreference(preference.id)
     await queryClient.invalidateQueries({ queryKey: ['preferences'] })
