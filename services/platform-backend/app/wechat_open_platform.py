@@ -67,15 +67,55 @@ def _compatible_draft_html(html: str) -> str:
     """Clean the final WeChat payload without changing the saved article preview."""
     soup = BeautifulSoup(html, "html.parser")
     removed_links = 0
+    restored_videos = 0
     removed_elements = 0
     removed_attributes = 0
-    for element in soup.find_all(["script", "style", "iframe", "object", "embed", "link", "meta"]):
+    for element in soup.find_all(["script", "style", "object", "embed", "link", "meta"]):
         element.decompose()
         removed_elements += 1
-    for link in soup.find_all("a", href=True):
+    for link in soup.find_all(["a", "iframe"]):
         try:
-            url = urlsplit(str(link["href"]).strip())
+            source = link.get("href") or link.get("data-src") or link.get("src") or ""
+            url = urlsplit(str(source).strip())
             path = unquote(url.path).lower()
+            query = dict(parse_qsl(url.query))
+            video_id = query.get("vid", "")
+            if (
+                url.scheme == "https"
+                and url.hostname == "mp.weixin.qq.com"
+                and path == "/mp/readtemplate"
+                and query.get("action") == "mpvideo"
+                and query.get("t") == "pages/video_player_tmpl"
+                and re.fullmatch(r"wxv_[0-9]{1,30}", video_id)
+            ):
+                # Restore the native component seen in the source article. A plain
+                # anchor or an MP4 URL does not create a WeChat draft video player.
+                player = soup.new_tag("iframe", attrs={
+                    "class": "video_iframe rich_pages wx_video_iframe",
+                    "data-mpvid": video_id,
+                    "data-vidtype": "2",
+                    "data-src": "https://mp.weixin.qq.com/mp/readtemplate?" + urlencode({
+                        "t": "pages/video_player_tmpl", "action": "mpvideo",
+                        "auto": "0", "vid": video_id,
+                    }),
+                    "data-ratio": "1.7777777777777777",
+                    "data-w": "1920",
+                    "width": "100%", "height": "360",
+                    "frameborder": "0", "allowfullscreen": "true",
+                })
+                image = link.find("img", src=True)
+                cover = str(image["src"] if image else link.get("data-cover", ""))
+                if cover:
+                    cover_url = urlsplit(cover)
+                    if (
+                        cover_url.scheme in {"http", "https"}
+                        and (cover_url.hostname or "").endswith(".qpic.cn")
+                        and not cover_url.username and not cover_url.password
+                    ):
+                        player["data-cover"] = cover
+                link.replace_with(player)
+                restored_videos += 1
+                continue
             restricted = (
                 url.scheme.lower() not in {"", "http", "https"}
                 or (
@@ -85,6 +125,10 @@ def _compatible_draft_html(html: str) -> str:
             )
         except ValueError:
             restricted = True
+        if link.name == "iframe":
+            link.decompose()
+            removed_elements += 1
+            continue
         if restricted:
             # Internal WeChat player links are not public article links. Keep their
             # cover/text, including when the template predates the current extractor.
@@ -97,11 +141,12 @@ def _compatible_draft_html(html: str) -> str:
                 removed_attributes += 1
         # Native mp-common-profile data-* attributes carry the account identity;
         # removing them would turn a real account card into an empty component.
-    if not (removed_links or removed_elements or removed_attributes):
+    if not (restored_videos or removed_links or removed_elements or removed_attributes):
         return html
     cleaned = str(soup)
     logger.info(
-        "wechat_draft_html_cleaned links=%d elements=%d attributes=%d sha256=%s",
+        "wechat_draft_html_cleaned videos=%d links=%d elements=%d attributes=%d sha256=%s",
+        restored_videos,
         removed_links,
         removed_elements,
         removed_attributes,
