@@ -32,6 +32,7 @@ from app.dependencies import (
     wechat_provider,
 )
 from app.domains.account_deletion import schedule_account_deletion
+from app.domains.account_profile import enqueue_account_profile_learning
 from app.domains.ai import (
     cancel_ai_run,
     create_ai_run,
@@ -2860,7 +2861,19 @@ async def list_official_accounts(
     next_cursor = (
         encode_cursor(accounts[-1].updated_at, accounts[-1].id) if has_more and accounts else None
     )
-    return page_response([_official_account_public(account) for account in accounts], next_cursor)
+    response = page_response(
+        [_official_account_public(account) for account in accounts], next_cursor
+    )
+    enqueued = False
+    for account in accounts:
+        if account.writing_profile == {} and account.status == "connected":
+            job = await enqueue_account_profile_learning(
+                session, account=account, only_if_empty=True
+            )
+            enqueued = enqueued or job is not None
+    if enqueued:
+        await session.commit()
+    return response
 
 
 def _official_account_public(account: OfficialAccount) -> dict[str, Any]:
@@ -2891,6 +2904,9 @@ async def get_official_account(
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
     account = await owned_official_account(session, owner_id=user.id, account_id=account_id)
+    if account.writing_profile == {} and account.status == "connected":
+        if await enqueue_account_profile_learning(session, account=account, only_if_empty=True):
+            await session.commit()
     return _official_account_public(account)
 
 

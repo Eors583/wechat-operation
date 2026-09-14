@@ -50,10 +50,6 @@ celery.conf.update(
         "app.worker_tasks.purge_due_accounts_task": {"queue": "maintenance"},
     },
     beat_schedule={
-        "enqueue-missing-account-profiles": {
-            "task": "app.worker_tasks.enqueue_missing_account_profiles_task",
-            "schedule": 60.0,
-        },
         "relay-transactional-outbox": {
             "task": "app.worker_tasks.relay_outbox_task",
             "schedule": 2.0,

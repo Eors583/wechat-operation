@@ -81,11 +81,15 @@ PROFILE_PROMPT = (
 
 
 async def enqueue_account_profile_learning(
-    session: AsyncSession, *, account: OfficialAccount
+    session: AsyncSession, *, account: OfficialAccount, only_if_empty: bool = False
 ) -> JobRecord | None:
     # Authorization commits this outbox together with the account; no network work here.
     await session.flush()
     await session.refresh(account, with_for_update=True)
+    if only_if_empty and (
+        account.writing_profile != {} or account.status != "connected" or account.deleted_at
+    ):
+        return None
     latest = await session.scalar(
         select(JobRecord)
         .where(JobRecord.job_type == PROFILE_JOB, JobRecord.resource_id == account.id)
@@ -161,7 +165,7 @@ async def enqueue_missing_account_profiles(session: AsyncSession) -> int:
     )
     enqueued = 0
     for account in accounts:
-        if await enqueue_account_profile_learning(session, account=account):
+        if await enqueue_account_profile_learning(session, account=account, only_if_empty=True):
             enqueued += 1
     return enqueued
 
