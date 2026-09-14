@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domains.user_preference_memory import enqueue_preference_summary
 from app.errors import ApiError
+from app.layout_content import native_wechat_profile_cards
 from app.models import (
     Article,
     ArticleConfirmation,
@@ -414,7 +415,7 @@ async def process_wechat_operation(
             async def create_draft() -> WechatResult:
                 return await provider.create_or_update_draft(
                     account_ref=active_account.token_secret_ref or active_account.id,
-                    html=render.html,
+                    html=native_wechat_profile_cards(render.html),
                     title=article.title,
                     digest=article.summary or "",
                     cover=cover,

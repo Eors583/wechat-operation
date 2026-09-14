@@ -116,6 +116,38 @@ def _safe_style(value: str) -> str:
 
 
 
+def _profile_attributes(element: Tag) -> dict[str, str]:
+    """Keep only the data fields used by WeChat's native account card."""
+    account_id = str(element.get("data-id", ""))
+    if not re.fullmatch(r"[A-Za-z0-9+/]{4,128}={0,2}", account_id):
+        return {}
+    attributes = {"data-id": account_id, "data-pluginname": "mpprofile"}
+    for key, limit in {"data-alias": 100, "data-nickname": 200, "data-signature": 2000}.items():
+        attributes[key] = str(element.get(key, ""))[:limit]
+    attributes["data-headimg"] = _safe_url(str(element.get("data-headimg", "")), image=True)
+    for key in ("data-from", "data-is_biz_ban", "data-service_type", "data-verify_status"):
+        raw = str(element.get(key, "0"))
+        if re.fullmatch(r"[0-9]{1,2}", raw):
+            attributes[key] = raw
+    return attributes
+
+
+def native_wechat_profile_cards(value: str) -> str:
+    """Use native account components in the draft payload, not the preview artwork."""
+    soup = BeautifulSoup(value, "html.parser")
+    for card in soup.select('figure[data-profile-card="true"]'):
+        attributes = _profile_attributes(card)
+        if not attributes:
+            continue
+        profile = soup.new_tag("mp-common-profile", attrs=attributes)
+        profile["class"] = "js_uneditable custom_select_card mp_profile_iframe"
+        profile["contenteditable"] = "false"
+        wrapper = soup.new_tag("section", attrs={"class": "mp_profile_iframe_wrp"})
+        wrapper.append(profile)
+        card.replace_with(wrapper)
+    return str(soup)
+
+
 def _profile_card(element: Tag) -> Tag:
     """Render WeChat custom profile attributes as a single static article block."""
     title = escape(str(element.get("data-nickname") or element.get("data-alias") or "公众号"))
@@ -142,7 +174,12 @@ def _profile_card(element: Tag) -> Tag:
         '<figcaption style="margin-top:16px;padding-top:8px;border-top:1px solid #eee;'
         'font-size:13px;color:#aaa">公众号</figcaption></figure>'
     )
-    return BeautifulSoup(markup, "html.parser").figure
+    card = BeautifulSoup(markup, "html.parser").figure
+    attributes = _profile_attributes(element)
+    if attributes:
+        card.attrs.update(attributes)
+        card["data-profile-card"] = "true"
+    return card
 
 
 def sanitize_content_html(value: str) -> str:
@@ -186,7 +223,14 @@ def sanitize_content_html(value: str) -> str:
             element.unwrap()
             continue
         original = dict(element.attrs)
+        profile_attributes = (
+            _profile_attributes(element)
+            if name == "figure" and element.get("data-profile-card") == "true" else {}
+        )
         element.attrs = {}
+        if profile_attributes:
+            element.attrs.update(profile_attributes)
+            element["data-profile-card"] = "true"
         style = _safe_style(str(original.get("style", "")))
         align = str(original.get("align", ""))
         if align in {"left", "center", "right", "justify"}:
