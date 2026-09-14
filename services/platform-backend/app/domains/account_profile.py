@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import UTC, timedelta
 from typing import Any, Literal
 
@@ -131,7 +132,8 @@ ARTICLE_STYLE_PROMPT = (
     "分析这一篇公众号原文的写法，返回规定JSON。不要总结主题代替分析风格。"
     "保留有证据的十维观察，每维最多一项；确无证据的维度省略。"
     "每项最多80个汉字，evidence必须引用原文paragraph_id和4至120字连续原句，"
-    "不可编造、改写、拼接引文。压缩笔记也必须沿用原文证据，不引用摘要本身。"
+    "不可编造、改写、拼接引文，不用...或省略号缩写原句，只复制单个连续短句。"
+    "压缩笔记也必须沿用原文证据，不引用摘要本身。"
     "article_type区分观点、案例、教程、资讯、访谈、广告、混合或其他；"
     "只有整篇主体是促销才标promotion，普通结尾关注引导不是广告文章。"
     "kind=boilerplate的段落只用于判断转载归属，不作为十维风格依据。"
@@ -305,10 +307,26 @@ def _parse_article_style(result: ModelResult, source: dict[str, Any]) -> Article
                 if len(matches) == 1:
                     item.paragraph_id = matches[0]
                 else:
-                    raise ValueError(
-                        f"证据段落{item.paragraph_id}无法核对连续原句；请复制对应段落短原句，"
-                        "不得省略、拼接或改写。"
-                    )
+                    # Convert a verified ellipsis quotation into one real contiguous excerpt.
+                    # Every fragment must occur in order in the claimed paragraph.
+                    fragments = [part.strip() for part in re.split(r"\.{3,}|…+", item.excerpt)
+                                 if part.strip()]
+                    paragraph = paragraphs.get(item.paragraph_id, "")
+                    cursor = 0
+                    verified = len(fragments) > 1
+                    for fragment in fragments:
+                        position = paragraph.find(fragment, cursor)
+                        if position < 0:
+                            verified = False
+                            break
+                        cursor = position + len(fragment)
+                    if verified and len(max(fragments, key=len)) >= 8:
+                        item.excerpt = max(fragments, key=len)
+                    else:
+                        raise ValueError(
+                            f"证据段落{item.paragraph_id}无法核对连续原句；"
+                            "请复制对应段落短原句，不得省略、拼接或改写。"
+                        )
         boilerplate = {
             item["paragraph_id"] for item in source["paragraphs"] if item["kind"] == "boilerplate"
         }
