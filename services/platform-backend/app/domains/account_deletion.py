@@ -19,6 +19,7 @@ from app.models import (
     Document,
     DocumentChunk,
     DocumentSection,
+    JobRecord,
     LayoutTemplate,
     LayoutTemplateVersion,
     LibraryItem,
@@ -167,6 +168,11 @@ async def purge_account(
         update(AIRunEvent).where(AIRunEvent.run_id.in_(run_ids)).values(payload={})
     )
     await session.execute(
+        update(JobRecord)
+        .where(JobRecord.owner_id == user.id, JobRecord.job_type == "official_account_profile")
+        .values(frozen_payload={}, status="cancelled", error_message=None)
+    )
+    await session.execute(
         update(Asset)
         .where(Asset.owner_id == user.id)
         .values(filename="已删除文件", deleted_at=utcnow(), scan_status="deleted")
@@ -246,6 +252,7 @@ async def purge_account(
         account.capability_flags = []
         account.token_secret_ref = None
         account.technical_metadata = {}
+        account.writing_profile = {}
         account.deleted_at = utcnow()
     await session.execute(
         update(WechatAuthorizationState)

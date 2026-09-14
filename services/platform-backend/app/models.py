@@ -572,6 +572,7 @@ class OfficialAccount(Base, IdMixin, TimestampMixin, OwnerMixin):
     authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     technical_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    writing_profile: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

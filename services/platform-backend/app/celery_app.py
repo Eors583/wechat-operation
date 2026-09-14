@@ -33,6 +33,7 @@ celery.conf.update(
     task_default_queue_type="quorum",
     broker_transport_options={"confirm_publish": True},
     task_routes={
+        "app.worker_tasks.process_account_profile_task": {"queue": "sync"},
         "app.worker_tasks.process_ai_run_task": {"queue": "ai"},
         "app.worker_tasks.process_ai_run_memory_task": {"queue": "ai"},
         "app.worker_tasks.process_article_revision_task": {"queue": "ai"},

@@ -2195,6 +2195,7 @@ class JobActionRequest(BaseModel):
 
 
 JOB_RETRY_EVENTS: dict[str, tuple[str, str]] = {
+    "official_account_profile": ("official_account.profile.requested", "job_id"),
     "ai_generation": ("ai.run.requested", "run_id"),
     "article_revision": ("article.revision.requested", "revision_id"),
     "file_processing": ("document.processing.requested", "document_id"),

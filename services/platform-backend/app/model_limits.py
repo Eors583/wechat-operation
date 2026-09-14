@@ -14,6 +14,7 @@ def output_token_limit(
     default = {
         "intent_detection": 128,
         "article_planning": 3072,
+        "official_account_profile": 8192,
         "article_generation": 16384,
         "article_revision": 16384,
         "fast_task": 4096,

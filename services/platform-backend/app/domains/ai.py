@@ -14,6 +14,10 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
+from app.domains.account_profile_context import (
+    ACCOUNT_PROFILE_INSTRUCTIONS,
+    freeze_account_profile,
+)
 from app.domains.context_selection import (
     clean_delivery_blocks,
     context_weights,
@@ -1455,6 +1459,14 @@ async def create_ai_run(
     base_article = (
         await session.get(Article, task.current_article_id) if task.current_article_id else None
     )
+    account_profile = await freeze_account_profile(
+        session,
+        owner_id=owner_id,
+        text=text,
+        content=content,
+        task_id=task.id,
+        article_id=task.current_article_id,
+    )
     message = existing_message or Message(
         task_id=task.id,
         role="user",
@@ -1490,6 +1502,7 @@ async def create_ai_run(
             "preparation_pending": True,
             "untrusted_user_input": message.plain_text,
             "untrusted_message_content": message.content_json,
+            "untrusted_account_profile": account_profile,
             "source_message_id": message.id,
             "requested_model_deployment_id": model_deployment_id,
             "requested_skill_id": task.current_skill_id,
@@ -1941,6 +1954,7 @@ async def prepare_ai_run(
     frozen_context = {
         "untrusted_user_input": text,
         "untrusted_message_content": content,
+        "untrusted_account_profile": run.context_snapshot.get("untrusted_account_profile"),
         "source_message_id": message.id,
         "untrusted_documents": document_context,
         "document_ids": document_ids,
@@ -2252,6 +2266,8 @@ async def process_ai_run(
             context = {**context, "preference_check_format": preference_mode}
         if "user_preferences" in context:
             prompt += "\n\n" + PRIORITY
+        if context.get("untrusted_account_profile"):
+            prompt += "\n\n" + ACCOUNT_PROFILE_INSTRUCTIONS
         if compact and requires_local_compaction(snapshot):
 
             async def summarize(part: dict[str, Any]) -> str:
@@ -2482,6 +2498,7 @@ async def process_ai_run(
             ),
             context={
                 "untrusted_user_input": user_input,
+                "untrusted_account_profile": model_context.get("untrusted_account_profile"),
                 "selected_skills": model_context.get("selected_skills", []),
                 "selected_text": extract_plain_text(original_block),
                 "requested_method": model_context.get("requested_method"),

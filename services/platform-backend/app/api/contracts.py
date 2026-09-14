@@ -480,7 +480,7 @@ WechatConfigStorageResource = orm_contract(
 AdminOfficialAccountResource = orm_contract(
     "AdminOfficialAccountResource",
     OfficialAccount,
-    exclude={"token_secret_ref", "technical_metadata"},
+    exclude={"token_secret_ref", "technical_metadata", "writing_profile"},
 )
 SystemSettingResource = orm_contract("SystemSettingResource", SystemSetting)
 AuditLogResource = orm_contract("AuditLogResource", AuditLog)

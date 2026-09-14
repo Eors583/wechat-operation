@@ -10,6 +10,7 @@ from app.config import Settings
 from app.database import Database
 from app.dependencies import _wechat_article_api_configs
 from app.domains.account_deletion import purge_account
+from app.domains.account_profile import PROFILE_JOB, process_account_profile
 from app.domains.ai import (
     fail_ai_run,
     persist_live_run_event,
@@ -25,6 +26,7 @@ from app.domains.quota import apply_quota_change
 from app.domains.revision import process_article_revision
 from app.domains.user_preference_memory import summarize_preferences
 from app.domains.wechat import process_wechat_operation, reconcile_wechat_operation
+from app.errors import ApiError
 from app.external_knowledge import LexiangKnowledgeProvider
 from app.model_gateway import ModelRouteExhausted
 from app.models import (
@@ -48,7 +50,11 @@ from app.provider_factory import build_providers
 from app.providers import DocumentProcessingError, EnvironmentSecretProvider, ProviderUnavailable
 from app.retrieval_routing import build_route_aware_retrieval_service
 from app.web_references import SafeHttpWebReferenceProvider
-from app.wechat_open_platform import WechatOpenPlatformClient, ensure_authorizer_access_token
+from app.wechat_open_platform import (
+    WechatOpenPlatformClient,
+    WechatPublishedContentError,
+    ensure_authorizer_access_token,
+)
 
 
 def _run(coroutine: Any) -> Any:
@@ -57,6 +63,71 @@ def _run(coroutine: Any) -> Any:
 
 def _configured_secrets(config: Settings) -> EnvironmentSecretProvider:
     return EnvironmentSecretProvider(config.model_secret_master_key or config.token_secret)
+
+
+@celery.task(name="app.worker_tasks.process_account_profile_task")
+def process_account_profile_task(job_id: str, message_id: str | None = None) -> dict[str, Any]:
+    del message_id  # The locked durable job is the idempotency boundary, including admin retries.
+    return _run(_process_account_profile(job_id))
+
+
+async def _process_account_profile(job_id: str) -> dict[str, Any]:
+    config = Settings.from_env()
+    database = Database(config)
+    secrets = _configured_secrets(config)
+    try:
+        async with database.session_maker() as session:
+            try:
+                providers = build_providers(config, secrets)
+                job = await process_account_profile(
+                    session,
+                    job_id=job_id,
+                    settings=config,
+                    secrets=secrets,
+                    client=WechatOpenPlatformClient(),
+                    model=providers.model,
+                    safety=providers.content_safety,
+                )
+            except Exception as exc:
+                await session.rollback()
+                job = await session.scalar(
+                    select(JobRecord).where(JobRecord.id == job_id).with_for_update()
+                )
+                if (
+                    job
+                    and job.job_type == PROFILE_JOB
+                    and job.status not in {"completed", "cancelled", "failed"}
+                ):
+                    job.status = job.stage = "failed"
+                    job.error_code = (
+                        exc.code if isinstance(exc, ApiError) else "WECHAT_PROFILE_FAILED"
+                    )
+                    job.error_message = (
+                        exc.message
+                        if isinstance(exc, ApiError)
+                        else "公众号画像学习未完成，请检查微信权限和模型配置后重试。"
+                    )
+                    if isinstance(exc, WechatPublishedContentError):
+                        job.error_code = f"WECHAT_PROFILE_API_{exc.code}"
+                        job.error_message = "微信拒绝读取已发表内容，请确认公众号资格及授权权限。"
+                    account = await session.scalar(
+                        select(OfficialAccount)
+                        .where(
+                            OfficialAccount.id == job.resource_id,
+                            OfficialAccount.owner_id == job.owner_id,
+                        )
+                        .with_for_update()
+                    )
+                    if account and account.writing_profile.get("job_id") == job.id:
+                        account.writing_profile = {
+                            **account.writing_profile,
+                            "status": "failed",
+                            "error_code": job.error_code,
+                        }
+            await session.commit()
+            return {"job_id": job_id, "status": job.status if job else "skipped"}
+    finally:
+        await database.dispose()
 
 
 @celery.task(name="app.worker_tasks.process_ai_run_task")
@@ -870,6 +941,10 @@ async def _enqueue_due_external_knowledge_syncs() -> dict[str, Any]:
 
 
 EVENT_TASKS: dict[str, tuple[str, str]] = {
+    "official_account.profile.requested": (
+        "app.worker_tasks.process_account_profile_task",
+        "job_id",
+    ),
     "user.preferences.summarize": ("app.worker_tasks.process_user_preferences_task", "task_id"),
     "ai.run.requested": ("app.worker_tasks.process_ai_run_task", "run_id"),
     "ai.run.memory.requested": ("app.worker_tasks.process_ai_run_memory_task", "run_id"),

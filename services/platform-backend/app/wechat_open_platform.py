@@ -15,7 +15,9 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from xml.etree import ElementTree
 
 import httpx
+from bs4 import BeautifulSoup
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from markdownify import markdownify
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -36,6 +38,12 @@ from app.providers import (
 WECHAT_API_BASE = "https://api.weixin.qq.com"
 WECHAT_AUTHORIZATION_PAGE = "https://mp.weixin.qq.com/cgi-bin/componentloginpage"
 logger = logging.getLogger(__name__)
+
+
+class WechatPublishedContentError(ProviderUnavailable):
+    def __init__(self, code: int) -> None:
+        super().__init__("WeChat published content is unavailable")
+        self.code = code
 
 
 def _default_wechat_cover() -> WechatCover:
@@ -215,6 +223,8 @@ class WechatOpenPlatformClient:
                     f"WeChat Open Platform rejected the configured credentials ({code})",
                     code=code,
                 )
+            if path == "/cgi-bin/freepublish/batchget":
+                raise WechatPublishedContentError(code)
             raise ProviderUnavailable(f"WeChat Open Platform returned error {code}")
         return cast(dict[str, Any], result)
 
@@ -319,6 +329,95 @@ class WechatOpenPlatformClient:
         if not isinstance(status, int):
             raise ProviderUnavailable("WeChat publish query returned an invalid status")
         return status
+
+    async def recent_published_articles(
+        self, *, access_token: str, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """Read published content only; WeChat exposes update time, not publication time."""
+        if not 1 <= limit <= 20:
+            raise ValueError("Published article limit must be between 1 and 20")
+        articles: list[dict[str, Any]] = []
+        seen_articles: set[str] = set()
+        seen_messages: set[str] = set()
+        offset = 0
+        for _page in range(20):
+            result = await self._post(
+                "/cgi-bin/freepublish/batchget",
+                {"offset": offset, "count": 20, "no_content": 0},
+                access_token=access_token,
+                token_parameter="access_token",
+            )
+            items = result.get("item")
+            total = result.get("total_count")
+            if not isinstance(items, list) or not isinstance(total, int) or total < 0:
+                raise ProviderUnavailable("WeChat published article response is incomplete")
+            if not items:
+                break
+            new_messages = 0
+            for item in items:
+                if not isinstance(item, dict):
+                    raise ProviderUnavailable("WeChat published article entry is invalid")
+                article_id = item.get("article_id")
+                content = item.get("content")
+                updated_at = item.get("update_time")
+                if (
+                    not isinstance(article_id, str)
+                    or not article_id
+                    or not isinstance(content, dict)
+                    or not isinstance(content.get("news_item"), list)
+                    or not isinstance(updated_at, int)
+                    or updated_at < 0
+                ):
+                    raise ProviderUnavailable("WeChat published article content is incomplete")
+                if article_id in seen_messages:
+                    continue
+                seen_messages.add(article_id)
+                new_messages += 1
+                for index, article in enumerate(content["news_item"]):
+                    if not isinstance(article, dict):
+                        raise ProviderUnavailable("WeChat published article content is invalid")
+                    if article.get("is_deleted"):
+                        continue
+                    title = article.get("title")
+                    body = article.get("content")
+                    if not isinstance(title, str) or not isinstance(body, str):
+                        raise ProviderUnavailable("WeChat published article text is incomplete")
+                    if not title.strip() or not body.strip():
+                        continue
+                    url = article.get("url")
+                    url = url if isinstance(url, str) else ""
+                    identity = url or f"{article_id}:{index}"
+                    if identity in seen_articles:
+                        continue
+                    seen_articles.add(identity)
+                    soup = BeautifulSoup(body, "html.parser")
+                    for element in soup.find_all(["script", "style", "noscript", "svg", "form"]):
+                        element.decompose()
+                    if not soup.get_text(strip=True).strip("\u200b\ufeff"):
+                        continue
+                    text = markdownify(str(soup), heading_style="ATX", strip=["img", "a"]).strip()
+                    if not text:
+                        continue
+                    articles.append(
+                        {
+                            "article_id": article_id,
+                            "article_index": index,
+                            "title": title,
+                            "content": body,
+                            "text": text,
+                            "url": url,
+                            "updated_at": updated_at,
+                        }
+                    )
+            offset += len(items)
+            if len(articles) >= limit or offset >= total:
+                break
+            if not new_messages:
+                raise ProviderUnavailable("WeChat published article pagination made no progress")
+        else:
+            raise ProviderUnavailable("WeChat published article pagination exceeded 20 pages")
+        articles.sort(key=lambda article: article["updated_at"], reverse=True)
+        return articles[:limit]
 
     async def component_access_token(
         self, *, component_appid: str, component_appsecret: str, verify_ticket: str

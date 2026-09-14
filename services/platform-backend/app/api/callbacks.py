@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.dependencies import rate_limiter, secret_provider
+from app.domains.account_profile import enqueue_account_profile_learning
 from app.domains.identity import is_expired
 from app.domains.wechat import sync_article_operation_status
 from app.errors import ApiError
@@ -269,6 +270,7 @@ async def normalized_wechat_authorization_callback(
         )
     )
     await session.flush()
+    await enqueue_account_profile_learning(session, account=account)
     await session.commit()
     return {"accepted": True, "duplicate": False, "official_account_id": account.id}
 
@@ -634,6 +636,7 @@ async def direct_wechat_authorization_callback(
         )
     )
     await session.flush()
+    await enqueue_account_profile_learning(session, account=account)
     await session.commit()
     redirect_uri = add_query_parameters(
         authorization_state.redirect_uri,
