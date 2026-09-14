@@ -20,7 +20,11 @@ _TAGS = {
 }
 _DROP_TAGS = {"script", "style", "noscript", "template", "head", "form", "input", "button"}
 _MEDIA_TAGS = {"iframe", "video", "audio", "embed", "object", "svg", "canvas", "mpvoice", "mpvideo"}
-_CONTAINERS = {"article", "main", "header", "footer", "div", "section", "blockquote", "span"}
+_CONTAINERS = {
+    "article", "main", "header", "footer", "div", "section", "blockquote", "span",
+    "a", "abbr", "b", "code", "del", "em", "i", "mark", "p", "q", "s", "small",
+    "strong", "sub", "sup", "u",
+}
 _BLOCK_TAGS = {
     "article", "blockquote", "div", "dl", "figure", "footer", "h1", "h2", "h3",
     "h4", "h5", "h6", "header", "hr", "main", "ol", "p", "pre", "section", "table", "ul",
@@ -365,7 +369,8 @@ def _module(element: Tag, text: str) -> str:
 
 def _selectable_parts(root: Tag, depth: int = 0) -> Iterator[tuple[str, str, str]]:
     children = list(root.children)
-    # Keep tables, lists and inline-only groups intact so their structure is valid.
+    # Imported rich text can nest blocks inside formatting tags. Split those
+    # wrappers too, but keep tables, lists, figures and inline-only groups intact.
     if depth >= 80 or root.name not in _CONTAINERS or not root.find(_BLOCK_TAGS):
         text = root.get_text(" ", strip=True)
         if (
