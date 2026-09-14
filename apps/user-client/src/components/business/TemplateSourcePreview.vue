@@ -310,7 +310,7 @@ const onLoad = () => {
   ) => {
     finish()
     suppressClickUntil = 0
-    if (props.busy || (target as Element | null)?.closest('.source-unlock, [data-video-play]')) return
+    if (props.busy || (target as Element | null)?.closest('.source-unlock, [data-video-play], video')) return
     const row = (target as Element | null)?.closest<HTMLElement>('main > .source-block')
     if (!row || row.dataset.locked === 'true') return
     press = {
@@ -441,7 +441,7 @@ const onLoad = () => {
     (event) => {
       const target = event.target as Element | null
       if (target?.closest('a')) event.preventDefault()
-      if (props.busy) return
+      if (props.busy || target?.closest('video')) return
       if (target?.closest('[data-video-play]') && playTemplateVideo(target, props.sourceUrl)) return
       if (event.detail !== 0 && Date.now() < suppressClickUntil) {
         event.preventDefault()
