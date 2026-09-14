@@ -21,6 +21,7 @@ import ArticleTitleChoices from './ArticleTitleChoices.vue'
 const props = withDefaults(
   defineProps<{
     article: Article
+    interactionLocked?: boolean
     accountId?: string | null
     accounts?: OfficialAccount[]
     accountsLoading?: boolean
@@ -33,6 +34,7 @@ const props = withDefaults(
   }>(),
   {
     template: null,
+    interactionLocked: false,
     accountId: null,
     accounts: () => [],
     accountsLoading: false,
@@ -298,7 +300,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="article-panel" aria-label="文章预览编辑区">
+  <section
+    class="article-panel"
+    aria-label="文章预览编辑区"
+    :inert="interactionLocked || undefined"
+  >
     <div class="article-panel__toolbar" role="toolbar" aria-label="文章预览编辑工具栏">
       <q-select
         v-if="!readOnly"
@@ -344,6 +350,7 @@ onBeforeUnmount(() => {
       >
         {{ accountsError || templatesError }}
       </span>
+      <slot name="cover" />
       <q-btn-toggle
         :model-value="view"
         class="article-panel__view-toggle"

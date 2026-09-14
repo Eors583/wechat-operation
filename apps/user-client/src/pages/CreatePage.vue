@@ -33,6 +33,8 @@ import MessageArticleCard from '@/components/business/MessageArticleCard.vue'
 import PreferenceConfirmationCard from '@/components/business/PreferenceConfirmationCard.vue'
 import { usePublicSettings } from '@/composables/usePublicSettings'
 import { useLocalDraftSave } from '@/composables/useLocalDraftSave'
+import { useArticleWechatWorkflow } from '@/composables/useArticleWechatWorkflow'
+import WechatFinalPreview from '@/components/business/WechatFinalPreview.vue'
 import { renderSafeMarkdown } from '@/utils/safeMarkdown'
 
 const route = useRoute()
@@ -348,13 +350,48 @@ const articlePreviewPanel = ref<{
   versionNo: number
 } | null>(null)
 const { saving: localSaving, save: saveLocalDraft } = useLocalDraftSave()
-const saveLocal = () =>
-  saveLocalDraft(async () => {
-    const panel = articlePreviewPanel.value
-    if (!panel || panel.saving) return null
-    const saved = await panel.saveNow()
-    return panel.dirty ? null : saved
-  })
+const savePreview = async () => {
+  const panel = articlePreviewPanel.value
+  if (!panel || panel.saving) return null
+  const saved = await panel.saveNow()
+  return panel.dirty ? null : saved
+}
+const {
+  coverName,
+  coverAssetId,
+  coverUploading,
+  preparing: finalPreparing,
+  submitting: outcomeLoading,
+  busy: wechatBusy,
+  pending: pendingOutcome,
+  visible: finalDialog,
+  locked: finalSnapshot,
+  chooseCover,
+  openFinal,
+  confirm: confirmOutcome,
+  resume: resumePendingOutcome,
+} = useArticleWechatWorkflow({
+  article: () => selectedArticle.value,
+  account: () =>
+    previewAccounts.value.find((account) => account.id === previewAccountId.value) ?? null,
+  template: () => previewTemplate.value,
+  save: savePreview,
+  blocked: () =>
+    localSaving.value ||
+    Boolean(articlePreviewPanel.value?.saving) ||
+    previewAccountsQuery.isFetching.value ||
+    previewTemplatesQuery.isFetching.value,
+})
+const previewBusy = computed(
+  () => wechatBusy.value || localSaving.value || Boolean(articlePreviewPanel.value?.saving),
+)
+const saveLocal = () => {
+  if (previewBusy.value) return
+  return saveLocalDraft(savePreview)
+}
+const setArticleVisible = (visible: boolean) => {
+  if (!previewBusy.value) articleVisible.value = visible
+}
 const currentRunId = ref('')
 const activeGenerationTaskId = ref('')
 const loadingEarlier = ref(false)
@@ -925,25 +962,6 @@ const openArticle = async (message: Message) => {
       })
   }
 }
-
-const editArticle = async () => {
-  await articlePreviewPanel.value?.saveNow()
-  if (articlePreviewPanel.value?.dirty || articlePreviewPanel.value?.saving) return
-  if (selectedArticle.value)
-    void router.push({
-      path: `/articles/${selectedArticle.value.id}/edit`,
-      query: { account: previewAccountId.value ?? undefined },
-    })
-}
-const layoutArticle = async () => {
-  await articlePreviewPanel.value?.saveNow()
-  if (articlePreviewPanel.value?.dirty || articlePreviewPanel.value?.saving) return
-  if (selectedArticle.value)
-    void router.push({
-      path: `/articles/${selectedArticle.value.id}/edit`,
-      query: { view: 'layout', account: previewAccountId.value ?? undefined },
-    })
-}
 </script>
 
 <template>
@@ -1275,7 +1293,9 @@ const layoutArticle = async () => {
 
     <AppDialog
       v-if="selectedArticle"
-      v-model="articleVisible"
+      :model-value="articleVisible"
+      :persistent="previewBusy"
+      @update:model-value="setArticleVisible"
       title="文章预览"
       width="1480px"
       :full-screen-mobile="false"
@@ -1285,6 +1305,7 @@ const layoutArticle = async () => {
         ref="articlePreviewPanel"
         :key="`${selectedArticle.id}:${selectedArticle.versionNo}`"
         :article="selectedArticle"
+        :interaction-locked="wechatBusy || localSaving || finalDialog"
         :account-id="previewAccountId"
         :accounts="previewAccounts"
         :accounts-loading="previewAccountsQuery.isFetching.value"
@@ -1303,29 +1324,94 @@ const layoutArticle = async () => {
         "
         @select-template="selectPreviewTemplate"
         @select-account="selectPreviewAccount"
-      />
+      >
+        <template #cover>
+          <div class="article-preview-cover">
+            <q-icon name="image" />
+            <span :title="coverName">{{
+              coverName || (selectedArticle.coverState === 'ready' ? '封面已设置' : '文章封面')
+            }}</span>
+            <AppButton
+              variant="ghost"
+              :label="
+                coverAssetId || selectedArticle.coverState === 'ready' ? '更换封面' : '选择封面'
+              "
+              :loading="coverUploading"
+              :disabled="previewBusy || Boolean(pendingOutcome)"
+              @click="chooseCover"
+            />
+          </div>
+        </template>
+      </ArticlePreviewPanel>
       <template #actions>
+        <template v-if="pendingOutcome">
+          <span>该文章有待确认的微信操作</span>
+          <AppButton
+            variant="outline"
+            label="查询原操作结果"
+            :loading="outcomeLoading"
+            @click="resumePendingOutcome"
+          />
+        </template>
         <AppButton
           class="article-preview-dialog__button article-preview-dialog__local"
           variant="outline"
           label="存本地草稿箱"
           :loading="localSaving || articlePreviewPanel?.saving"
-          :disabled="!articlePreviewPanel"
+          :disabled="!articlePreviewPanel || wechatBusy"
           @click="saveLocal"
         />
         <AppButton
           class="article-preview-dialog__button"
           variant="outline"
           label="存公众号草稿箱"
-          @click="layoutArticle"
+          v-if="publicSettings.wechat.wechatDraftEnabled"
+          :loading="finalPreparing"
+          :disabled="previewBusy || Boolean(pendingOutcome)"
+          @click="openFinal('draft')"
         />
-        <AppButton class="article-preview-dialog__button" label="直接发布" @click="editArticle" />
+        <AppButton
+          class="article-preview-dialog__button"
+          label="直接发布"
+          v-if="publicSettings.wechat.wechatPublishEnabled"
+          :loading="finalPreparing"
+          :disabled="previewBusy || Boolean(pendingOutcome)"
+          @click="openFinal('publish')"
+        />
       </template>
     </AppDialog>
+    <WechatFinalPreview
+      v-if="finalSnapshot"
+      v-model="finalDialog"
+      :article="finalSnapshot.article"
+      :account="finalSnapshot.account"
+      :template="finalSnapshot.template"
+      :action="finalSnapshot.action"
+      :render-html="finalSnapshot.render.html"
+      :cover-name="finalSnapshot.coverName"
+      :loading="outcomeLoading"
+      @confirm="confirmOutcome"
+    />
   </q-page>
 </template>
 
 <style scoped lang="scss">
+@use '@/styles/tokens/primitive' as space;
+.article-preview-cover {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  gap: space.$space-1;
+
+  > span {
+    min-width: 0;
+    max-width: 12em;
+    overflow-wrap: anywhere;
+  }
+}
+
 .create-page {
   min-width: 0;
   min-height: 0 !important;

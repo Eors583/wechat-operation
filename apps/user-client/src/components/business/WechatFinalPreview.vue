@@ -26,11 +26,15 @@ const author = ref('')
 const region = ref('')
 const original = ref(false)
 const previewTime = ref('')
-watch(() => props.modelValue, (open) => {
-  if (!open) return
-  const now = new Date()
-  previewTime.value = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
-}, { immediate: true })
+watch(
+  () => props.modelValue,
+  (open) => {
+    if (!open) return
+    const now = new Date()
+    previewTime.value = `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+  },
+  { immediate: true },
+)
 
 const readingHtml = computed(() => {
   if (!props.renderHtml) return ''
@@ -119,7 +123,10 @@ const readingHtml = computed(() => {
   return `<!doctype html>${doc.documentElement.outerHTML}`
 })
 
-defineEmits<{ 'update:modelValue': [value: boolean]; confirm: [] }>()
+const emit = defineEmits<{ 'update:modelValue': [value: boolean]; confirm: [] }>()
+const setVisible = (value: boolean) => {
+  if (!props.loading) emit('update:modelValue', value)
+}
 </script>
 
 <template>
@@ -127,7 +134,8 @@ defineEmits<{ 'update:modelValue': [value: boolean]; confirm: [] }>()
     :model-value="modelValue"
     :title="action === 'publish' ? '发布前最终预览' : '公众号草稿最终预览'"
     width="1480px"
-    @update:model-value="$emit('update:modelValue', $event)"
+    :persistent="loading"
+    @update:model-value="setVisible"
   >
     <div class="final-preview">
       <section class="final-preview__canvas">
@@ -194,11 +202,16 @@ defineEmits<{ 'update:modelValue': [value: boolean]; confirm: [] }>()
           ? '确认后将提交至微信发布，结果会先显示为处理中。'
           : '确认后将使用当前锁定排版写入公众号草稿箱。'
       }}</span>
-      <AppButton variant="outline" label="返回修改" @click="$emit('update:modelValue', false)" />
+      <AppButton
+        variant="outline"
+        label="返回修改"
+        :disabled="loading"
+        @click="setVisible(false)"
+      />
       <AppButton
         :label="action === 'publish' ? '确认发布' : '确认存入草稿箱'"
         :loading="loading"
-        :disabled="account.status !== 'connected' || !hasCapability || !renderHtml"
+        :disabled="loading || account.status !== 'connected' || !hasCapability || !renderHtml"
         @click="$emit('confirm')"
       />
     </template>

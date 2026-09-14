@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/vue-query'
 import { useQuasar } from 'quasar'
 import { EditorContent, useEditor } from '@tiptap/vue-3'
@@ -16,13 +16,8 @@ import Image from '@tiptap/extension-image'
 import { moduleParagraph } from '@/editor/moduleParagraph'
 import { ApiError, api } from '@/api/client'
 import { queryClient } from '@/boot/query'
-import type {
-  Article,
-  ArticleRenderPreview,
-  ArticleVersion,
-  PendingArticleOutcome,
-} from '@/api/types'
-import { platform } from '@/platform'
+import type { Article, ArticleVersion } from '@/api/types'
+import { useArticleWechatWorkflow } from '@/composables/useArticleWechatWorkflow'
 import { useAuthStore } from '@/stores/auth'
 import AppButton from '@/components/base/AppButton.vue'
 import AppDialog from '@/components/base/AppDialog.vue'
@@ -33,7 +28,6 @@ import { useLocalDraftSave } from '@/composables/useLocalDraftSave'
 import { useArticleFixedContent } from '@/composables/useArticleFixedContent'
 
 const route = useRoute()
-const router = useRouter()
 const $q = useQuasar()
 const auth = useAuthStore()
 const { settings: publicSettings } = usePublicSettings()
@@ -42,6 +36,7 @@ const articleQuery = useQuery({
   queryKey: computed(() => ['article', articleId.value]),
   queryFn: () => api.getArticle(articleId.value),
 })
+const article = computed(() => articleQuery.data.value ?? null)
 const versionsQuery = useInfiniteQuery({
   queryKey: computed(() => ['article-versions', articleId.value]),
   queryFn: ({ pageParam }) => api.getArticleVersionsPage(articleId.value, pageParam),
@@ -59,7 +54,6 @@ const title = ref('')
 const versionNo = ref(0)
 const selectedAccountId = ref<string | null>(null)
 const selectedTemplateId = ref<string | null>(null)
-const view = ref(route.query.view === 'layout' ? 'layout' : 'edit')
 const saveState = ref<'saved' | 'saving' | 'failed'>('saved')
 const saveConflict = ref(false)
 const saveErrorMessage = ref('')
@@ -70,20 +64,32 @@ const revisionInstruction = ref('')
 const revisionProposal = ref('')
 const revisionLoading = ref(false)
 const revisionSelection = ref<{ from: number; to: number; text: string } | null>(null)
-const finalDialog = ref(false)
-const finalAction = ref<'draft' | 'publish'>('draft')
-const finalRender = ref<ArticleRenderPreview | null>(null)
-const finalPreparing = ref(false)
-const renderError = ref('')
-const outcomeLoading = ref(false)
 const { saving: localSaving, save: saveLocalDraft } = useLocalDraftSave()
-const coverAssetId = ref<string | null>(null)
-const coverName = ref('')
-const coverUploading = ref(false)
-const finalIdempotencyKey = ref('')
-const pendingOutcome = ref<PendingArticleOutcome | null>(
-  api.getPendingArticleOutcome(articleId.value),
-)
+const {
+  coverAssetId,
+  coverName,
+  coverUploading,
+  preparing: finalPreparing,
+  submitting: outcomeLoading,
+  busy: wechatBusy,
+  pending: pendingOutcome,
+  visible: finalDialog,
+  locked: finalSnapshot,
+  chooseCover,
+  openFinal,
+  confirm: confirmOutcome,
+  resume: resumePendingOutcome,
+} = useArticleWechatWorkflow({
+  article: () => article.value,
+  account: () => selectedAccount.value,
+  template: () => selectedTemplate.value,
+  save: async () => {
+    if (saveConflict.value) return null
+    const saved = await saveContent()
+    return dirty.value ? null : saved
+  },
+  blocked: () => localSaving.value || saveConflict.value || revisionLoading.value,
+})
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 let editRevision = 0
 let hydratedArticleId = ''
@@ -138,7 +144,6 @@ const persistLocalDraft = () => {
   }
 }
 
-const article = computed(() => articleQuery.data.value ?? null)
 const titleSelecting = ref(false)
 const titleActionsDisabled = computed(
   () =>
@@ -150,7 +155,6 @@ const titleActionsDisabled = computed(
 const chooseTitle = async (value: string) => {
   if (titleActionsDisabled.value || value === title.value || !editor.value) return
   titleSelecting.value = true
-  const wasLayout = view.value === 'layout'
   try {
     title.value = value
     const content = editor.value.getJSON()
@@ -161,7 +165,6 @@ const chooseTitle = async (value: string) => {
     }
     scheduleSave()
     await saveContent()
-    if (wasLayout && view.value === 'edit') view.value = 'layout'
   } catch {
     // The shared save flow retains the local edit and displays the actual error.
   } finally {
@@ -255,8 +258,6 @@ const selectedText = computed(() => {
 const scheduleSave = () => {
   editRevision += 1
   dirty.value = true
-  finalRender.value = null
-  if (view.value === 'layout') view.value = 'edit'
   if (saveTimer) clearTimeout(saveTimer)
   persistLocalDraft()
   if (saveConflict.value) {
@@ -291,7 +292,6 @@ watch(
   article,
   async (value) => {
     if (!value) return
-    if (versionNo.value && versionNo.value !== value.versionNo) finalRender.value = null
     const initialLoad = hydratedArticleId !== value.id
     if (!initialLoad && (dirty.value || saveInFlight)) return
     versionNo.value = value.versionNo
@@ -350,20 +350,6 @@ watch(
 )
 
 watch(
-  articleId,
-  (value) => {
-    pendingOutcome.value = api.getPendingArticleOutcome(value)
-    void api
-      .refreshPendingArticleOutcome(value)
-      .then((pending) => {
-        if (articleId.value === value) pendingOutcome.value = pending
-      })
-      .catch(() => undefined)
-  },
-  { immediate: true },
-)
-
-watch(
   accounts,
   (value) => {
     if (!selectedAccountId.value)
@@ -390,20 +376,6 @@ watch(
           : (value.find((item) => item.isDefault)?.id ?? value[0]?.id ?? null)
   },
   { immediate: true },
-)
-
-watch(
-  [
-    selectedAccountId,
-    selectedTemplateId,
-    () => selectedTemplate.value?.updatedAt,
-    () => selectedAccount.value?.lastSyncedAt,
-  ],
-  () => {
-    finalRender.value = null
-    finalIdempotencyKey.value = ''
-    renderError.value = ''
-  },
 )
 
 const saveContent = async (): Promise<Article | null> => {
@@ -705,208 +677,13 @@ const setParagraphModule = (module: 'lead' | 'body' | 'highlight' | 'caption') =
   editor.value?.chain().focus().setNode('paragraph', { module }).run()
 }
 
-const chooseCover = async () => {
-  if (!article.value) return
-  const [file] = await platform.pickFiles('.png,.jpg,.jpeg')
-  if (!file) return
-  coverUploading.value = true
-  try {
-    const uploaded = await api.uploadFile(file, {
-      projectId: article.value.projectId,
-      taskId: article.value.taskId,
-      saveToLibrary: false,
-      waitForReady: false,
-    })
-    if (!uploaded.assetId) throw new Error('封面上传成功，但没有返回可用的资源编号。')
-    coverAssetId.value = uploaded.assetId
-    coverName.value = uploaded.name
-    finalRender.value = null
-    $q.notify({ type: 'positive', message: '封面已上传，将随最终排版版本一并冻结。' })
-  } catch (error) {
-    $q.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '封面上传失败。',
-    })
-  } finally {
-    coverUploading.value = false
-  }
-}
-
-const saveLocal = () =>
-  saveLocalDraft(async () => {
+const saveLocal = () => {
+  if (wechatBusy.value) return
+  return saveLocalDraft(async () => {
     if (!editor.value || saveConflict.value) return null
     const saved = await saveContent()
     return dirty.value ? null : saved
   })
-
-let renderRequestToken = 0
-const prepareCurrentRender = async () => {
-  if (pendingOutcome.value) return null
-  if (!selectedAccount.value || !selectedTemplate.value) return null
-  const token = ++renderRequestToken
-  finalPreparing.value = true
-  renderError.value = ''
-  try {
-    const saved = (await saveContent()) ?? article.value
-    if (!saved || token !== renderRequestToken) return null
-    const rendered = await api.prepareArticleRender(
-      saved.id,
-      selectedAccount.value.id,
-      selectedTemplate.value.id,
-      coverAssetId.value,
-    )
-    if (token !== renderRequestToken) return null
-    finalRender.value = rendered
-    return rendered
-  } catch (error) {
-    if (token === renderRequestToken)
-      renderError.value = error instanceof Error ? error.message : '排版预览生成失败。'
-    return null
-  } finally {
-    if (token === renderRequestToken) finalPreparing.value = false
-  }
-}
-
-watch(
-  view,
-  (value) => {
-    if (value === 'layout') void prepareCurrentRender()
-  },
-  { immediate: true },
-)
-watch(
-  [
-    selectedAccountId,
-    selectedTemplateId,
-    coverAssetId,
-    () => selectedTemplate.value?.updatedAt,
-    () => selectedAccount.value?.lastSyncedAt,
-  ],
-  () => {
-    if (view.value === 'layout') void prepareCurrentRender()
-  },
-)
-
-const openFinal = async (action: 'draft' | 'publish') => {
-  pendingOutcome.value = await api
-    .refreshPendingArticleOutcome(articleId.value)
-    .catch(() => api.getPendingArticleOutcome(articleId.value))
-  if (pendingOutcome.value) {
-    $q.notify({
-      type: 'warning',
-      message: '该文章已有微信操作待确认，请先查询原操作，不能创建新的提交。',
-    })
-    return
-  }
-  if (!selectedAccount.value || !selectedTemplate.value) {
-    $q.notify({ type: 'warning', message: '请先选择目标公众号和排版模板。' })
-    return
-  }
-  if (selectedAccount.value.status !== 'connected') {
-    $q.notify({ type: 'warning', message: '该公众号授权已解除，请管理员重新扫码绑定。' })
-    return
-  }
-  if ((action === 'draft' && !canDraft.value) || (action === 'publish' && !canPublish.value)) {
-    $q.notify({
-      type: 'warning',
-      message:
-        action === 'draft' ? '该公众号没有写入草稿箱的能力。' : '该公众号没有发布文章的能力。',
-    })
-    return
-  }
-  try {
-    const rendered = await prepareCurrentRender()
-    if (!rendered) {
-      if (renderError.value) $q.notify({ type: 'negative', message: renderError.value })
-      return
-    }
-    finalIdempotencyKey.value = crypto.randomUUID()
-    finalAction.value = action
-    finalDialog.value = true
-  } catch (error) {
-    $q.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '最终预览生成失败，请稍后重试。',
-    })
-  }
-}
-
-const confirmOutcome = async () => {
-  if (!article.value || !selectedAccount.value || !selectedTemplate.value) return
-  outcomeLoading.value = true
-  try {
-    const result = await api.setArticleOutcome({
-      id: article.value.id,
-      outcome: finalAction.value === 'publish' ? 'publish' : 'wechat_draft',
-      accountId: selectedAccount.value.id,
-      templateId: selectedTemplate.value.id,
-      renderId: finalRender.value?.renderId,
-      idempotencyKey:
-        finalIdempotencyKey.value || (finalIdempotencyKey.value = crypto.randomUUID()),
-    })
-    queryClient.setQueryData(['article', article.value.id], result)
-    await queryClient.invalidateQueries({ queryKey: ['library'] })
-    finalDialog.value = false
-    $q.notify({
-      type: 'positive',
-      message:
-        finalAction.value === 'publish'
-          ? '微信已确认文章发布成功。'
-          : '微信已确认文章进入公众号草稿箱。',
-    })
-    finalIdempotencyKey.value = ''
-  } catch (error) {
-    if (error instanceof ApiError && error.code === 'reauth_required') {
-      finalDialog.value = false
-      $q.notify({ type: 'warning', message: '公众号授权已解除，请管理员重新扫码绑定。' })
-      await router.push({ name: 'accounts' })
-      return
-    }
-    $q.notify({
-      type: 'negative',
-      timeout: 8000,
-      message: error instanceof Error ? error.message : '公众号操作没有完成。',
-    })
-  } finally {
-    pendingOutcome.value = await api
-      .refreshPendingArticleOutcome(articleId.value)
-      .catch(() => api.getPendingArticleOutcome(articleId.value))
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['article', articleId.value] }),
-      queryClient.invalidateQueries({ queryKey: ['library'] }),
-    ])
-    outcomeLoading.value = false
-  }
-}
-
-const resumePendingOutcome = async () => {
-  outcomeLoading.value = true
-  try {
-    const result = await api.resumePendingArticleOutcome(articleId.value)
-    if (result) {
-      queryClient.setQueryData(['article', articleId.value], result)
-      $q.notify({
-        color: 'positive',
-        icon: 'check_circle',
-        message: '微信操作结果已确认。',
-      })
-    }
-  } catch (error) {
-    $q.notify({
-      type: 'negative',
-      timeout: 8000,
-      message: error instanceof Error ? error.message : '原微信操作仍未确认。',
-    })
-  } finally {
-    pendingOutcome.value = await api
-      .refreshPendingArticleOutcome(articleId.value)
-      .catch(() => api.getPendingArticleOutcome(articleId.value))
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['article', articleId.value] }),
-      queryClient.invalidateQueries({ queryKey: ['library'] }),
-    ])
-    outcomeLoading.value = false
-  }
 }
 
 const confirmLeaveWithUnsavedChanges = () =>
@@ -954,7 +731,7 @@ onBeforeUnmount(() => {
       :error="articleQuery.error.value instanceof Error ? articleQuery.error.value.message : null"
       @retry="articleQuery.refetch()"
     >
-      <div v-if="article" class="article-workbench">
+      <div v-if="article" class="article-workbench" :inert="wechatBusy || finalDialog || undefined">
         <header class="article-workbench__header">
           <div class="article-title">
             <q-btn flat round dense icon="arrow_back" aria-label="返回" @click="$router.back()" />
@@ -967,11 +744,7 @@ onBeforeUnmount(() => {
               @update:model-value="scheduleSave"
             />
           </div>
-          <div
-            v-if="view === 'edit' || saveState === 'failed'"
-            class="save-indicator"
-            :class="`save-indicator--${saveState}`"
-          >
+          <div class="save-indicator" :class="`save-indicator--${saveState}`">
             <q-spinner v-if="saveState === 'saving'" size="18px" /><q-icon
               v-else
               :name="saveState === 'saved' ? 'cloud_done' : 'cloud_off'"
@@ -995,19 +768,7 @@ onBeforeUnmount(() => {
               @click="retrySave"
             />
           </div>
-          <q-tabs
-            v-if="view === 'edit'"
-            v-model="view"
-            dense
-            active-color="primary"
-            indicator-color="primary"
-            ><q-tab name="edit" icon="edit" label="编辑视图" /><q-tab
-              name="layout"
-              icon="visibility"
-              label="公众号排版预览"
-          /></q-tabs>
           <AppButton
-            v-if="view === 'edit'"
             variant="outline"
             icon="history"
             label="历史版本"
@@ -1046,7 +807,7 @@ onBeforeUnmount(() => {
             :disabled="titleActionsDisabled"
             @choose="chooseTitle"
           />
-          <section v-show="view === 'edit'" class="editor-pane">
+          <section class="editor-pane">
             <div class="editor-toolbar" role="toolbar" aria-label="文章编辑工具栏">
               <ArticleTableMenu :editor="editor" />
               <q-btn
@@ -1190,31 +951,6 @@ onBeforeUnmount(() => {
                   label="文章结尾固定内容"
                 />
               </div>
-            </div>
-          </section>
-
-          <section v-show="view === 'layout'" class="layout-preview-pane">
-            <div class="layout-preview-pane__scroll">
-              <div v-if="!selectedAccount || !selectedTemplate" class="render-message">
-                <q-icon name="info_outline" size="28px" /><span
-                  >选择目标公众号和模板后生成排版预览。</span
-                >
-              </div>
-              <div v-else-if="finalPreparing" class="render-message">
-                <q-spinner color="primary" size="30px" /><span
-                  >正在锁定文章、模板、封面与公众号版本…</span
-                >
-              </div>
-              <div v-else-if="renderError" class="render-message render-message--error">
-                <q-icon name="error_outline" size="28px" /><span>{{ renderError }}</span
-                ><AppButton variant="outline" label="重新生成" @click="prepareCurrentRender" />
-              </div>
-              <iframe
-                v-else-if="finalRender"
-                :srcdoc="finalRender.html"
-                sandbox=""
-                title="公众号服务端排版预览"
-              />
             </div>
           </section>
 
@@ -1440,14 +1176,14 @@ onBeforeUnmount(() => {
     </AppDialog>
 
     <WechatFinalPreview
-      v-if="article && selectedAccount && selectedTemplate"
+      v-if="finalSnapshot"
       v-model="finalDialog"
-      :article="article"
-      :account="selectedAccount"
-      :template="selectedTemplate"
-      :action="finalAction"
-      :render-html="finalRender?.html"
-      :cover-name="coverName"
+      :article="finalSnapshot.article"
+      :account="finalSnapshot.account"
+      :template="finalSnapshot.template"
+      :action="finalSnapshot.action"
+      :render-html="finalSnapshot.render.html"
+      :cover-name="finalSnapshot.coverName"
       :loading="outcomeLoading"
       @confirm="confirmOutcome"
     />
@@ -1553,8 +1289,7 @@ onBeforeUnmount(() => {
   min-width: 0;
 }
 
-.editor-pane,
-.layout-preview-pane {
+.editor-pane {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
@@ -1622,47 +1357,6 @@ onBeforeUnmount(() => {
 }
 .editor-document--fixed-footer :deep(.tiptap-body) {
   min-height: 0;
-}
-.layout-preview-pane {
-  grid-template-rows: minmax(0, 1fr);
-  background: var(--app-bg-subtle);
-}
-.layout-preview-pane__scroll {
-  min-width: 0;
-  min-height: 0;
-  padding: clamp(16px, 3vw, 34px);
-  overflow-y: auto;
-}
-.layout-preview-pane__scroll > iframe {
-  display: block;
-  width: min(100%, 820px);
-  min-height: max(100%, 760px);
-  margin-inline: auto;
-  background: #fff;
-  border: 1px solid var(--app-border-default);
-  border-radius: 12px;
-  box-shadow: var(--app-shadow-sm);
-}
-.render-message {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  width: min(100%, 720px);
-  min-width: 0;
-  min-height: 240px;
-  margin: 40px auto;
-  padding: 24px;
-  color: var(--app-text-secondary);
-  text-align: center;
-  background: var(--app-bg-surface);
-  border: 1px solid var(--app-border-default);
-  border-radius: 12px;
-  overflow-wrap: anywhere;
-}
-.render-message--error {
-  flex-wrap: wrap;
-  color: var(--app-danger);
 }
 
 .article-meta {
@@ -1751,10 +1445,6 @@ onBeforeUnmount(() => {
   .article-page {
     height: calc(100dvh - 50px);
   }
-  .article-workbench__header .q-tabs {
-    order: 4;
-    width: 100%;
-  }
   .article-workbench__main {
     grid-template-columns: minmax(160px, 200px) minmax(0, 1fr);
     overflow-y: auto;
@@ -1764,8 +1454,7 @@ onBeforeUnmount(() => {
     overflow: visible;
   }
   .article-title-options,
-  .editor-pane,
-  .layout-preview-pane {
+  .editor-pane {
     min-height: 60vh;
   }
   .article-workbench__footer {
@@ -1785,13 +1474,11 @@ onBeforeUnmount(() => {
     border-right: 0;
     border-bottom: 1px solid var(--app-border-default);
   }
-  .editor-pane,
-  .layout-preview-pane {
+  .editor-pane {
     min-height: 70vh;
     overflow: visible;
   }
-  .editor-scroll,
-  .layout-preview-pane__scroll {
+  .editor-scroll {
     overflow: visible;
   }
   .editor-toolbar {
