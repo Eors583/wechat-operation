@@ -58,6 +58,7 @@ SOURCE_FIELDS = {
     "previous_summary",
     "invalid_article_json",
     "incomplete_article",
+    "draft_article",
 }
 
 
@@ -334,7 +335,9 @@ async def fit_context(
             ]
             if groups:
                 key, value = max(groups, key=lambda pair: encoded_size(pair[1]))
-                result[key] = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                serialized = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                # The provider uses this dict as the article-revision output discriminator.
+                result[key] = {"summary": serialized} if key == "draft_article" else serialized
                 continue
             raise ApiError(
                 503,
