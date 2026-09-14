@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { openTemplateVideo } from '@/utils/templateMedia'
+import { playTemplateVideo, prepareTemplateVideos } from '@/utils/templateMedia'
 
 const props = defineProps<{ html: string; label: string }>()
 const frame = ref<HTMLIFrameElement | null>(null)
@@ -13,7 +13,7 @@ const sourceDocument = computed(
   () => `<!doctype html><html lang="zh-CN"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'; script-src 'none'; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'; script-src 'none'; frame-src https://mp.weixin.qq.com; form-action 'none'; base-uri 'none'">
 <style>
 *{box-sizing:border-box}html,body{margin:0;min-width:0}
 body{font-family:system-ui,'Microsoft YaHei',sans-serif;color:CanvasText;color-scheme:light;overflow-wrap:anywhere}
@@ -28,6 +28,7 @@ const onLoad = () => {
   const document = frame.value?.contentDocument
   const content = document?.querySelector('main')
   if (!document || !content) return
+  prepareTemplateVideos(document)
   const resize = () => {
     height.value = Math.max(
       1,
@@ -40,7 +41,7 @@ const onLoad = () => {
   const preventNavigation = (event: MouseEvent) => {
     const target = event.target as Element | null
     if (target?.closest('a')) event.preventDefault()
-    openTemplateVideo(target)
+    playTemplateVideo(target)
   }
   document.addEventListener('click', preventNavigation)
   cleanup = () => {
@@ -60,7 +61,8 @@ onBeforeUnmount(() => cleanup())
     :style="{ height: `${height}px` }"
     :srcdoc="sourceDocument"
     :title="label"
-    sandbox="allow-same-origin"
+    sandbox="allow-same-origin allow-scripts"
+    allow="autoplay; fullscreen"
     referrerpolicy="no-referrer"
     @load="onLoad"
   />
