@@ -84,8 +84,16 @@ class LayoutComponentDecision(StyleContractModel):
     confidence: float = Field(ge=0, le=1)
 
 
+class LayoutImageMarker(StyleContractModel):
+    image_id: str = Field(pattern=r"^image-[1-9][0-9]{0,2}$")
+    sequence: int | None = Field(ge=1, le=100)
+    heading_block_id: str | None = Field(pattern=r"^content-[1-9][0-9]{0,5}$")
+    confidence: float = Field(ge=0, le=1)
+
+
 class LayoutAgentResponse(StyleContractModel):
     style_tokens: StyleTokenPayload
     confidence: float = Field(ge=0, le=1)
     module_evidence: LayoutModuleEvidence
     component_decisions: list[LayoutComponentDecision] = Field(default_factory=list, max_length=100)
+    image_markers: list[LayoutImageMarker] = Field(default_factory=list, max_length=100)

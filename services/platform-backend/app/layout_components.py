@@ -4,11 +4,36 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import urlsplit
 
 from bs4 import BeautifulSoup, Tag
 
 from app.layout_contracts import LayoutComponentGroup
 from app.style_token_contracts import StyleProperties
+
+
+def layout_image_inputs(blocks: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Pass real CDN images, with stable source IDs, to the configured visual model."""
+    images = []
+    for block in blocks:
+        soup = BeautifulSoup(block["html"], "html.parser")
+        if soup.find("figure", attrs={"data-profile-card": "true"}):
+            continue
+        for image in soup.find_all("img"):
+            source = str(image.get("src", ""))
+            parsed = urlsplit(source)
+            if (
+                parsed.scheme in {"http", "https"}
+                and (parsed.hostname == "qpic.cn" or (parsed.hostname or "").endswith(".qpic.cn"))
+                and not parsed.username
+                and not parsed.password
+                and parsed.port in {None, 80, 443}
+            ):
+                images.append(
+                    {"image_id": f"image-{len(images) + 1}", "block_id": block["id"], "url": source}
+                )
+    return images
+
 
 _CREDIT = re.compile(
     r"^(文(?=\s|[丨|｜:：])|作者|记者|编辑|见习编辑|责任编辑|审核|头图来源|图片来源|来源)\s*[丨|｜:：]?\s*(.*)"

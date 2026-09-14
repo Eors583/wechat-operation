@@ -512,6 +512,10 @@ async def generate_with_frozen_route(
                     raise ProviderUnavailable("Frozen model secret reference is invalid")
                 model: ModelProvider
                 if adapter == "manus_v2":
+                    if context.get("untrusted_layout_images"):
+                        raise ProviderUnavailable(
+                            "Layout image input requires a multimodal request/response route"
+                        )
                     model = ManusModelProvider(
                         api_base=str(raw_config.get("base_url", "")),
                         api_key=secrets.resolve(secret_ref),
