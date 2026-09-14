@@ -13,6 +13,7 @@ from app.model_limits import estimate_tokens, output_token_limit
 
 # Operational snapshots retain these fields; models do not need internal routing/configuration.
 _INTERNAL_FIELDS = {
+    "output_rewrite_history",
     "pipeline_prompt_versions",
     "token_budget",
     "context_selection",
@@ -30,6 +31,8 @@ SOURCE_FIELDS = {
     "project_requirements",
     "preferences",
     "user_preferences",
+    "untrusted_rejected_outputs",
+    "validation_feedback",
     "untrusted_extracted_files",
     "instruction_document",
     "recoverable_draft",
@@ -63,6 +66,7 @@ SOURCE_FIELDS = {
 
 
 _RULE_FIELDS = {
+    "validation_feedback",
     "selected_skills",
     "project_requirements",
     "preferences",
