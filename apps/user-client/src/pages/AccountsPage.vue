@@ -54,7 +54,7 @@ const templatesQuery = useInfiniteQuery({
   queryFn: ({ pageParam }) => api.listTemplatesPage(selected.value?.id ?? null, pageParam),
   initialPageParam: undefined as string | undefined,
   getNextPageParam: (lastPage) => lastPage.nextCursor,
-  enabled: computed(() => templateDialog.value),
+  enabled: computed(() => templateDialog.value && !!selected.value),
   refetchInterval: (query) =>
     templateDialog.value &&
     query.state.data?.pages.some((page) =>
@@ -124,10 +124,6 @@ const showDetail = (account: OfficialAccount) => {
 }
 const showTemplates = (account: OfficialAccount) => {
   selected.value = account
-  templateDialog.value = true
-}
-const showTemplatesFromHeader = () => {
-  selected.value = null
   templateDialog.value = true
 }
 const showSelectedTemplates = () => {
@@ -253,12 +249,6 @@ const disconnect = () => {
   <q-page class="app-page accounts-page">
     <PageHeader title="公众号管理">
       <template #actions>
-        <AppButton
-          variant="outline"
-          icon="auto_fix_high"
-          label="排版模板"
-          @click="showTemplatesFromHeader"
-        />
         <AppButton icon="add" label="授权新公众号" @click="openAuthorize()" />
       </template>
     </PageHeader>
@@ -466,6 +456,7 @@ const disconnect = () => {
     </AppDialog>
 
     <LayoutTemplateEditor
+      v-if="selected"
       v-model="templateDialog"
       :account="selected"
       :templates="templates"
