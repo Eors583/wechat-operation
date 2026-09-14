@@ -3019,6 +3019,7 @@ async def delete_official_account(
     account = await owned_official_account(session, owner_id=user.id, account_id=account_id)
     account.status = "revoked"
     account.deleted_at = utcnow()
+    account.technical_metadata = {**account.technical_metadata, "is_default": False}
     await session.commit()
     return Response(status_code=204)
 
