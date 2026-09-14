@@ -40,6 +40,7 @@ from app.domains.dialogue_flow import (
     style_action,
 )
 from app.domains.intent_resolution import resolve_intent
+from app.domains.layout import uses_heading_numbers
 from app.domains.preference_learning import (
     MEMORY_INSTRUCTIONS,
     is_preference_only,
@@ -58,6 +59,7 @@ from app.domains.user_preference_memory import (
 )
 from app.errors import ApiError
 from app.external_knowledge import search_external_knowledge
+from app.heading_numbering import HEADING_NUMBERING_INSTRUCTION, without_heading_numbers
 from app.long_context import (
     context_budget,
     fit_context,
@@ -1875,6 +1877,14 @@ async def prepare_ai_run(
     selected_recent_messages.sort(key=lambda item: item.created_at, reverse=True)
     selected_preferences = preferences
     frozen_context = {
+        "layout_heading_numbers": await uses_heading_numbers(
+            session,
+            owner_id=task.owner_id,
+            article_id=task.current_article_id,
+            account_id=(run.context_snapshot.get("untrusted_account_profile") or {}).get(
+                "official_account_id"
+            ),
+        ),
         "untrusted_user_input": text,
         "untrusted_message_content": content,
         "untrusted_account_profile": run.context_snapshot.get("untrusted_account_profile"),
@@ -2192,6 +2202,8 @@ async def process_ai_run(
             prompt += "\n\n" + PRIORITY
         if context.get("untrusted_account_profile"):
             prompt += "\n\n" + ACCOUNT_PROFILE_INSTRUCTIONS
+        if model_context.get("layout_heading_numbers"):
+            prompt += "\n\n" + HEADING_NUMBERING_INSTRUCTION
         context = model_context_data(context)
         if requires_local_compaction(snapshot):
             snapshot = prepare_context_route(snapshot, purpose, context)
@@ -2235,6 +2247,8 @@ async def process_ai_run(
             if available < 4096:
                 # Keep machine contracts, security boundaries and preference protocol verbatim.
                 protected = [article_output_contract(), PRIORITY, ACCOUNT_PROFILE_INSTRUCTIONS]
+                if model_context.get("layout_heading_numbers"):
+                    protected.append(HEADING_NUMBERING_INSTRUCTION)
                 if preference_mode:
                     protected.append(output_instruction(preference_mode))
                 fixed = []
@@ -2657,6 +2671,8 @@ async def process_ai_run(
                             validate(canonical_output, model_context)
                         except ApiError as error:
                             reject(error)
+                if model_context.get("layout_heading_numbers"):
+                    canonical_output = without_heading_numbers(canonical_output)
                 enforce_article_body_boundary(canonical_output, title_candidates)
                 grounding = source_findings(canonical_output, model_context)
                 if grounding["unmatched"] and re.search(

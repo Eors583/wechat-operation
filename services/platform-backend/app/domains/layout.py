@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.errors import ApiError
+from app.heading_numbering import without_heading_numbers
 from app.layout_content import sanitize_content_html
 from app.layout_contracts import LayoutLockedBlock, LayoutSourceSnapshot
 from app.model_gateway import ModelRouteExhausted, generate_with_frozen_route
@@ -385,7 +386,8 @@ async def process_layout_extraction(
             prompt=LAYOUT_AGENT_PROMPT,
             context={
                 "untrusted_layout_observation": {
-                    key: value for key, value in result.source_snapshot.items()
+                    key: value
+                    for key, value in result.source_snapshot.items()
                     if key not in {"content_blocks", "locked_blocks"}
                 },
                 "deterministic_baseline_style_tokens": baseline_tokens,
@@ -579,6 +581,8 @@ def _marked_text_html(node: dict[str, Any]) -> str:
 def _node_html(node: Any, tokens: dict[str, Any], heading_index: list[int] | None = None) -> str:
     if heading_index is None:
         heading_index = [0]
+        if tokens.get("heading_marker", {}).get("enabled"):
+            node = without_heading_numbers(node)
     if isinstance(node, str):
         return html.escape(node)
     if isinstance(node, list):
@@ -739,6 +743,56 @@ def _document_with_locked_content(
     return "".join(parts)
 
 
+async def uses_heading_numbers(
+    session: AsyncSession, *, owner_id: str, article_id: str | None, account_id: str | None
+) -> bool:
+    if article_id:
+        article = await owned_article(session, owner_id=owner_id, article_id=article_id)
+        version = await session.scalar(
+            select(ArticleVersion).where(
+                ArticleVersion.article_id == article.id,
+                ArticleVersion.version_no == article.current_version_no,
+            )
+        )
+        if version:
+            render = await session.scalar(
+                select(ArticleRender)
+                .where(
+                    ArticleRender.owner_id == owner_id,
+                    ArticleRender.article_version_id == version.id,
+                    ArticleRender.stale_at.is_(None),
+                    ArticleRender.official_account_id == account_id,
+                )
+                .order_by(ArticleRender.created_at.desc())
+                .limit(1)
+            )
+            if render and render.template_version_id:
+                template_version = await session.get(
+                    LayoutTemplateVersion, render.template_version_id
+                )
+                if template_version:
+                    return bool(
+                        template_version.style_tokens.get("heading_marker", {}).get("enabled")
+                    )
+            saved = version.layout_snapshot or {}
+            if saved and saved.get("official_account_id") == account_id:
+                return bool(saved.get("style_tokens", {}).get("heading_marker", {}).get("enabled"))
+    if not account_id:
+        return False
+    tokens = await session.scalar(
+        select(LayoutTemplateVersion.style_tokens)
+        .join(LayoutTemplate, LayoutTemplate.id == LayoutTemplateVersion.template_id)
+        .where(
+            LayoutTemplate.owner_id == owner_id,
+            LayoutTemplate.official_account_id == account_id,
+            LayoutTemplate.is_default.is_(True),
+            LayoutTemplate.deleted_at.is_(None),
+            LayoutTemplateVersion.version_no == LayoutTemplate.current_version_no,
+        )
+    )
+    return bool((tokens or {}).get("heading_marker", {}).get("enabled"))
+
+
 async def create_render(
     session: AsyncSession,
     *,
@@ -789,7 +843,8 @@ async def create_render(
             raise ApiError(409, "LAYOUT_TEMPLATE_EMPTY", "模板还没有可用版本。")
         tokens = validate_style_tokens(template_version.style_tokens)
     document_html = _document_with_locked_content(
-        article_version.content_json, tokens,
+        article_version.content_json,
+        tokens,
         template_version.source_snapshot if template_version else {},
     )
     if (
@@ -797,10 +852,13 @@ async def create_render(
         and len(re.findall(r"<img\b", document_html)) > max_article_images
     ):
         raise ApiError(
-            422, "ARTICLE_IMAGE_LIMIT_EXCEEDED", "文章与固定内容的图片总数超过当前系统限制。",
+            422,
+            "ARTICLE_IMAGE_LIMIT_EXCEEDED",
+            "文章与固定内容的图片总数超过当前系统限制。",
             details={"max_images": max_article_images},
         )
     checksum_payload = {
+        "heading_numbering_version": 1,
         "article_version_id": article_version.id,
         "article_hash": article_version.content_hash,
         "template_version_id": template_version.id if template_version else None,
