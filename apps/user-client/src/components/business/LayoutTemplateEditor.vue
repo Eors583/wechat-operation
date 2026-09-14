@@ -488,6 +488,7 @@ const saveName = (template: LayoutTemplate) => {
 }
 
 const rename = (template: LayoutTemplate) => {
+  if (saving.value || nameSaves.has(template.id)) return
   const scope = templateScopeKey.value
   $q.dialog({
     title: '重命名模板',
@@ -621,6 +622,7 @@ const remove = async (target: LayoutTemplate) => {
               <button
                 class="template-editor__select"
                 @click="selectedId = template.id"
+                @dblclick="rename(template)"
                 :title="template.name"
               >
                 <span>{{ template.name }}</span>
