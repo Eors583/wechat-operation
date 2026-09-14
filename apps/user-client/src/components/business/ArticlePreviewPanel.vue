@@ -515,12 +515,14 @@ onBeforeUnmount(() => {
             />
           </div>
           <ArticleFixedContent
+            :source-url="fixedContent.sourceUrl.value"
             v-if="fixedContent.beforeHtml.value"
             :html="fixedContent.beforeHtml.value"
             label="正文固定开头"
           />
           <EditorContent :editor="editor" />
           <ArticleFixedContent
+            :source-url="fixedContent.sourceUrl.value"
             v-if="fixedContent.afterHtml.value"
             :html="fixedContent.afterHtml.value"
             label="正文固定结尾"

@@ -7,6 +7,7 @@ import { playTemplateVideo, prepareTemplateVideos } from '@/utils/templateMedia'
 const props = defineProps<{
   blocks: NonNullable<LayoutTemplate['contentBlocks']>
   title?: string
+  sourceUrl?: string
   selectedIds: string[]
   lockedGroups: NonNullable<LayoutTemplate['lockedBlocks']>
   editedStyles: Partial<Record<ModuleKey, ModuleStyle>>
@@ -25,12 +26,12 @@ const selecting = ref(false)
 let originalStyles = new Map<HTMLElement, string | null>()
 let cleanupSelection = () => {}
 
-// CSP blocks scripts in imported content; only the trusted child player runs scripts. Parent
+// Imported content is script-free; parent listeners provide native video playback and selection. Parent
 // event listeners provide selection; source links cannot navigate the preview.
 const sourceDocument = computed(
   () => `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'; script-src 'none'; frame-src https://mp.weixin.qq.com; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'; script-src 'none'; media-src https://mpvideo.qpic.cn; form-action 'none'; base-uri 'none'">
 <meta name="referrer" content="no-referrer"><style>
 *{box-sizing:border-box}html,body{margin:0;min-width:0;font-family:system-ui,'Microsoft YaHei',sans-serif}
 body{padding:16px;color:CanvasText;background:Canvas;color-scheme:light;overflow-wrap:anywhere}
@@ -441,7 +442,7 @@ const onLoad = () => {
       const target = event.target as Element | null
       if (target?.closest('a')) event.preventDefault()
       if (props.busy) return
-      if (target?.closest('[data-video-play]') && playTemplateVideo(target)) return
+      if (target?.closest('[data-video-play]') && playTemplateVideo(target, props.sourceUrl)) return
       if (event.detail !== 0 && Date.now() < suppressClickUntil) {
         event.preventDefault()
         return
@@ -480,7 +481,7 @@ watch(() => [props.lockedGroups, props.editedStyles, props.title], syncStyles, {
       ref="frame"
       class="template-source-preview__frame"
       :srcdoc="sourceDocument"
-      sandbox="allow-same-origin allow-scripts"
+      sandbox="allow-same-origin"
       allow="autoplay; fullscreen"
       referrerpolicy="no-referrer"
       title="完整文章预览，拖动或点击内容选择固定部分，触屏可长按拖动"

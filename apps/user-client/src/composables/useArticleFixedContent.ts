@@ -58,6 +58,7 @@ export const useArticleFixedContent = (
     if (needsVersion.value) void query.refetch()
   }
   return {
+    sourceUrl: computed(() => resolved.value?.sourceUrl),
     beforeHtml: computed(() => fragments.value.beforeHtml),
     afterHtml: computed(() => fragments.value.afterHtml),
     loading: computed(() => needsVersion.value && query.isFetching.value),

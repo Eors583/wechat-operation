@@ -229,6 +229,7 @@ const selectedTemplate = computed(
   () => templates.value.find((item) => item.id === selectedTemplateId.value) ?? null,
 )
 const {
+  sourceUrl: fixedSourceUrl,
   beforeHtml: fixedBeforeHtml,
   afterHtml: fixedAfterHtml,
   loading: fixedContentLoading,
@@ -1169,12 +1170,14 @@ onBeforeUnmount(() => {
                   />
                 </div>
                 <ArticleFixedContent
+                  :source-url="fixedSourceUrl"
                   v-if="fixedBeforeHtml"
                   :html="fixedBeforeHtml"
                   label="文章开头固定内容"
                 />
                 <EditorContent :editor="editor" />
                 <ArticleFixedContent
+                  :source-url="fixedSourceUrl"
                   v-if="fixedAfterHtml"
                   :html="fixedAfterHtml"
                   label="文章结尾固定内容"

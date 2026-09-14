@@ -1,3 +1,5 @@
+import { resolveTemplateVideoSource } from '@/api/client'
+
 const videoUrl = (link: HTMLAnchorElement): URL | null => {
   const url = new URL(link.href)
   if (
@@ -28,22 +30,46 @@ export const prepareTemplateVideos = (document: Document) => {
   }
 }
 
-export const playTemplateVideo = (target: Element | null): boolean => {
+export const playTemplateVideo = (target: Element | null, sourceUrl?: string): boolean => {
   const link = target?.closest<HTMLAnchorElement>('a[href]')
   if (!link) return false
   const url = videoUrl(link)
   if (!url) return false
-  const player = link.ownerDocument.createElement('iframe')
-  const source = new URL('https://mp.weixin.qq.com/mp/readtemplate')
-  source.search = new URLSearchParams({
-    t: 'pages/video_player_tmpl', action: 'mpvideo', auto: '1', vid: url.searchParams.get('vid')!,
-  }).toString()
-  player.src = source.href
-  player.title = '视频播放器'
-  player.allow = 'autoplay; fullscreen; encrypted-media'
-  player.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-presentation')
-  player.referrerPolicy = 'no-referrer'
-  player.style.cssText = 'display:block;width:100%;max-width:100%;min-width:0;aspect-ratio:16/9;border:0'
-  link.replaceWith(player)
+  if (link.getAttribute('aria-busy') === 'true') return true
+  link.setAttribute('aria-busy', 'true')
+  const button = link.querySelector<HTMLButtonElement>('[data-video-play]')
+  if (button) button.textContent = '…'
+  const player = link.ownerDocument.createElement('video')
+  player.controls = true
+  player.playsInline = true
+  player.poster = link.querySelector('img')?.src ?? ''
+  player.style.cssText = 'display:block;width:100%;max-width:100%;min-width:0;aspect-ratio:16/9'
+  const fail = () => {
+    if (player.isConnected) player.replaceWith(link)
+    link.removeAttribute('aria-busy')
+    if (button) button.textContent = '▶'
+    if (!link.querySelector('[role=status]')) {
+      const message = link.ownerDocument.createElement('span')
+      message.setAttribute('role', 'status')
+      message.textContent = '视频加载失败，请点击重试'
+      message.style.cssText = 'display:block;text-align:center;font-size:13px'
+      link.append(message)
+    }
+  }
+  player.addEventListener('error', fail, { once: true })
+  link.querySelector('[role=status]')?.remove()
+  void (async () => {
+    try {
+      if (!sourceUrl) throw new Error('Missing article source')
+      const media = new URL(await resolveTemplateVideoSource(sourceUrl, url.searchParams.get('vid')!))
+      if (media.protocol !== 'https:' || media.hostname !== 'mpvideo.qpic.cn') throw new Error('Invalid video source')
+      if (!link.isConnected) return
+      player.src = media.href
+      link.replaceWith(player)
+      void player.play().catch(() => { /* Native controls remain available when autoplay is blocked. */ })
+    } catch {
+      fail()
+    }
+  })()
   return true
 }

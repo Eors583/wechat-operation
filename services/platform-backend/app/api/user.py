@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Cookie, Depends, Header, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from sqlalchemy import and_, case, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -2513,6 +2513,27 @@ async def extract_layout_template(
             else "模板提取已排队；抓取失败时会记录原因，不会生成模拟模板。"
         ),
     }
+
+
+@router.get("/layout-video-source", response_class=PlainTextResponse)
+async def get_layout_video_source(
+    source_url: str = Query(min_length=12, max_length=1000),
+    video_id: str = Query(pattern=r"^wxv_[0-9]{1,30}$"),
+    user: User = Depends(current_user),
+    provider: LayoutExtractionProvider = Depends(layout_extraction_provider),
+    limiter: RateLimiter = Depends(rate_limiter),
+) -> PlainTextResponse:
+    from app.wechat_public_layout import WeChatPublicLayoutExtractionProvider
+
+    await limiter.check(f"layout-video-read:{user.id}", 20, 60)
+    source_url = validate_source_url(source_url)
+    if not isinstance(provider, WeChatPublicLayoutExtractionProvider):
+        raise ApiError(503, "VIDEO_UNAVAILABLE", "视频服务暂不可用。")
+    try:
+        url = await provider.resolve_video_source(source_url, video_id)
+    except ProviderUnavailable as exc:
+        raise ApiError(503, "VIDEO_UNAVAILABLE", str(exc)) from exc
+    return PlainTextResponse(url, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/layout-templates/{template_id}", response_model=contract.LayoutTemplateDetailResponse)

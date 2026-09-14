@@ -794,6 +794,7 @@ const remove = async () => {
                 :key="selectedId"
                 :blocks="sourceBlocks"
                 :title="selectedTemplate?.sourceTitle"
+                :source-url="selectedTemplate?.sourceUrl"
                 :selected-ids="selectedBlockIds"
                 :locked-groups="lockedGroups"
                 :edited-styles="sourceStyles"

@@ -588,6 +588,15 @@ const authenticatedFetch = async (input: Request): Promise<Response> => {
   return fetchWithReadRecovery(new Request(request, { headers, credentials: 'include' }))
 }
 
+export const resolveTemplateVideoSource = async (sourceUrl: string, videoId: string) => {
+  const query = new URLSearchParams({ source_url: sourceUrl, video_id: videoId })
+  const response = await authenticatedFetch(new Request(
+    `${baseUrl}/layout-video-source?${query}`, { signal: AbortSignal.timeout(30000) },
+  ))
+  if (!response.ok) throw await responseError(response)
+  return response.text()
+}
+
 const openApi = createClient<paths, 'application/json'>({
   baseUrl: openApiBaseUrl || globalThis.location?.origin || 'http://localhost',
   credentials: 'include',
