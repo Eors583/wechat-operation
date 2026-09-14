@@ -284,6 +284,20 @@ def _parse_profile(result: ModelResult, article_ids: set[str]) -> WritingProfile
         ) from exc
 
 
+def _verbatim_excerpt(quote: str, paragraph: str) -> str | None:
+    """Resolve whitespace-only differences, returning the untouched source substring."""
+    if quote in paragraph:
+        return quote
+    positions = [index for index, char in enumerate(paragraph) if not char.isspace()]
+    normalized = "".join(paragraph[index] for index in positions)
+    needle = "".join(quote.split())
+    start = normalized.find(needle) if needle else -1
+    if start < 0:
+        return None
+    original = paragraph[positions[start]:positions[start + len(needle) - 1] + 1]
+    return original if 4 <= len(original) <= 120 else None
+
+
 def _parse_article_style(result: ModelResult, source: dict[str, Any]) -> ArticleStyle:
     text = result.text.strip()
     if text.startswith("```") and text.endswith("```"):
@@ -302,7 +316,10 @@ def _parse_article_style(result: ModelResult, source: dict[str, Any]) -> Article
             *(e for item in style.observations for e in item.evidence),
         ]
         for item in evidence:
-            if item.excerpt not in paragraphs.get(item.paragraph_id, ""):
+            original = _verbatim_excerpt(item.excerpt, paragraphs.get(item.paragraph_id, ""))
+            if original is not None:
+                item.excerpt = original
+            else:
                 matches = [key for key, text in paragraphs.items() if item.excerpt in text]
                 if len(matches) == 1:
                     item.paragraph_id = matches[0]
