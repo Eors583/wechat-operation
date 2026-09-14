@@ -581,8 +581,6 @@ def _marked_text_html(node: dict[str, Any]) -> str:
 def _node_html(node: Any, tokens: dict[str, Any], heading_index: list[int] | None = None) -> str:
     if heading_index is None:
         heading_index = [0]
-        if tokens.get("heading_marker", {}).get("enabled"):
-            node = without_heading_numbers(node)
     if isinstance(node, str):
         return html.escape(node)
     if isinstance(node, list):
@@ -590,6 +588,8 @@ def _node_html(node: Any, tokens: dict[str, Any], heading_index: list[int] | Non
     if not isinstance(node, dict):
         return ""
     node_type = str(node.get("type", "paragraph"))
+    if node_type == "heading" and tokens.get("heading_marker", {}).get("enabled"):
+        node = without_heading_numbers(node)
     if node_type == "text":
         return _marked_text_html(node)
     text = html.escape(str(node.get("text", "")))
