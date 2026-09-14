@@ -392,6 +392,7 @@ onBeforeUnmount(() => editor.value?.destroy())
 
 <style scoped lang="scss">
 @use '@/styles/mixins/article-content' as *;
+@use '@/styles/tokens/primitive' as space;
 
 .article-panel {
   display: grid;
@@ -469,8 +470,8 @@ onBeforeUnmount(() => editor.value?.destroy())
 
   &__heading {
     min-width: 0;
-    margin-bottom: var(--article-title-margin-bottom);
-    padding-bottom: var(--article-title-margin-bottom);
+    margin-bottom: min(var(--article-title-margin-bottom), #{space.$space-3});
+    padding-bottom: min(var(--article-title-margin-bottom), #{space.$space-3});
     border-bottom: 1px solid var(--app-border-default);
   }
 
