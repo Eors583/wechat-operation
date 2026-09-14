@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import re
 import struct
 import time
 import zlib
@@ -15,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from xml.etree import ElementTree
 
 import httpx
+from bs4 import BeautifulSoup
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +38,49 @@ from app.providers import (
 WECHAT_API_BASE = "https://api.weixin.qq.com"
 WECHAT_AUTHORIZATION_PAGE = "https://mp.weixin.qq.com/cgi-bin/componentloginpage"
 logger = logging.getLogger(__name__)
+
+
+class WechatApiError(ProviderUnavailable):
+    def __init__(self, code: int, message: str) -> None:
+        super().__init__(f"WeChat API returned error {code}")
+        self.code = code
+        rid = re.search(r"\brid:\s*([A-Za-z0-9_-]{1,100})", message)
+        self.rid = rid.group(1) if rid else None
+
+    def details(self, stage: str) -> dict[str, Any]:
+        reason = {
+            45166: "正文内容不被微信接受，请检查视频、链接及嵌入内容。",
+            48001: "公众号没有该接口权限。",
+            40007: "素材标识无效，请重新选择封面。",
+            45003: "标题超过微信允许的长度。",
+            45004: "摘要超过微信允许的长度。",
+        }.get(self.code, "请根据微信错误码检查提交内容。")
+        return {
+            "message": f"微信{stage}失败（{self.code}）：{reason}",
+            "wechat_errcode": self.code,
+            "wechat_rid": self.rid,
+            "stage": stage,
+        }
+
+
+def _compatible_draft_html(html: str) -> str:
+    soup = BeautifulSoup(html, "html.parser")
+    changed = False
+    for link in soup.find_all("a", href=True):
+        try:
+            url = urlsplit(str(link["href"]))
+        except ValueError:
+            continue
+        query = dict(parse_qsl(url.query))
+        if (
+            url.hostname == "mp.weixin.qq.com"
+            and url.path == "/mp/readtemplate"
+            and (query.get("t") == "pages/video_player_tmpl" or query.get("action") == "mpvideo")
+        ):
+            # Keep the preview image and text; this internal player URL causes 45166.
+            link.unwrap()
+            changed = True
+    return str(soup) if changed else html
 
 
 class WechatPublishedContentError(ProviderUnavailable):
@@ -231,7 +276,7 @@ class WechatOpenPlatformClient:
                 )
             if path in {"/cgi-bin/freepublish/batchget", "/datacube/getarticletotaldetail"}:
                 raise WechatPublishedContentError(code)
-            raise ProviderUnavailable(f"WeChat Open Platform returned error {code}")
+            raise WechatApiError(code, str(result.get("errmsg", "")))
         return cast(dict[str, Any], result)
 
     async def upload_permanent_image(self, *, access_token: str, cover: WechatCover) -> str:
@@ -264,7 +309,7 @@ class WechatOpenPlatformClient:
                 raise ProviderAuthenticationError(
                     f"WeChat cover upload rejected the access token ({code})", code=code
                 )
-            raise ProviderUnavailable(f"WeChat cover upload returned error {code}")
+            raise WechatApiError(code, str(result.get("errmsg", "")))
         media_id = result.get("media_id")
         if not isinstance(media_id, str) or not media_id:
             raise ProviderUnavailable("WeChat cover upload did not return a media ID")
@@ -287,7 +332,7 @@ class WechatOpenPlatformClient:
                         "title": title[:64],
                         "author": "",
                         "digest": digest[:120],
-                        "content": html,
+                        "content": _compatible_draft_html(html),
                         "content_source_url": "",
                         "thumb_media_id": thumb_media_id,
                         "need_open_comment": 0,
@@ -637,10 +682,12 @@ class DirectWechatProvider:
     ) -> WechatResult:
         cover = cover or _default_wechat_cover()
         access_token = self._secrets.resolve(account_ref)
+        stage = "上传封面"
         try:
             thumb_media_id = await self._client.upload_permanent_image(
                 access_token=access_token, cover=cover
             )
+            stage = "创建草稿"
             media_id = await self._client.add_draft(
                 access_token=access_token,
                 title=title,
@@ -652,6 +699,8 @@ class DirectWechatProvider:
             raise
         except ProviderTransientError as exc:
             raise ProviderResultUnknown("WeChat draft response was not received") from exc
+        except WechatApiError as exc:
+            return WechatResult(status="failed", details=exc.details(stage))
         except ProviderUnavailable:
             return WechatResult(
                 status="failed",
