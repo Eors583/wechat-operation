@@ -891,3 +891,13 @@ Web使用HttpOnly、Secure和SameSite Cookie保存刷新会话；访问令牌短
 [27]: https://docs.litellm.ai/docs/ "LiteLLM Documentation"
 [28]: https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html "OWASP File Upload Cheat Sheet"
 [29]: https://genai.owasp.org/llmrisk/llm01-prompt-injection/ "OWASP Prompt Injection"
+
+
+### 公众号风格学习异常恢复（2026-09-14）
+
+- 固定本轮最新10篇选集，逐篇保存正文和校验通过的分析；临时故障恢复时继续未完成部分，不以旧文章替代。
+- 正文读取、模型临时网络故障、分析结构/证据校验失败采用有限自动恢复：任务最多3次，间隔30秒、120秒。
+- 单篇及汇总校验最多生成3次，修复时携带原始上下文、被拒绝的结果和具体校验反馈。引文逐字匹配且只对应一个原文段落时，可修正错误段落ID；不放行编造引文。
+- 保存失败文章ID、校验字段类型、底层异常类型、HTTP状态和恢复次数；不记录凭证或第三方响应正文。失败不覆盖有效画像。
+- 权限、配置、认证、额度及其他不能自动恢复的故障单独记录，不能无差别反复调用。
+- 后续异常处理沿用“分类、恢复、保留进度、明确终态”的原则。保存、扣费、草稿创建、发布等写操作必须先通过幂等或状态对账确认结果，不可直接重放。

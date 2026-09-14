@@ -298,7 +298,14 @@ def _parse_article_style(result: ModelResult, source: dict[str, Any]) -> Article
         ]
         for item in evidence:
             if item.excerpt not in paragraphs.get(item.paragraph_id, ""):
-                raise ValueError("段落证据必须逐字来自指定原文段落")
+                matches = [key for key, text in paragraphs.items() if item.excerpt in text]
+                if len(matches) == 1:
+                    item.paragraph_id = matches[0]
+                else:
+                    raise ValueError(
+                        f"证据段落{item.paragraph_id}无法核对连续原句；请复制对应段落短原句，"
+                        "不得省略、拼接或改写。"
+                    )
         boilerplate = {
             item["paragraph_id"] for item in source["paragraphs"] if item["kind"] == "boilerplate"
         }
@@ -311,7 +318,12 @@ def _parse_article_style(result: ModelResult, source: dict[str, Any]) -> Article
         return style
     except (ValueError, TypeError) as exc:
         raise ModelContractViolation(
-            "逐篇分析格式或原文证据不符合要求。", code="WECHAT_PROFILE_EVIDENCE_INVALID"
+            "逐篇分析校验失败：" + (
+                json.dumps([{"field": list(e["loc"]), "type": e["type"]}
+                            for e in exc.errors(include_input=False, include_url=False)],
+                           ensure_ascii=False)
+                if isinstance(exc, ValidationError) else str(exc)
+            ), code="WECHAT_PROFILE_EVIDENCE_INVALID"
         ) from exc
 
 
@@ -366,10 +378,17 @@ async def process_account_profile(
     )
     if not job or job.status in {"completed", "failed", "cancelled"}:
         return job
+
+    async def checkpoint() -> None:
+        await session.commit()
+        await session.refresh(job, with_for_update=True)
+
     try:
-        publication = await client.recent_publication_records(
-            access_token=access_token, limit=PROFILE_SAMPLE_LIMIT
-        )
+        publication = job.frozen_payload.get("publication")
+        if not publication:
+            publication = await client.recent_publication_records(
+                access_token=access_token, limit=PROFILE_SAMPLE_LIMIT
+            )
     except ProviderAuthenticationError as exc:
         if exc.code not in {40001, 40014, 42001}:
             raise
@@ -390,9 +409,16 @@ async def process_account_profile(
         publication = await client.recent_publication_records(
             access_token=access_token, limit=PROFILE_SAMPLE_LIMIT
         )
-    job.frozen_payload = {**job.frozen_payload, "selection": publication["selection"]}
-    sources: list[dict[str, Any]] = []
+    job.frozen_payload = {
+        **job.frozen_payload, "selection": publication["selection"], "publication": publication
+    }
+    sources: list[dict[str, Any]] = list(job.frozen_payload.get("learning_sources", []))
+    await checkpoint()
     for article in publication["articles"]:
+        if any(source["article_id"] == article["article_id"] for source in sources):
+            continue
+        job.frozen_payload = {**job.frozen_payload, "current_article_id": article["article_id"]}
+        await checkpoint()
         try:
             content = await article_reader.fetch_article_markdown(source_url=article["url"])
         except Exception as exc:
@@ -413,6 +439,8 @@ async def process_account_profile(
                     "text": body,
                 }
             )
+        job.frozen_payload = {**job.frozen_payload, "learning_sources": list(sources)}
+        await checkpoint()
     if len(sources) != PROFILE_SAMPLE_LIMIT:
         raise ApiError(422, "WECHAT_PROFILE_INSUFFICIENT_ARTICLES", "未读取到完整的最新10篇。")
     if sum(item["source_characters"] for item in sources) > 2_000_000:
@@ -439,7 +467,9 @@ async def process_account_profile(
         "learning_sources": sources,
     }
     job.stage, job.progress = "learning_profile", 30
-    usage = {"input_tokens": 0, "output_tokens": 0, "model_calls": 0}
+    usage = dict(job.frozen_payload.get(
+        "usage", {"input_tokens": 0, "output_tokens": 0, "model_calls": 0}
+    ))
 
     async def generate(
         prompt: str, context: dict[str, Any], *, schema: type[BaseModel] | None = None
@@ -485,10 +515,15 @@ async def process_account_profile(
     async def progress(_value: dict[str, Any]) -> None:
         job.stage = "reading_long_articles"
 
-    analyses: list[dict[str, Any]] = []
+    analyses: list[dict[str, Any]] = list(job.frozen_payload.get("article_analyses", []))
     fingerprints: dict[str, str] = {}
     for index, source in enumerate(sources):
         fingerprint = source["clean_content_hash"]
+        if any(item["article_id"] == source["article_id"] for item in analyses):
+            fingerprints.setdefault(fingerprint, source["article_id"])
+            continue
+        job.frozen_payload = {**job.frozen_payload, "current_article_id": source["article_id"]}
+        await checkpoint()
         duplicate = fingerprints.get(fingerprint)
         if duplicate:
             analyses.append(
@@ -521,19 +556,28 @@ async def process_account_profile(
             cache={},
         )
         # Repair with the rejected output and validator feedback, not a blind retry.
-        for attempt in range(2):
+        for attempt in range(3):
             reply = await generate(ARTICLE_STYLE_PROMPT, article_context, schema=ArticleStyle)
             try:
                 style = _parse_article_style(reply, source)
                 break
-            except ModelContractViolation:
-                if attempt:
+            except ModelContractViolation as exc:
+                job.frozen_payload = {
+                    **job.frozen_payload, "validation_failure": {
+                        "article_id": source["article_id"], "code": exc.code,
+                        "reason": str(exc), "attempt": attempt + 1,
+                    }, "usage": dict(usage),
+                }
+                await checkpoint()
+                if attempt == 2:
                     raise
                 article_context["validation_feedback"] = (
-                    "修复JSON字段；每项证据须为对应paragraph_id原文的连续片段，"
+                    f"校验问题：{exc}。修复JSON字段；每项证据须为对应paragraph_id原文的连续片段，"
                     "无法核对的观察应省略，转载或广告判断必须附依据。"
                 )
-                article_context["untrusted_rejected_outputs"] = reply.text
+                article_context["untrusted_rejected_outputs"] = (
+                    reply.structured or reply.text
+                )
         contribution = (
             "auxiliary"
             if style.article_type == "promotion" or (style.attribution == "repost")
@@ -548,6 +592,10 @@ async def process_account_profile(
             }
         )
         job.progress = 30 + round((index + 1) * 50 / len(sources))
+        job.frozen_payload = {
+            **job.frozen_payload, "article_analyses": list(analyses), "usage": dict(usage)
+        }
+        await checkpoint()
     usable = [item for item in analyses if item["contribution"] != "excluded"]
     article_ids = {item["article_id"] for item in usable}
     measured = metric_ranges(analyses)
@@ -561,7 +609,7 @@ async def process_account_profile(
         progress=progress,
         cache={},
     )
-    for attempt in range(2):
+    for attempt in range(3):
         result = await generate(PROFILE_PROMPT, context, schema=WritingProfile)
         try:
             profile = _parse_profile(result, article_ids)
@@ -577,13 +625,20 @@ async def process_account_profile(
                         code="WECHAT_PROFILE_EVIDENCE_INVALID",
                     )
             break
-        except ModelContractViolation:
-            if attempt:
+        except ModelContractViolation as exc:
+            job.frozen_payload = {
+                **job.frozen_payload, "validation_failure": {
+                    "code": exc.code, "reason": str(exc), "attempt": attempt + 1,
+                }, "usage": dict(usage),
+            }
+            await checkpoint()
+            if attempt == 2:
                 raise
             context["validation_feedback"] = (
-                "修复JSON及证据ID，只引用该维度确有观察的文章。证据不足必须标limited和low。"
+                f"校验问题：{exc}。修复JSON及证据ID，只引用该维度确有观察的文章。"
+                "证据不足必须标limited和low。"
             )
-            context["untrusted_rejected_outputs"] = result.text
+            context["untrusted_rejected_outputs"] = result.structured or result.text
     profile_data = profile.model_dump()
     for name, dimension in profile_data.items():
         supporting = [

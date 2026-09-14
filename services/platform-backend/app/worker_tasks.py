@@ -55,7 +55,9 @@ from app.provider_factory import build_providers
 from app.providers import (
     DocumentProcessingError,
     EnvironmentSecretProvider,
+    ModelContractViolation,
     ProviderReauthorizationRequired,
+    ProviderTransientError,
     ProviderUnavailable,
 )
 from app.retrieval_routing import build_route_aware_retrieval_service
@@ -78,10 +80,15 @@ def _configured_secrets(config: Settings) -> EnvironmentSecretProvider:
     return EnvironmentSecretProvider(config.model_secret_master_key or config.token_secret)
 
 
-@celery.task(name="app.worker_tasks.process_account_profile_task")
-def process_account_profile_task(job_id: str, message_id: str | None = None) -> dict[str, Any]:
+@celery.task(bind=True, max_retries=2, name="app.worker_tasks.process_account_profile_task")
+def process_account_profile_task(
+    self: Any, job_id: str, message_id: str | None = None
+) -> dict[str, Any]:
     del message_id  # The locked durable job is the idempotency boundary, including admin retries.
-    return _run(_process_account_profile(job_id))
+    result = _run(_process_account_profile(job_id))
+    if result.get("retry_after"):
+        raise self.retry(countdown=result["retry_after"])
+    return result
 
 
 @celery.task(name="app.worker_tasks.enqueue_missing_account_profiles_task")
@@ -104,6 +111,7 @@ async def _process_account_profile(job_id: str) -> dict[str, Any]:
     config = Settings.from_env()
     database = Database(config)
     secrets = _configured_secrets(config)
+    retry_after = None
     try:
         async with database.session_maker() as session:
             try:
@@ -153,6 +161,32 @@ async def _process_account_profile(job_id: str) -> dict[str, Any]:
                             ],
                         },
                     }
+                    cause = exc.__cause__
+                    chain = []
+                    while cause and len(chain) < 5:
+                        item = {"type": type(cause).__name__}
+                        response = getattr(cause, "response", None)
+                        if response is not None:
+                            item["http_status"] = response.status_code
+                        # Only fixed messages from our reader; never store provider bodies or URLs.
+                        if isinstance(cause, ProviderUnavailable):
+                            for marker, reason in (
+                                ("安全验证页", "wechat_verification_page"),
+                                ("已删除", "article_unavailable"),
+                                ("暂时不可用", "reader_temporarily_unavailable"),
+                                ("网络请求失败", "network_failure"),
+                                ("完整正文", "incomplete_body"),
+                                ("没有返回", "invalid_reader_response"),
+                            ):
+                                if marker in str(cause):
+                                    item["reason"] = reason
+                                    break
+                        chain.append(item)
+                        cause = cause.__cause__
+                    job.frozen_payload["failure"]["causes"] = chain
+                    if isinstance(exc, ModelContractViolation):
+                        job.error_code = exc.code
+                        job.error_message = str(exc)[:1000]
                     if isinstance(exc, ModelRouteExhausted):
                         job.error_code = "WECHAT_PROFILE_MODEL_FAILED"
                         job.error_message = "画像学习的模型请求失败，请检查任务中的模型错误码。"
@@ -176,6 +210,30 @@ async def _process_account_profile(job_id: str) -> dict[str, Any]:
                     if isinstance(exc, WechatProfileSourceError):
                         job.error_code = exc.code
                         job.error_message = str(exc)
+                    recoverable = (
+                        isinstance(exc, (ProviderTransientError, ModelContractViolation))
+                        or (isinstance(exc, ApiError)
+                            and exc.code == "WECHAT_PROFILE_ARTICLE_UNAVAILABLE")
+                        or (isinstance(exc, WechatApiError) and exc.code in {-1, 45009})
+                        or (isinstance(exc, ModelRouteExhausted) and bool(exc.attempts)
+                            and all(a.error_code in {
+                                "ProviderTransientError", "ProviderTimeoutError",
+                            } for a in exc.attempts if a.status != "completed"))
+                    )
+                    failures = job.frozen_payload.get("recovery", {}).get("attempts", 0) + 1
+                    if recoverable and failures < 3:
+                        retry_after = 30 if failures == 1 else 120
+                        job.status, job.stage = "queued", "retry_wait"
+                    job.frozen_payload = {
+                        **job.frozen_payload,
+                        "recovery": {
+                            "automatic": recoverable, "attempts": failures,
+                            "max_attempts": 3, "retry_after_seconds": retry_after,
+                            "outcome": "scheduled" if retry_after else (
+                                "exhausted" if recoverable else "requires_attention"
+                            ),
+                        },
+                    }
                     account = await session.scalar(
                         select(OfficialAccount)
                         .where(
@@ -184,7 +242,10 @@ async def _process_account_profile(job_id: str) -> dict[str, Any]:
                         )
                         .with_for_update()
                     )
-                    if account and account.writing_profile.get("job_id") == job.id:
+                    if (
+                        account and account.writing_profile.get("job_id") == job.id
+                        and not retry_after
+                    ):
                         if account.writing_profile.get("profile"):
                             account.writing_profile = {
                                 **account.writing_profile,
@@ -193,7 +254,8 @@ async def _process_account_profile(job_id: str) -> dict[str, Any]:
                         else:
                             account.writing_profile = {}
             await session.commit()
-            return {"job_id": job_id, "status": job.status if job else "skipped"}
+            return {"job_id": job_id, "status": job.status if job else "skipped",
+                    "retry_after": retry_after}
     finally:
         await database.dispose()
 
