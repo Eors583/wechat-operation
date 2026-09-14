@@ -38,7 +38,7 @@ def executable_command(text: str) -> str | None:
     command = re.sub(r"```[\s\S]*?```|“[^”]*”|\"[^\"]*\"|《[^》]*》", "", text).strip()
     if len(command) > 1000 or re.search(
         r"例如|比如|假设|他说|她说|原文|引用|如何|怎么|为什么|能否|能不能|是否|可以吗"
-        r"|(?:不要|不用|别|先不|暂不).{0,4}(?:保存|存|发表|发布|记录|更新)",
+        r"|(?:不要|不用|别|先不|暂不).{0,4}(?:保存|存|写入|发表|发布|记录|更新)",
         command,
     ):
         return None
@@ -130,7 +130,7 @@ async def plan_action(
         return None
     if authorized:
         writes = re.findall(
-            r"(?:保存|另存|存入|存到|设为).{0,12}?(技能|写作风格|模板|项目要求|草稿箱|文章库)",
+            r"(?:保存|另存|存入|存到|写入|设为).{0,12}?(技能|写作风格|模板|项目要求|草稿箱|文章库)",
             authorized,
         )
         if len(set(writes)) > 1:
