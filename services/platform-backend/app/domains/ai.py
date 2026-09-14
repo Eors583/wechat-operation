@@ -2602,6 +2602,7 @@ async def process_ai_run(
     rewrite_history: list[dict[str, Any]] = []
     style_reviews: list[dict[str, Any]] = []
     style_rewrites = 0
+    style_fallback: tuple[ModelResult, dict[str, Any], list[str], Any, str] | None = None
     for rewrite_no in range(4):
         await ensure_not_cancelled()
         feedback: list[dict[str, Any]] = []
@@ -2726,6 +2727,11 @@ async def process_ai_run(
                             else json.loads(raw)
                         )
                         review = StyleReview.model_validate(data)
+                        review.violations = [
+                            issue
+                            for issue in review.violations
+                            if issue.dimension not in review.overrides
+                        ]
                         for issue in review.violations:
                             dimension = learned["profile"].get(issue.dimension, {})
                             if (
@@ -2772,6 +2778,13 @@ async def process_ai_run(
                         }
                     )
                     if review.violations and style_rewrites < 2 and rewrite_no < 3:
+                        style_fallback = (
+                            candidate,
+                            canonical_output,
+                            title_candidates,
+                            grounding,
+                            article_message,
+                        )
                         style_rewrites += 1
                         reject(
                             ApiError(
@@ -2824,6 +2837,16 @@ async def process_ai_run(
             }
         )
         if rewrite_no == 3 or deterministic:
+            if style_fallback is not None:
+                result, canonical_output, title_candidates, grounding, article_message = (
+                    style_fallback
+                )
+                run.context_snapshot = {
+                    **run.context_snapshot,
+                    "output_rewrite_history": rewrite_history,
+                    "account_style_fallback": "retained_valid_article",
+                }
+                break
             raise OutputRewriteFailed(rewrite_history, execution_attempts)
         await emit(
             "warning",
@@ -2874,6 +2897,16 @@ async def process_ai_run(
         except (ApiError, ModelRouteExhausted) as error:
             if isinstance(error, ApiError) and error.code == "AI_RUN_CANCELLED":
                 raise
+            if style_fallback is not None:
+                result, canonical_output, title_candidates, grounding, article_message = (
+                    style_fallback
+                )
+                run.context_snapshot = {
+                    **run.context_snapshot,
+                    "output_rewrite_history": rewrite_history,
+                    "account_style_fallback": "retained_valid_article",
+                }
+                break
             raise OutputRewriteFailed(rewrite_history, execution_attempts) from error
     await ensure_not_cancelled()
     if run.run_type in {"article_generation", "titles"} or (
