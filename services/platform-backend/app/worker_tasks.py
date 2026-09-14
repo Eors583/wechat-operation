@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from typing import Any
 
 from sqlalchemy import select, text
@@ -127,6 +128,31 @@ async def _process_account_profile(job_id: str) -> dict[str, Any]:
                         if isinstance(exc, ApiError)
                         else "公众号画像学习未完成，请检查微信权限和模型配置后重试。"
                     )
+                    job.frozen_payload = {
+                        **job.frozen_payload,
+                        "failure": {
+                            "exception_type": type(exc).__name__,
+                            "frames": [
+                                {
+                                    "file": frame.filename,
+                                    "line": frame.lineno,
+                                    "function": frame.name,
+                                }
+                                for frame in traceback.extract_tb(exc.__traceback__)
+                            ],
+                        },
+                    }
+                    if isinstance(exc, ModelRouteExhausted):
+                        job.error_code = "WECHAT_PROFILE_MODEL_FAILED"
+                        job.error_message = "画像学习的模型请求失败，请检查任务中的模型错误码。"
+                        job.frozen_payload["failure"]["model_attempts"] = [
+                            {
+                                "deployment_id": attempt.deployment_id,
+                                "purpose": attempt.purpose,
+                                "error_code": attempt.error_code,
+                            }
+                            for attempt in exc.attempts
+                        ]
                     if isinstance(exc, WechatPublishedContentError):
                         job.error_code = f"WECHAT_PROFILE_API_{exc.code}"
                         job.error_message = "微信拒绝读取已发表内容，请确认公众号资格及授权权限。"
@@ -139,11 +165,13 @@ async def _process_account_profile(job_id: str) -> dict[str, Any]:
                         .with_for_update()
                     )
                     if account and account.writing_profile.get("job_id") == job.id:
-                        account.writing_profile = {
-                            **account.writing_profile,
-                            "status": "failed",
-                            "error_code": job.error_code,
-                        }
+                        if account.writing_profile.get("profile"):
+                            account.writing_profile = {
+                                **account.writing_profile,
+                                "status": "completed",
+                            }
+                        else:
+                            account.writing_profile = {}
             await session.commit()
             return {"job_id": job_id, "status": job.status if job else "skipped"}
     finally:
