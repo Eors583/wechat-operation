@@ -1,15 +1,10 @@
 import { resolveTemplateVideoSource, uploadTemplateVideo } from '@/api/client'
 
-const mediaUrls = new WeakMap<Document, Set<string>>()
+const mediaCleanups = new WeakMap<Document, Set<() => void>>()
 
 export const releaseTemplateVideos = (document: Document) => {
-  for (const player of document.querySelectorAll('video')) {
-    player.pause()
-    player.removeAttribute('src')
-    player.load()
-  }
-  for (const url of mediaUrls.get(document) ?? []) URL.revokeObjectURL(url)
-  mediaUrls.delete(document)
+  for (const cleanup of mediaCleanups.get(document) ?? []) cleanup()
+  mediaCleanups.delete(document)
 }
 
 const videoUrl = (link: HTMLAnchorElement): URL | null => {
@@ -24,7 +19,7 @@ const videoUrl = (link: HTMLAnchorElement): URL | null => {
 }
 
 export const prepareTemplateVideos = (document: Document) => {
-  mediaUrls.set(document, new Set())
+  mediaCleanups.set(document, new Set())
   for (const link of document.querySelectorAll<HTMLAnchorElement>('a[href]')) {
     if (!videoUrl(link) || !link.querySelector('img')) continue
     link.querySelectorAll('span').forEach((caption) => caption.remove())
@@ -83,41 +78,98 @@ export const playTemplateVideo = (target: Element | null, sourceUrl?: string): b
     input.click()
     return true
   }
+  const cleanups = mediaCleanups.get(link.ownerDocument)
+  if (!cleanups) return true
   link.setAttribute('aria-busy', 'true')
   const button = link.querySelector<HTMLButtonElement>('[data-video-play]')
   if (button) button.textContent = '…'
+  showVideoError(link, '视频加载中…')
+  const controller = new AbortController()
+  const wrapper = link.ownerDocument.createElement('div')
+  wrapper.dataset.templateVideo = 'true'
+  wrapper.style.cssText = 'display:grid;min-width:0;max-width:100%'
   const player = link.ownerDocument.createElement('video')
   player.controls = true
   player.playsInline = true
+  player.preload = 'auto'
   player.poster = link.querySelector('img')?.src ?? ''
-  player.style.cssText = 'display:block;width:100%;max-width:100%;min-width:0;aspect-ratio:16/9'
+  const cover = link.querySelector('img')?.getBoundingClientRect()
+  const ratio = cover?.width && cover.height ? cover.width / cover.height : 16 / 9
+  player.style.cssText = `grid-area:1/1;display:block;width:100%;max-width:100%;min-width:0;` +
+    `aspect-ratio:${ratio};object-fit:contain;visibility:hidden`
   let objectUrl: string | undefined
+  let disposed = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const clearDeadline = () => clearTimeout(timer)
+  const cleanup = () => {
+    if (disposed) return
+    disposed = true
+    clearDeadline()
+    controller.abort()
+    player.pause()
+    player.removeAttribute('src')
+    player.load()
+    player.remove()
+    if (objectUrl) URL.revokeObjectURL(objectUrl)
+    cleanups.delete(cleanup)
+  }
+  cleanups.add(cleanup)
   const fail = (message = '视频无法播放，请上传 H.264 编码的 MP4 文件。') => {
-    if (!mediaUrls.has(link.ownerDocument)) return
-    if (objectUrl) {
-      URL.revokeObjectURL(objectUrl)
-      mediaUrls.get(link.ownerDocument)?.delete(objectUrl)
-      objectUrl = undefined
-    }
-    if (player.isConnected) player.replaceWith(link)
+    if (disposed) return
+    cleanup()
+    if (wrapper.isConnected) wrapper.replaceWith(link)
+    link.style.removeProperty('grid-area')
+    link.style.removeProperty('z-index')
     link.removeAttribute('aria-busy')
     if (button) button.textContent = '▶'
     showVideoError(link, message)
   }
-  player.addEventListener('error', () => fail(), { once: true })
-  link.querySelector('[role=status]')?.remove()
+  const decodingDeadline = () => {
+    clearDeadline()
+    timer = setTimeout(() => fail('视频加载超时，请点击重试。'), 15000)
+  }
+  player.addEventListener('error', () => fail(), { signal: controller.signal })
+  player.addEventListener('playing', clearDeadline, { signal: controller.signal })
+  player.addEventListener('seeked', clearDeadline, { signal: controller.signal })
+  player.addEventListener('seeking', decodingDeadline, { signal: controller.signal })
+  player.addEventListener('waiting', decodingDeadline, { signal: controller.signal })
+  player.addEventListener('pause', clearDeadline, { signal: controller.signal })
+  // Metadata alone does not mean that a video frame can be decoded.
+  player.addEventListener('loadeddata', () => {
+    if (disposed || player.readyState < 2) return
+    clearDeadline()
+    if (player.videoWidth && player.videoHeight) {
+      player.style.aspectRatio = `${player.videoWidth} / ${player.videoHeight}`
+    }
+    player.style.visibility = 'visible'
+    link.remove()
+    void player.play().catch((error: unknown) => {
+      if (error && typeof error === 'object' && 'name' in error && error.name === 'NotAllowedError') {
+        // Leave the poster and native controls visible for a second user click.
+        clearDeadline()
+      } else if (!disposed) {
+        fail('视频启动失败，请点击重试。')
+      }
+    })
+  }, { once: true, signal: controller.signal })
+  timer = setTimeout(() => fail('视频加载超时，请点击重试。'), 120000)
   void (async () => {
     try {
-      if (!sourceUrl) throw new Error('Missing article source')
-      const media = await resolveTemplateVideoSource(sourceUrl, url.searchParams.get('vid')!)
-      if (!link.isConnected || !mediaUrls.has(link.ownerDocument)) return
+      if (!sourceUrl) throw new Error('缺少原文链接，请重新选择排版模板。')
+      const media = await resolveTemplateVideoSource(
+        sourceUrl, url.searchParams.get('vid')!, controller.signal,
+      )
+      if (disposed || !link.isConnected) return
       objectUrl = URL.createObjectURL(media)
-      mediaUrls.get(link.ownerDocument)!.add(objectUrl)
+      link.replaceWith(wrapper)
+      link.style.gridArea = '1 / 1'
+      link.style.zIndex = '1'
+      wrapper.append(player, link)
+      decodingDeadline()
       player.src = objectUrl
-      link.replaceWith(player)
-      void player.play().catch(() => { /* Native controls remain available when autoplay is blocked. */ })
+      player.load()
     } catch (error) {
-      fail(error instanceof Error ? error.message : '视频加载失败，请重试。')
+      if (!disposed) fail(error instanceof Error ? error.message : '视频加载失败，请重试。')
     }
   })()
   return true

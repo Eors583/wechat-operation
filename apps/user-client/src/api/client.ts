@@ -588,10 +588,12 @@ const authenticatedFetch = async (input: Request): Promise<Response> => {
   return fetchWithReadRecovery(new Request(request, { headers, credentials: 'include' }))
 }
 
-export const resolveTemplateVideoSource = async (sourceUrl: string, videoId: string) => {
+export const resolveTemplateVideoSource = async (
+  sourceUrl: string, videoId: string, signal?: AbortSignal,
+) => {
   const query = new URLSearchParams({ source_url: sourceUrl, video_id: videoId })
   const response = await authenticatedFetch(new Request(
-    `${baseUrl}/layout-video-source?${query}`, { signal: AbortSignal.timeout(30000) },
+    `${baseUrl}/layout-video-source?${query}`, { signal: signal ?? AbortSignal.timeout(30000) },
   ))
   if (!response.ok) throw await responseError(response)
   const path = await response.text()
@@ -599,7 +601,7 @@ export const resolveTemplateVideoSource = async (sourceUrl: string, videoId: str
     throw new ApiError('视频资源地址无效。', 422, 'VIDEO_SOURCE_INVALID')
   }
   const content = await authenticatedFetch(new Request(
-    `${baseUrl}${path.slice('/api/v1'.length)}`, { signal: AbortSignal.timeout(120000) },
+    `${baseUrl}${path.slice('/api/v1'.length)}`, { signal: signal ?? AbortSignal.timeout(120000) },
   ))
   if (!content.ok) throw await responseError(content)
   if (!content.headers.get('Content-Type')?.startsWith('video/mp4')) {
