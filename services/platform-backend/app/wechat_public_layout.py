@@ -134,7 +134,7 @@ class WeChatPublicLayoutExtractionProvider:
                     ],
                 },
             },
-            extractor_version="wechat-public-dom-v1",
+            extractor_version="wechat-public-dom-v2",
         )
 
     async def fetch_reference(self, *, source_url: str) -> WebReferenceContent:
@@ -353,6 +353,8 @@ class _WeChatContentParser(HTMLParser):
         if self._capturing:
             self._capture_depth += 1
             merged = dict(self._style_stack[-1])
+            if tag in {"strong", "b"}:
+                merged["font-weight"] = "700"
             merged.update(_parse_style(attributes.get("style", "")))
             if attributes.get("align") in {"left", "center", "right", "justify"}:
                 merged["text-align"] = attributes["align"]
@@ -441,7 +443,11 @@ def _style_tokens(samples: list[_Sample]) -> dict[str, Any]:
         and not _is_numbered_heading_marker(sample)
         and (sample.tag in {"h1", "h2", "h3"} or _font_size(sample) >= 20)
     ]
-    quotes = [sample for sample in samples if sample.tag == "blockquote" or _has_box_style(sample)]
+    quotes = [
+        sample
+        for sample in samples
+        if sample.tag == "blockquote" or (sample not in headings and _has_box_style(sample))
+    ]
     lists = [sample for sample in samples if sample.tag == "li"]
     captions = [
         sample for sample in samples if sample.tag == "figcaption" or 0 < _font_size(sample) <= 14
@@ -531,8 +537,17 @@ def _token_from_samples(
     weight = _weighted(samples, _font_weight) or default_weight
     if weight:
         token["font_weight"] = weight
-    if color := _weighted(samples, lambda item: _color(item.style.get("color", ""))):
-        token["color"] = color
+    # Keep foreground and background from the same visual pattern, including
+    # an absent background, rather than mixing independent majority colors.
+    color_pair = _weighted(
+        samples, lambda item: (_color(item.style.get("color", "")), _background(item))
+    )
+    if color_pair:
+        color, background = color_pair
+        if color:
+            token["color"] = color
+        if background:
+            token["background"] = background
     if align := _weighted(samples, lambda item: _align(item.style.get("text-align", ""))):
         token["align"] = align
     if line_height := _weighted(samples, _line_height):
@@ -548,8 +563,6 @@ def _token_from_samples(
     if padding := _weighted(samples, _padding):
         token["padding"] = padding
     if keep_box:
-        if background := _weighted(samples, _background):
-            token["background"] = background
         if border_left := _weighted(
             samples, lambda item: _border_left(item.style.get("border-left", ""))
         ):
