@@ -733,6 +733,43 @@ class WechatOpenPlatformClient:
             raise ProviderUnavailable("WeChat authorizer token response is incomplete")
         return access_token, refresh_token, expires_in
 
+    async def recover_authorizer_refresh_token(
+        self, *, component_appid: str, component_access_token: str, authorizer_appid: str
+    ) -> str:
+        """Recover only the requested account from the platform's current authorization list."""
+        offset = 0
+        expected_total: int | None = None
+        while True:
+            result = await self._post(
+                "/cgi-bin/component/api_get_authorizer_list",
+                {"component_appid": component_appid, "offset": offset, "count": 500},
+                access_token=component_access_token,
+            )
+            total, items = result.get("total_count"), result.get("list")
+            if type(total) is not int or total < 0 or not isinstance(items, list):
+                raise ProviderUnavailable("WeChat authorization list is incomplete")
+            if expected_total is not None and total != expected_total:
+                raise ProviderTransientError("WeChat authorization list changed while reading")
+            expected_total = total
+            if len(items) > 500 or offset + len(items) > total:
+                raise ProviderUnavailable("WeChat authorization list has invalid pagination")
+            for item in items:
+                if not isinstance(item, dict) or not isinstance(item.get("authorizer_appid"), str):
+                    raise ProviderUnavailable("WeChat authorization list contains invalid entries")
+                if item["authorizer_appid"] == authorizer_appid:
+                    token = item.get("refresh_token")
+                    if not isinstance(token, str) or not token:
+                        raise ProviderUnavailable("WeChat authorization has no refresh credential")
+                    return token
+            offset += len(items)
+            if offset >= total:
+                raise ProviderReauthorizationRequired(
+                    "WeChat account is no longer in the platform authorization list"
+                )
+            if not items or offset >= 50_000:
+                # Bound recovery work; an incomplete list never proves revoked authorization.
+                raise ProviderUnavailable("WeChat authorization list could not be fully read")
+
 
 class DirectWechatProvider:
     def __init__(
@@ -912,25 +949,51 @@ async def ensure_authorizer_access_token(
         )
     if not config:
         config = await published_wechat_config(session, environment=environment)
-    if not config or not isinstance(refresh_ref, str) or not refresh_ref:
-        raise ProviderUnavailable("WeChat refresh credential is unavailable")
+    if not config:
+        raise ProviderUnavailable("WeChat platform configuration is unavailable")
+    refresh_token_value = (
+        secrets.resolve(refresh_ref) if isinstance(refresh_ref, str) and refresh_ref else None
+    )
+    recovered_refresh_token = False
+    recovered_platform_token = False
     started_at = time.monotonic()
     last_error: ProviderUnavailable | None = None
-    for attempt in range(3):
+    for attempt in range(4):
         try:
             platform_token = await component_access_token(
                 session, config=config, secrets=secrets, client=client
             )
+            if refresh_token_value is None:
+                refresh_token_value = await client.recover_authorizer_refresh_token(
+                    component_appid=config.component_appid,
+                    component_access_token=platform_token,
+                    authorizer_appid=account.authorizer_appid,
+                )
+                recovered_refresh_token = True
             access_token, refresh_token, expires_in = await client.refresh_authorization(
                 component_appid=config.component_appid,
                 component_access_token=platform_token,
                 authorizer_appid=account.authorizer_appid,
-                authorizer_refresh_token=secrets.resolve(refresh_ref),
+                authorizer_refresh_token=refresh_token_value,
             )
             break
+        except ProviderReauthorizationRequired:
+            raise
+        except WechatApiError as exc:
+            last_error = exc
+            if exc.code == 61023 and not recovered_refresh_token:
+                # A rotated/missing local refresh token is recoverable without another QR scan.
+                refresh_token_value = None
+                continue
+            logger.warning(
+                "wechat_authorizer_token_refresh_failed appid=%s errcode=%s",
+                account.authorizer_appid, exc.code,
+            )
+            raise
         except ProviderAuthenticationError as exc:
             last_error = exc
-            if exc.code in {40001, 40014, 42001} and attempt == 0:
+            if exc.code in {40001, 40014, 42001} and not recovered_platform_token:
+                recovered_platform_token = True
                 config.component_access_token_ref = None
                 config.component_access_token_expires_at = None
                 await session.flush()
@@ -949,7 +1012,7 @@ async def ensure_authorizer_access_token(
             raise ProviderUnavailable("WeChat token refresh was rejected") from exc
         except ProviderUnavailable as exc:
             last_error = exc
-            if attempt == 2:
+            if attempt == 3:
                 logger.warning(
                     "wechat_authorizer_token_refresh_failed appid=%s duration_ms=%d error=%s",
                     account.authorizer_appid,

@@ -52,10 +52,16 @@ from app.models import (
     utcnow,
 )
 from app.provider_factory import build_providers
-from app.providers import DocumentProcessingError, EnvironmentSecretProvider, ProviderUnavailable
+from app.providers import (
+    DocumentProcessingError,
+    EnvironmentSecretProvider,
+    ProviderReauthorizationRequired,
+    ProviderUnavailable,
+)
 from app.retrieval_routing import build_route_aware_retrieval_service
 from app.web_references import SafeHttpWebReferenceProvider
 from app.wechat_open_platform import (
+    WechatApiError,
     WechatOpenPlatformClient,
     WechatProfileSourceError,
     WechatPublishedContentError,
@@ -161,6 +167,12 @@ async def _process_account_profile(job_id: str) -> dict[str, Any]:
                     if isinstance(exc, WechatPublishedContentError):
                         job.error_code = f"WECHAT_PROFILE_API_{exc.code}"
                         job.error_message = "微信拒绝读取已发表内容，请确认公众号资格及授权权限。"
+                    if isinstance(exc, WechatApiError):
+                        job.error_code = f"WECHAT_PROFILE_API_{exc.code}"
+                        job.error_message = "微信接口自动恢复未完成，请检查任务中的微信错误码。"
+                    if isinstance(exc, ProviderReauthorizationRequired):
+                        job.error_code = "WECHAT_PROFILE_REAUTH_REQUIRED"
+                        job.error_message = "微信已确认该公众号不在当前授权列表中，需要重新绑定。"
                     if isinstance(exc, WechatProfileSourceError):
                         job.error_code = exc.code
                         job.error_message = str(exc)

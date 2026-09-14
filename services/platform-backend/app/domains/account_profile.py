@@ -22,6 +22,7 @@ from app.providers import (
     ModelContractViolation,
     ModelProvider,
     ModelResult,
+    ProviderAuthenticationError,
     SecretProvider,
 )
 from app.wechat_open_platform import WechatOpenPlatformClient, ensure_authorizer_access_token
@@ -357,7 +358,26 @@ async def process_account_profile(
     )
     if not job or job.status in {"completed", "failed", "cancelled"}:
         return job
-    publication = await client.recent_publication_records(access_token=access_token, limit=20)
+    try:
+        publication = await client.recent_publication_records(access_token=access_token, limit=20)
+    except ProviderAuthenticationError as exc:
+        if exc.code not in {40001, 40014, 42001}:
+            raise
+        # Reading can race token invalidation even when the stored expiry was still valid.
+        account = await ensure_authorizer_access_token(
+            session, account_id=account.id, secrets=secrets, client=client,
+            environment=settings.environment, force=True,
+        )
+        access_token = secrets.resolve(account.token_secret_ref or "")
+        # Preserve the renewed credential even if article selection subsequently fails.
+        await session.commit()
+        job = await session.scalar(
+            select(JobRecord).where(JobRecord.id == job_id).with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if not job or job.status in {"completed", "failed", "cancelled"}:
+            return job
+        publication = await client.recent_publication_records(access_token=access_token, limit=20)
     job.frozen_payload = {**job.frozen_payload, "selection": publication["selection"]}
     sources: list[dict[str, Any]] = []
     for article in publication["articles"]:
