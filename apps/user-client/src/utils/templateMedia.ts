@@ -1,4 +1,4 @@
-import { resolveTemplateVideoSource, uploadTemplateVideo } from '@/api/client'
+import { resolveTemplateVideoSource } from '@/api/client'
 
 const mediaCleanups = new WeakMap<Document, Set<() => void>>()
 
@@ -35,14 +35,6 @@ export const prepareTemplateVideos = (document: Document) => {
       'background:var(--app-bg-surface,Canvas);color:var(--app-text-primary,CanvasText);' +
       'font-size:22px;cursor:pointer;padding:0;line-height:1'
     link.append(button)
-    const upload = document.createElement('button')
-    upload.type = 'button'
-    upload.dataset.videoUpload = 'true'
-    upload.textContent = '上传视频'
-    upload.style.cssText = 'display:block;margin:8px auto;max-width:100%;cursor:pointer;' +
-      'color:var(--app-text-primary,CanvasText);background:var(--app-bg-surface,Canvas);' +
-      'border:1px solid currentColor;border-radius:4px;padding:4px 12px'
-    link.append(upload)
   }
 }
 
@@ -52,32 +44,6 @@ export const playTemplateVideo = (target: Element | null, sourceUrl?: string): b
   const url = videoUrl(link)
   if (!url) return false
   if (link.getAttribute('aria-busy') === 'true') return true
-  if (target?.closest('[data-video-upload]')) {
-    const input = link.ownerDocument.createElement('input')
-    input.type = 'file'
-    input.accept = 'video/mp4,.mp4'
-    input.addEventListener('change', () => {
-      const file = input.files?.[0]
-      if (!file) return
-      link.setAttribute('aria-busy', 'true')
-      const upload = link.querySelector<HTMLButtonElement>('[data-video-upload]')!
-      upload.disabled = true
-      void uploadTemplateVideo(url.searchParams.get('vid')!, file, (loaded) => {
-        upload.textContent = `上传中 ${Math.round(loaded / file.size * 100)}%`
-      }).then(() => {
-        link.querySelector('[role=status]')?.remove()
-        upload.textContent = '已保存到资源池'
-      }).catch((error: unknown) => {
-        upload.textContent = '重新上传'
-        showVideoError(link, error instanceof Error ? error.message : '视频上传失败，请重试。')
-      }).finally(() => {
-        upload.disabled = false
-        link.removeAttribute('aria-busy')
-      })
-    }, { once: true })
-    input.click()
-    return true
-  }
   const cleanups = mediaCleanups.get(link.ownerDocument)
   if (!cleanups) return true
   link.setAttribute('aria-busy', 'true')
@@ -114,7 +80,7 @@ export const playTemplateVideo = (target: Element | null, sourceUrl?: string): b
     cleanups.delete(cleanup)
   }
   cleanups.add(cleanup)
-  const fail = (message = '视频无法播放，请上传 H.264 编码的 MP4 文件。') => {
+  const fail = (message = '视频无法播放，请稍后重试。') => {
     if (disposed) return
     cleanup()
     if (wrapper.isConnected) wrapper.replaceWith(link)
