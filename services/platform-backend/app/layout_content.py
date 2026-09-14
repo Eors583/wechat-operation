@@ -187,7 +187,18 @@ def native_wechat_profile_cards(value: str) -> str:
         profile = soup.new_tag("mp-common-profile", attrs=attributes)
         profile["class"] = "js_uneditable custom_select_card mp_profile_iframe"
         profile["contenteditable"] = "false"
-        wrapper = soup.new_tag("section", attrs={"class": "mp_profile_iframe_wrp"})
+        # The preview figure owns the outer spacing; the native card only owns
+        # its internal layout. Preserve margins when replacing the figure.
+        margins = [
+            declaration for declaration in _safe_style(str(card.get("style", ""))).split(";")
+            if declaration.partition(":")[0] in {
+                "margin", "margin-top", "margin-right", "margin-bottom", "margin-left",
+            }
+        ]
+        wrapper = soup.new_tag("section", attrs={
+            "class": "mp_profile_iframe_wrp",
+            "style": ";".join(["margin:16px 0", *margins, _BOUNDS]),
+        })
         wrapper.append(profile)
         card.replace_with(wrapper)
     return str(soup)
