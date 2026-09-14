@@ -835,7 +835,7 @@ const remove = async () => {
                 </div>
               </q-expansion-item>
               <p class="template-editor__source-hint">
-                点击左侧编号多选，Shift 连选；锁定部分保留原样。
+                长按内容后拖动可连续选择，也可点击左侧编号或 Shift 连选。
               </p>
               <TemplateSourcePreview
                 :key="selectedId"
@@ -845,6 +845,12 @@ const remove = async () => {
                 :locked-groups="lockedGroups"
                 :edited-styles="sourceStyles"
                 @toggle="toggleSourceBlock"
+                @select="
+                  (ids, endId) => {
+                    selectedBlockIds = ids
+                    lastSelectedBlockId = endId
+                  }
+                "
               />
             </div>
             <q-banner v-else rounded class="template-editor__source-empty">

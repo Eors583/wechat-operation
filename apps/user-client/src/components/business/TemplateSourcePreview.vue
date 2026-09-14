@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { LayoutTemplate, ModuleKey, ModuleStyle } from '@/api/types'
 
 const props = defineProps<{
@@ -9,9 +9,13 @@ const props = defineProps<{
   lockedGroups: NonNullable<LayoutTemplate['lockedBlocks']>
   editedStyles: Partial<Record<ModuleKey, ModuleStyle>>
 }>()
-const emit = defineEmits<{ toggle: [id: string, extend: boolean] }>()
+const emit = defineEmits<{
+  toggle: [id: string, extend: boolean]
+  select: [ids: string[], endId: string]
+}>()
 const frame = ref<HTMLIFrameElement | null>(null)
 let originalStyles = new Map<HTMLElement, string | null>()
+let cleanupSelection = () => {}
 
 // Only server-sanitized source fragments enter this script-free sandbox. Parent
 // event listeners provide selection; source links cannot navigate the preview.
@@ -27,6 +31,8 @@ main{max-width:680px;margin:auto;min-width:0}
 .source-block{display:grid;grid-template-columns:28px minmax(0,1fr);gap:8px;min-width:0;border:1px solid transparent;border-radius:6px}
 .source-block[data-selected=true]{border-color:var(--app-action-primary);background:var(--app-action-soft)}
 .source-block[data-locked=true]{border-color:var(--app-border-strong)}
+.source-block,.source-block *{user-select:none!important;-webkit-user-select:none!important;-webkit-touch-callout:none}
+html[data-selecting=true],html[data-selecting=true] *{cursor:crosshair!important}
 .source-select{align-self:start;min-width:0;min-height:28px;padding:2px;border:1px solid var(--app-border-default);border-radius:6px;background:var(--app-bg-surface);color:var(--app-text-secondary);cursor:pointer;font:inherit;font-size:12px}
 .source-select[aria-pressed=true]{background:var(--app-action-primary);color:var(--app-action-primary-text)}
 .source-select:disabled{cursor:default;color:var(--app-action-primary)}
@@ -142,8 +148,10 @@ const syncState = () => {
 }
 
 const onLoad = () => {
+  cleanupSelection()
   const document = frame.value?.contentDocument
-  if (!document || !frame.value) return
+  const previewWindow = document?.defaultView
+  if (!document || !previewWindow || !frame.value) return
   originalStyles = new Map()
   const palette = getComputedStyle(frame.value)
   for (const token of [
@@ -159,17 +167,243 @@ const onLoad = () => {
   ]) {
     document.documentElement.style.setProperty(token, palette.getPropertyValue(token))
   }
-  document.addEventListener('click', (event) => {
-    const target = event.target as Element | null
-    if (target?.closest('a')) event.preventDefault()
-    const button = target?.closest<HTMLButtonElement>('.source-select')
-    if (!button || button.disabled) return
-    const index = Number(button.parentElement?.dataset.index)
-    const block = props.blocks[index]
-    if (block) emit('toggle', block.id, event.shiftKey)
-  })
+  const listeners = new AbortController()
+  const options = { signal: listeners.signal }
+  const rows = Array.from(document.querySelectorAll<HTMLElement>('main > .source-block'))
+  let press: {
+    index: number
+    x: number
+    y: number
+    currentY: number
+    baseline: string[]
+    pointerId?: number
+    touchId?: number
+    active: boolean
+    moved: boolean
+    end: number
+  } | null = null
+  let holdTimer = 0
+  let scrollFrame = 0
+  let suppressClickUntil = 0
+
+  const finish = () => {
+    window.clearTimeout(holdTimer)
+    window.cancelAnimationFrame(scrollFrame)
+    const previous = press
+    press = null
+    delete document.documentElement.dataset.selecting
+    if (previous?.active) suppressClickUntil = Date.now() + 500
+    if (
+      previous?.pointerId !== undefined &&
+      document.documentElement.hasPointerCapture(previous.pointerId)
+    )
+      document.documentElement.releasePointerCapture(previous.pointerId)
+  }
+  const selectTo = (end: number) => {
+    if (!press?.active || end === press.end) return
+    press.end = end
+    const locked = new Set(props.lockedGroups.flatMap((group) => group.blockIds))
+    const range = props.blocks
+      .slice(Math.min(press.index, end), Math.max(press.index, end) + 1)
+      .map((block) => block.id)
+      .filter((id) => !locked.has(id))
+    emit('select', [...new Set([...press.baseline, ...range])], props.blocks[end]?.id ?? '')
+  }
+  const selectAtPointer = () => {
+    if (!press?.active || !rows.length) return
+    // Rows stay in article order; find the range endpoint without scanning a long article.
+    const y = Math.max(0, Math.min(previewWindow.innerHeight - 1, press.currentY))
+    let low = 0
+    let high = rows.length - 1
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2)
+      if (rows[middle]!.getBoundingClientRect().bottom < y) low = middle + 1
+      else high = middle
+    }
+    selectTo(low)
+  }
+  let previousScrollTime = 0
+  const autoScroll = (time: number) => {
+    if (!press?.active) return
+    const edge = Math.min(56, previewWindow.innerHeight / 4)
+    const y = press.currentY
+    const speed =
+      y < edge
+        ? -Math.min(1, (edge - y) / edge)
+        : y > previewWindow.innerHeight - edge
+          ? Math.min(1, (y - previewWindow.innerHeight + edge) / edge)
+          : 0
+    if (press.moved && speed) {
+      previewWindow.scrollBy(0, speed * Math.min(32, time - previousScrollTime) * 0.6)
+      selectAtPointer()
+    }
+    previousScrollTime = time
+    scrollFrame = window.requestAnimationFrame(autoScroll)
+  }
+  const begin = (
+    target: EventTarget | null,
+    x: number,
+    y: number,
+    pointerId?: number,
+    touchId?: number,
+  ) => {
+    finish()
+    const row = (target as Element | null)?.closest<HTMLElement>('main > .source-block')
+    if (!row || row.dataset.locked === 'true') return
+    suppressClickUntil = 0
+    press = {
+      index: Number(row.dataset.index),
+      x,
+      y,
+      currentY: y,
+      baseline: [...props.selectedIds],
+      pointerId,
+      touchId,
+      active: false,
+      moved: false,
+      end: -1,
+    }
+    holdTimer = window.setTimeout(() => {
+      if (!press) return
+      press.active = true
+      document.documentElement.dataset.selecting = 'true'
+      document.getSelection()?.removeAllRanges()
+      if (press.pointerId !== undefined) document.documentElement.setPointerCapture(press.pointerId)
+      selectTo(press.index)
+      previousScrollTime = performance.now()
+      scrollFrame = window.requestAnimationFrame(autoScroll)
+    }, 350)
+  }
+  const move = (x: number, y: number) => {
+    if (!press) return
+    const moved = Math.hypot(x - press.x, y - press.y) > 8
+    if (!press.active) {
+      if (moved) finish()
+      return
+    }
+    press.currentY = y
+    press.moved ||= moved
+    selectAtPointer()
+  }
+  document.addEventListener(
+    'pointerdown',
+    (event) => {
+      if (event.pointerType === 'touch') return
+      if (!event.isPrimary || event.button !== 0) {
+        finish()
+        return
+      }
+      begin(event.target, event.clientX, event.clientY, event.pointerId)
+    },
+    options,
+  )
+  document.addEventListener(
+    'pointermove',
+    (event) => {
+      if (press?.pointerId !== event.pointerId) return
+      if (!(event.buttons & 1)) {
+        finish()
+        return
+      }
+      move(event.clientX, event.clientY)
+    },
+    options,
+  )
+  const finishPointer = (event: PointerEvent) => {
+    if (press?.pointerId === event.pointerId) finish()
+  }
+  document.addEventListener('pointerup', finishPointer, options)
+  document.addEventListener('pointercancel', finishPointer, options)
+  document.addEventListener('lostpointercapture', finishPointer, options)
+  window.addEventListener('pointerup', finishPointer, options)
+  document.addEventListener(
+    'pointerleave',
+    () => {
+      if (!press?.active) finish()
+    },
+    options,
+  )
+  // Cancel native scrolling only after the hold, so an ordinary swipe still scrolls.
+  document.addEventListener(
+    'touchstart',
+    (event) => {
+      if (event.touches.length !== 1) {
+        finish()
+        return
+      }
+      const touch = event.touches[0]!
+      begin(event.target, touch.clientX, touch.clientY, undefined, touch.identifier)
+    },
+    { ...options, passive: true },
+  )
+  document.addEventListener(
+    'touchmove',
+    (event) => {
+      const touch = Array.from(event.touches).find((item) => item.identifier === press?.touchId)
+      if (!touch) return
+      if (press?.active) event.preventDefault()
+      move(touch.clientX, touch.clientY)
+    },
+    { ...options, passive: false },
+  )
+  document.addEventListener('touchend', finish, options)
+  document.addEventListener('touchcancel', finish, options)
+  document.addEventListener('dragstart', (event) => event.preventDefault(), options)
+  document.addEventListener(
+    'contextmenu',
+    (event) => {
+      if (press) event.preventDefault()
+    },
+    options,
+  )
+  document.addEventListener(
+    'keydown',
+    (event) => {
+      if (event.key === 'Escape') finish()
+    },
+    options,
+  )
+  previewWindow.addEventListener('blur', finish, options)
+  previewWindow.addEventListener(
+    'scroll',
+    () => {
+      if (press?.active) selectAtPointer()
+      else finish()
+    },
+    options,
+  )
+  document.addEventListener(
+    'visibilitychange',
+    () => {
+      if (document.hidden) finish()
+    },
+    options,
+  )
+  document.addEventListener(
+    'click',
+    (event) => {
+      const target = event.target as Element | null
+      if (target?.closest('a')) event.preventDefault()
+      if (event.detail !== 0 && Date.now() < suppressClickUntil) {
+        event.preventDefault()
+        return
+      }
+      const button = target?.closest<HTMLButtonElement>('.source-select')
+      if (!button || button.disabled) return
+      const index = Number(button.parentElement?.dataset.index)
+      const block = props.blocks[index]
+      if (block) emit('toggle', block.id, event.shiftKey)
+    },
+    options,
+  )
+  cleanupSelection = () => {
+    finish()
+    listeners.abort()
+  }
   syncState()
 }
+onBeforeUnmount(() => cleanupSelection())
+watch(sourceDocument, () => cleanupSelection(), { flush: 'sync' })
 watch(() => [props.selectedIds, props.lockedGroups, props.editedStyles, props.title], syncState, {
   deep: true,
 })
@@ -182,7 +416,7 @@ watch(() => [props.selectedIds, props.lockedGroups, props.editedStyles, props.ti
     :srcdoc="sourceDocument"
     sandbox="allow-same-origin"
     referrerpolicy="no-referrer"
-    title="完整文章预览，使用每部分左侧按钮选择固定内容"
+    title="完整文章预览，长按拖动或点击左侧编号选择固定内容"
     @load="onLoad"
   />
 </template>
