@@ -47,6 +47,7 @@ html[data-selecting=true],html[data-selecting=true] *{cursor:crosshair!important
 .source-unlock{grid-column:1/-1;min-width:0;min-height:36px;padding:6px 10px;border:0;text-align:left;overflow-wrap:anywhere;background:var(--app-action-soft);color:var(--app-action-primary);font:inherit;font-size:12px;cursor:pointer}
 .source-unlock[hidden]{display:none}
 .source-select{align-self:start;min-width:0;min-height:28px;padding:2px;border:1px solid var(--app-border-default);border-radius:6px;background:var(--app-bg-surface);color:var(--app-text-secondary);cursor:pointer;font:inherit;font-size:12px}
+.source-select[aria-pressed=false]:not(:focus-visible){opacity:0}
 .source-select[aria-pressed=true]{background:var(--app-action-primary);color:var(--app-action-primary-text)}
 .source-select:disabled{cursor:default;color:var(--app-action-primary)}
 .source-select:focus-visible,.source-unlock:focus-visible{outline:3px solid var(--app-focus);outline-offset:2px}
@@ -59,7 +60,7 @@ html[data-selecting=true],html[data-selecting=true] *{cursor:crosshair!important
 </style></head><body><main><h1 class="source-title"></h1>${props.blocks
     .map(
       (block, index) =>
-        `<section class="source-block" data-index="${index}"><button type="button" class="source-unlock" hidden></button><button type="button" class="source-select" aria-label="选择第 ${index + 1} 部分" aria-pressed="false">${index + 1}</button><div class="source-content">${block.html}</div></section>`,
+        `<section class="source-block" data-index="${index}"><button type="button" class="source-unlock" hidden></button><button type="button" class="source-select" aria-label="选择第 ${index + 1} 部分" aria-pressed="false"></button><div class="source-content">${block.html}</div></section>`,
     )
     .join('')}</main></body></html>`,
 )
@@ -105,7 +106,7 @@ const syncSelection = () => {
     if (button) {
       button.disabled = !!group || props.busy
       button.style.visibility = group ? 'hidden' : 'visible'
-      button.textContent = selected.has(block.id) ? '✓' : String(index + 1)
+      button.textContent = selected.has(block.id) ? '✓' : ''
       button.setAttribute('aria-pressed', String(selected.has(block.id)))
       button.setAttribute('aria-label', `选择第 ${index + 1} 部分`)
       button.title = `选择第 ${index + 1} 部分`
