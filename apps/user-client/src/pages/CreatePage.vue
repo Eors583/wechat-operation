@@ -1048,7 +1048,7 @@ const layoutArticle = async () => {
                 </div>
               </div>
               <q-avatar v-if="message.role === 'user'" color="primary" text-color="white">{{
-                $q.screen.lt.sm ? '我' : '陈'
+                [...(auth.user?.name.trim() ?? '')][0] || '我'
               }}</q-avatar>
             </div>
 
