@@ -271,7 +271,10 @@ def _parse_profile(result: ModelResult, article_ids: set[str]) -> WritingProfile
         return profile
     except ValidationError as exc:
         raise ModelContractViolation(
-            "公众号画像字段不符合规定格式。", code="WECHAT_PROFILE_SCHEMA_INVALID"
+            "公众号画像字段不符合规定格式：" + json.dumps(
+                [{"field": list(e["loc"]), "type": e["type"]}
+                 for e in exc.errors(include_input=False, include_url=False)], ensure_ascii=False
+            ), code="WECHAT_PROFILE_SCHEMA_INVALID"
         ) from exc
     except (ValueError, TypeError) as exc:
         raise ModelContractViolation(
@@ -700,6 +703,8 @@ async def process_account_profile(
         "usage": usage,
         "article_analyses": analyses,
         "completed_profile": account.writing_profile,
+        "recovery": {**job.frozen_payload.get("recovery", {}),
+                     "outcome": "completed", "retry_after_seconds": None},
     }
     audit(
         session,
