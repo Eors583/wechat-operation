@@ -431,8 +431,7 @@ const save = async (makeDefault = false) => {
   }
 }
 
-const saveName = () => {
-  const template = selectedTemplate.value
+const saveName = (template: LayoutTemplate) => {
   if (!template || nameSaves.has(template.id) || !dirtyNameIds.has(template.id)) return
   const name = template.name.trim()
   if (!name) {
@@ -482,22 +481,50 @@ const saveName = () => {
   nameSaves.set(id, pending)
 }
 
-const remove = async () => {
-  const target = selectedTemplate.value
-  if (!target) return
-  await nameSaves.get(target.id)
-  if (selectedId.value !== target.id) return
-  if (!selectedTemplate.value || localTemplates.value.length === 1) return
-  const removedId = selectedTemplate.value.id
+const rename = (template: LayoutTemplate) => {
+  const scope = templateScopeKey.value
+  $q.dialog({
+    title: '重命名模板',
+    prompt: {
+      model: template.name,
+      type: 'text',
+      maxlength: 80,
+      isValid: (value) => Boolean(String(value).trim()),
+    },
+    cancel: true,
+  }).onOk((value: string) => {
+    if (scope !== templateScopeKey.value || saving.value || nameSaves.has(template.id)) return
+    const target = localTemplates.value.find((item) => item.id === template.id)
+    if (!target || !value.trim()) return
+    target.name = value.trim()
+    dirtyNameIds.add(target.id)
+    saveName(target)
+  })
+}
+
+const remove = async (target: LayoutTemplate) => {
+  if (saving.value || nameSaves.has(target.id) || localTemplates.value.length <= 1) return
+  const removedId = target.id
   const isDraft = draftTemplateIds.has(removedId)
-  if (!isDraft) await api.deleteTemplate(removedId)
-  localTemplates.value = localTemplates.value.filter((item) => item.id !== selectedId.value)
-  selectedId.value = localTemplates.value[0]?.id ?? ''
-  draftTemplateIds.delete(removedId)
-  dirtyTemplateIds.delete(removedId)
-  if (!isDraft) {
-    await queryClient.invalidateQueries({ queryKey: ['templates'] })
-    emit('changed')
+  saving.value = true
+  try {
+    if (!isDraft) await api.deleteTemplate(removedId)
+    localTemplates.value = localTemplates.value.filter((item) => item.id !== removedId)
+    if (selectedId.value === removedId) selectedId.value = localTemplates.value[0]?.id ?? ''
+    draftTemplateIds.delete(removedId)
+    dirtyTemplateIds.delete(removedId)
+    dirtyNameIds.delete(removedId)
+    if (!isDraft) {
+      await queryClient.invalidateQueries({ queryKey: ['templates'] })
+      emit('changed')
+    }
+  } catch (error) {
+    $q.notify({
+      type: 'negative',
+      message: error instanceof Error ? error.message : '模板删除失败。',
+    })
+  } finally {
+    saving.value = false
   }
 }
 </script>
@@ -578,20 +605,6 @@ const remove = async () => {
             full-width
             @click="addTemplate"
           />
-          <q-input
-            v-if="selectedTemplate"
-            v-model="selectedTemplate.name"
-            outlined
-            dense
-            counter
-            maxlength="80"
-            label="当前模板名称"
-            class="template-editor__name"
-            :readonly="savingNameIds.has(selectedTemplate.id) || saving"
-            :loading="savingNameIds.has(selectedTemplate.id)"
-            @update:model-value="dirtyNameIds.add(selectedTemplate.id)"
-            @blur="saveName"
-          />
           <AppButton
             v-if="selectedTemplate"
             variant="outline"
@@ -607,15 +620,45 @@ const remove = async () => {
             @click="save(true)"
           />
           <div class="template-editor__list">
-            <button
+            <div
               v-for="template in localTemplates"
               :key="template.id"
+              class="template-editor__item"
               :class="{ active: selectedId === template.id }"
-              @click="selectedId = template.id"
             >
-              <span>{{ template.name }}</span>
-              <q-badge v-if="template.isDefault" color="primary" label="默认" />
-            </button>
+              <button
+                class="template-editor__select"
+                @click="selectedId = template.id"
+                :title="template.name"
+              >
+                <span>{{ template.name }}</span>
+                <q-badge v-if="template.isDefault" color="primary" label="默认" />
+              </button>
+              <q-btn
+                flat
+                round
+                dense
+                icon="more_horiz"
+                :aria-label="template.name + '的更多操作'"
+                :disable="saving || savingNameIds.has(template.id)"
+              >
+                <q-menu>
+                  <q-list>
+                    <q-item clickable v-close-popup @click="rename(template)">
+                      <q-item-section>重命名</q-item-section>
+                    </q-item>
+                    <q-item
+                      clickable
+                      v-close-popup
+                      :disable="localTemplates.length <= 1"
+                      @click="remove(template)"
+                    >
+                      <q-item-section>删除</q-item-section>
+                    </q-item>
+                  </q-list>
+                </q-menu>
+              </q-btn>
+            </div>
           </div>
           <AppButton
             v-if="hasMore"
@@ -624,12 +667,6 @@ const remove = async () => {
             :loading="loadingMore"
             full-width
             @click="emit('load-more')"
-          />
-          <AppButton
-            v-if="localTemplates.length > 1"
-            variant="ghost"
-            label="删除当前模板"
-            @click="remove"
           />
         </section>
 
@@ -992,24 +1029,20 @@ const remove = async () => {
     gap: 6px;
     margin-top: 12px;
 
-    button,
-    .template-editor__templates button {
+    .template-editor__select {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 8px;
       min-width: 0;
       padding: 10px 12px;
-      color: var(--app-text-primary);
+      flex: 1;
+      color: inherit;
       background: transparent;
       border: 0;
       border-radius: 8px;
       cursor: pointer;
 
-      &.active {
-        color: var(--app-action-primary);
-        background: var(--app-action-soft);
-      }
       span {
         min-width: 0;
         overflow-wrap: anywhere;
@@ -1018,10 +1051,24 @@ const remove = async () => {
     }
   }
 
-  &__templates > .app-button:last-child {
-    margin-top: 12px;
+  &__item {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    color: var(--app-text-primary);
+    border-radius: 8px;
+
+    &.active {
+      color: var(--app-action-primary);
+      background: var(--app-action-soft);
+    }
+
+    > .q-btn {
+      flex: 0 0 auto;
+    }
   }
-  &__name {
+
+  &__templates > .app-button:last-child {
     margin-top: 12px;
   }
 
