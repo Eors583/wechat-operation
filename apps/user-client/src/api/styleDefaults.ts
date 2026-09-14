@@ -43,6 +43,12 @@ export const createDefaultStyles = (): Record<ModuleKey, ModuleStyle> => ({
   heading1: defaultStyle({ fontSize: 23, fontWeight: '700', color: '#078c49', spacing: 22 }),
   heading2: defaultStyle({ fontSize: 19, fontWeight: '600', color: '#1f2d27', spacing: 18 }),
   body: defaultStyle(),
+  emphasis: defaultStyle({
+    enabled: false,
+    fontWeight: '700',
+    background: '#00000000',
+    spacing: 0,
+  }),
   highlight: defaultStyle({
     fontWeight: '600',
     background: '#eef8f2',

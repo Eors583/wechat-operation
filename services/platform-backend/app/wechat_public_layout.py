@@ -506,6 +506,28 @@ def _style_tokens(samples: list[_Sample]) -> dict[str, Any]:
             "enabled": True,
         }
     tokens["divider"] = {"color": "#d1d5db", "margin_top": 16, "margin_bottom": 16}
+    body_color = _weighted(body, lambda sample: _color(sample.style.get("color", "")))
+    emphasized = [
+        sample for sample in samples
+        if sample.tag in {"p", "div", "section"} and len(sample.text) >= 2
+        and sample not in headings and sample not in quotes and sample not in captions
+        and (
+            (_font_weight(sample) or 400) >= 600
+            or (
+                _color(sample.style.get("color", ""))
+                and _color(sample.style.get("color", "")) != body_color
+            )
+        )
+    ]
+    if emphasized:
+        tokens["emphasis"] = {
+            "enabled": True,
+            "background": "#00000000",
+            **{
+                key: value for key, value in _token_from_samples(emphasized).items()
+                if key in {"color", "background", "font_weight"}
+            },
+        }
     return {module: properties for module, properties in tokens.items() if properties}
 
 

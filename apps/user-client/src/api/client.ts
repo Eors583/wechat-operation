@@ -159,6 +159,7 @@ const ownerBusinessStorageKeys = [
   pendingArticleOutcomesKey,
 ]
 const moduleKeys: ModuleKey[] = [
+  'emphasis',
   'table_header',
   'table_cell',
   'title',
@@ -174,6 +175,7 @@ const moduleKeys: ModuleKey[] = [
   'divider',
 ]
 const backendModule: Record<ModuleKey, string> = {
+  emphasis: 'emphasis',
   table_header: 'table_header',
   table_cell: 'table_cell',
   title: 'title',

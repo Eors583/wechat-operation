@@ -29,6 +29,7 @@ const emit = defineEmits<{
 const frame = ref<HTMLIFrameElement | null>(null)
 const selecting = ref(false)
 let originalStyles = new Map<HTMLElement, string | null>()
+let emphasisElements: HTMLElement[] = []
 let cleanupSelection = () => {}
 
 // Imported content is script-free; parent listeners provide native video playback and selection. Parent
@@ -201,6 +202,20 @@ const syncStyles = () => {
           .querySelectorAll<HTMLElement>(selector)
           .forEach((element) => applyModuleStyle(element, tableStyle))
     }
+    const emphasis = props.editedStyles.emphasis
+    if (emphasis?.enabled) {
+      for (const element of emphasisElements.filter((item) => content.contains(item))) {
+        for (const target of [
+          element,
+          ...element.querySelectorAll<HTMLElement>('span, strong, b, em'),
+        ]) {
+          if (!originalStyles.has(target)) originalStyles.set(target, target.getAttribute('style'))
+          target.style.setProperty('color', emphasis.color, 'important')
+          target.style.setProperty('background-color', emphasis.background, 'important')
+          target.style.setProperty('font-weight', emphasis.fontWeight, 'important')
+        }
+      }
+    }
   })
 }
 
@@ -211,6 +226,23 @@ const onLoad = () => {
   if (!document || !previewWindow || !frame.value) return
   prepareTemplateVideos(document)
   originalStyles = new Map()
+  emphasisElements = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '.source-content strong, .source-content b, .source-content mark, .source-content span',
+    ),
+  ).filter((element) => {
+    if (element.closest('a, figure, h1, h2, h3, h4, h5, h6')) return false
+    const block = element.closest('.source-content')
+    if (!element.textContent?.trim() || element.textContent.trim() === block?.textContent?.trim())
+      return false
+    return (
+      ['STRONG', 'B', 'MARK'].includes(element.tagName) ||
+      (!!element.style.color &&
+        !!element.parentElement &&
+        previewWindow.getComputedStyle(element).color !==
+          previewWindow.getComputedStyle(element.parentElement).color)
+    )
+  })
   const palette = getComputedStyle(frame.value)
   for (const token of [
     '--app-text-primary',
@@ -320,7 +352,13 @@ const onLoad = () => {
   ) => {
     finish()
     suppressClickUntil = 0
-    if (props.busy || (target as Element | null)?.closest('.source-unlock, [data-video-play], [data-template-video], video')) return
+    if (
+      props.busy ||
+      (target as Element | null)?.closest(
+        '.source-unlock, [data-video-play], [data-template-video], video',
+      )
+    )
+      return
     const row = (target as Element | null)?.closest<HTMLElement>('main > .source-block')
     if (!row || row.dataset.locked === 'true') return
     press = {

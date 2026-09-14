@@ -13,6 +13,18 @@
 }
 
 @mixin article-content {
+  & :deep(.tiptap-body strong) {
+    color: var(--article-emphasis-color, inherit);
+    background: var(--article-emphasis-background, transparent);
+    font-weight: var(--article-emphasis-font-weight, bold);
+  }
+  & :deep(.tiptap-body h1 strong),
+  & :deep(.tiptap-body h2 strong),
+  & :deep(.tiptap-body h3 strong) {
+    color: inherit;
+    background: transparent;
+    font-weight: inherit;
+  }
   & :deep(.tiptap-body) {
     min-width: 0;
     min-height: 560px;

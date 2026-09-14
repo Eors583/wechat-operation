@@ -20,5 +20,10 @@ export const templatePreviewCssVariables = (styles: Record<ModuleKey, ModuleStyl
     variables[`${prefix}-border-left`] =
       style.borderLeft || (style.border === 'left' ? '4px solid var(--app-action-primary)' : 'none')
   })
+  if (!styles.emphasis?.enabled) {
+    variables['--article-emphasis-color'] = 'inherit'
+    variables['--article-emphasis-background'] = 'transparent'
+    variables['--article-emphasis-font-weight'] = 'bold'
+  }
   return variables
 }

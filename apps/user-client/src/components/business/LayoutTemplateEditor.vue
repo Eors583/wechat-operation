@@ -58,6 +58,7 @@ const modules: { key: ModuleKey; label: string; count: number }[] = [
   { key: 'heading1', label: '一级标题', count: 4 },
   { key: 'heading2', label: '二级标题', count: 6 },
   { key: 'body', label: '正文', count: 18 },
+  { key: 'emphasis', label: '重点文字', count: 3 },
   { key: 'highlight', label: '重点论点', count: 3 },
   { key: 'quote', label: '引用', count: 2 },
   { key: 'list', label: '列表', count: 2 },
@@ -729,13 +730,19 @@ const remove = async (target: LayoutTemplate) => {
           <h3>{{ modules.find((item) => item.key === activeModule)?.label }}样式</h3>
           <template v-if="activeStyle">
             <q-toggle
+              v-if="activeModule === 'emphasis'"
+              :model-value="activeStyle.enabled ?? false"
+              label="使用重点文字样式"
+              @update:model-value="setStyle('enabled', Boolean($event))"
+            />
+            <q-toggle
               v-if="activeModule === 'heading_marker'"
               :model-value="activeStyle.enabled ?? false"
               color="primary"
               label="显示标题前序号标识"
               @update:model-value="setStyle('enabled', Boolean($event))"
             />
-            <label
+            <label v-if="activeModule !== 'emphasis'"
               >字号<q-slider
                 :model-value="activeStyle.fontSize"
                 :min="12"
@@ -760,89 +767,97 @@ const remove = async (target: LayoutTemplate) => {
             >
             <label class="color-field"
               >背景颜色<input
-                :value="activeStyle.background"
+                :value="activeStyle.background.slice(0, 7)"
                 type="color"
                 @input="setStyle('background', ($event.target as HTMLInputElement).value)"
               /><code>{{ activeStyle.background }}</code></label
             >
-            <q-select
-              :model-value="activeStyle.align"
-              outlined
-              dense
-              label="对齐"
-              :options="['left', 'center', 'right', 'justify']"
-              @update:model-value="setStyle('align', $event)"
+            <AppButton
+              v-if="activeModule === 'emphasis'"
+              variant="ghost"
+              label="清除背景色"
+              @click="setStyle('background', '#00000000')"
             />
-            <label
-              >行距<q-slider
-                :model-value="activeStyle.lineHeight"
-                :min="1"
-                :max="2.5"
-                :step="0.1"
-                label
-                @update:model-value="setStyle('lineHeight', Number($event))"
-            /></label>
-            <label
-              >上间距<q-slider
-                :model-value="activeStyle.marginTop ?? 0"
-                :min="0"
-                :max="48"
-                label
-                @update:model-value="setStyle('marginTop', Number($event))"
-            /></label>
-            <label
-              >下间距<q-slider
-                :model-value="activeStyle.spacing"
-                :min="0"
-                :max="48"
-                label
-                @update:model-value="setStyle('spacing', Number($event))"
-            /></label>
-            <label
-              >首行缩进<q-slider
-                :model-value="activeStyle.textIndent ?? 0"
-                :min="0"
-                :max="48"
-                label
-                @update:model-value="setStyle('textIndent', Number($event))"
-            /></label>
-            <label
-              >内边距<q-slider
-                :model-value="activeStyle.padding"
-                :min="0"
-                :max="32"
-                label
-                @update:model-value="setStyle('padding', Number($event))"
-            /></label>
-            <q-select
-              v-if="!activeModule.startsWith('table_')"
-              :model-value="activeStyle.border"
-              outlined
-              dense
-              emit-value
-              map-options
-              label="左边框"
-              :options="[
-                { label: '无', value: 'none' },
-                { label: '显示', value: 'left' },
-              ]"
-              @update:model-value="setBorder($event)"
-            />
-            <q-select
-              v-else
-              :model-value="activeStyle.borderAll"
-              label="表格边框"
-              outlined
-              dense
-              :options="[
-                'none',
-                '1px solid #d1d5db',
-                '1px solid #059669',
-                '2px solid #25322c',
-                '1px dashed #d1d5db',
-              ]"
-              @update:model-value="setStyle('borderAll', $event)"
-            />
+            <template v-if="activeModule !== 'emphasis'">
+              <q-select
+                :model-value="activeStyle.align"
+                outlined
+                dense
+                label="对齐"
+                :options="['left', 'center', 'right', 'justify']"
+                @update:model-value="setStyle('align', $event)"
+              />
+              <label
+                >行距<q-slider
+                  :model-value="activeStyle.lineHeight"
+                  :min="1"
+                  :max="2.5"
+                  :step="0.1"
+                  label
+                  @update:model-value="setStyle('lineHeight', Number($event))"
+              /></label>
+              <label
+                >上间距<q-slider
+                  :model-value="activeStyle.marginTop ?? 0"
+                  :min="0"
+                  :max="48"
+                  label
+                  @update:model-value="setStyle('marginTop', Number($event))"
+              /></label>
+              <label
+                >下间距<q-slider
+                  :model-value="activeStyle.spacing"
+                  :min="0"
+                  :max="48"
+                  label
+                  @update:model-value="setStyle('spacing', Number($event))"
+              /></label>
+              <label
+                >首行缩进<q-slider
+                  :model-value="activeStyle.textIndent ?? 0"
+                  :min="0"
+                  :max="48"
+                  label
+                  @update:model-value="setStyle('textIndent', Number($event))"
+              /></label>
+              <label
+                >内边距<q-slider
+                  :model-value="activeStyle.padding"
+                  :min="0"
+                  :max="32"
+                  label
+                  @update:model-value="setStyle('padding', Number($event))"
+              /></label>
+              <q-select
+                v-if="!activeModule.startsWith('table_')"
+                :model-value="activeStyle.border"
+                outlined
+                dense
+                emit-value
+                map-options
+                label="左边框"
+                :options="[
+                  { label: '无', value: 'none' },
+                  { label: '显示', value: 'left' },
+                ]"
+                @update:model-value="setBorder($event)"
+              />
+              <q-select
+                v-else
+                :model-value="activeStyle.borderAll"
+                label="表格边框"
+                outlined
+                dense
+                :options="[
+                  'none',
+                  '1px solid #d1d5db',
+                  '1px solid #059669',
+                  '2px solid #25322c',
+                  '1px dashed #d1d5db',
+                ]"
+                @update:model-value="setStyle('borderAll', $event)"
+              />
+            </template>
           </template>
         </section>
 
@@ -918,6 +933,18 @@ const remove = async (target: LayoutTemplate) => {
               </h2>
               <p :style="moduleStyle('body')">
                 {{ previewCopy.body }}
+                <strong
+                  :style="
+                    selectedTemplate?.styles.emphasis.enabled
+                      ? {
+                          color: selectedTemplate.styles.emphasis.color,
+                          background: selectedTemplate.styles.emphasis.background,
+                          fontWeight: selectedTemplate.styles.emphasis.fontWeight,
+                        }
+                      : {}
+                  "
+                  >这里是正文中的重点文字。</strong
+                >
               </p>
               <p :style="moduleStyle('highlight')">
                 {{ previewCopy.highlight }}

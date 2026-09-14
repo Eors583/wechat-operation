@@ -4809,6 +4809,7 @@ export interface components {
             readonly body?: components["schemas"]["StyleProperties"] | null;
             readonly caption?: components["schemas"]["StyleProperties"] | null;
             readonly divider?: components["schemas"]["StyleProperties"] | null;
+            readonly emphasis?: components["schemas"]["StyleProperties"] | null;
             readonly heading_marker?: components["schemas"]["StyleProperties"] | null;
             readonly heading1?: components["schemas"]["StyleProperties"] | null;
             readonly heading2?: components["schemas"]["StyleProperties"] | null;

@@ -32766,6 +32766,12 @@
       },
       "StyleTokenPayload": {
         "properties": {
+          "emphasis": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/StyleProperties" },
+              { "type": "null" }
+            ]
+          },
           "table_header": {
             "anyOf": [
               {

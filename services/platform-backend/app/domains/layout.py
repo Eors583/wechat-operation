@@ -55,13 +55,16 @@ LAYOUT_AGENT_PROMPT = """
   "module_evidence": {"模块名": ["block-1"]}
 }
 
-模块仅允许 title、lead、heading_marker、heading1、heading2、body、highlight、quote、
+模块仅允许 title、lead、heading_marker、heading1、heading2、body、emphasis、highlight、quote、
 list、caption、divider、table_header、table_cell。
 属性仅允许 font_size、enabled、font_weight、color、background、
 align、line_height、margin_top、margin_bottom、padding、border_left、border_all、text_indent。
 独立的章节序号（如 01、02、一、二）只能归入 heading_marker；序号后的语义标题只能归入
 heading1 或 heading2。两类模块的 module_evidence 不得复用同一 block，且不得用序号的字号、
 颜色或背景覆盖标题正文样式。heading_marker 有证据时必须输出 enabled: true。
+emphasis 是正文内的重点词句，与整段 highlight 不同。重点不一定加粗，也可以仅改变文字
+颜色或背景。比较正文主样式，提取局部强调的实际 color、font_weight、background，
+不要把标题、链接、整段引用当成行内重点；有证据时输出 enabled: true。
 所有文本模块都可有背景色，不能只给引用或重点论点保留背景。识别标题时必须同时检查同一
 证据块的 color 与 background-color/background；例如白字黑底标题必须同时输出
 color: #ffffff 与 background: #000000。不得把带背景的标题仅因背景归为引用。
@@ -547,7 +550,7 @@ def _heading_marker_html(tokens: dict[str, Any], index: int) -> str:
     return f'<p style="{_css(marker)}">{index:02d}</p>'
 
 
-def _marked_text_html(node: dict[str, Any]) -> str:
+def _marked_text_html(node: dict[str, Any], tokens: dict[str, Any]) -> str:
     rendered = html.escape(str(node.get("text", "")))
     marks = node.get("marks", [])
     if not isinstance(marks, list):
@@ -557,7 +560,13 @@ def _marked_text_html(node: dict[str, Any]) -> str:
             continue
         mark_type = mark.get("type")
         if mark_type in {"bold", "strong"}:
-            rendered = f"<strong>{rendered}</strong>"
+            emphasis = tokens.get("emphasis", {})
+            inline = {
+                key: value for key, value in emphasis.items()
+                if key in {"color", "background", "font_weight"}
+            } if isinstance(emphasis, dict) and emphasis.get("enabled") is True else {}
+            style = f' style="{_css(inline)}"' if inline else ""
+            rendered = f"<strong{style}>{rendered}</strong>"
         elif mark_type in {"italic", "em"}:
             rendered = f"<em>{rendered}</em>"
         elif mark_type == "underline":
@@ -605,9 +614,10 @@ def _node_html(node: Any, tokens: dict[str, Any], heading_index: list[int] | Non
     if node_type == "heading" and tokens.get("heading_marker", {}).get("enabled"):
         node = without_heading_numbers(node)
     if node_type == "text":
-        return _marked_text_html(node)
+        return _marked_text_html(node, tokens)
     text = html.escape(str(node.get("text", "")))
-    children = _node_html(node.get("content", []), tokens, heading_index)
+    child_tokens = {**tokens, "emphasis": {}} if node_type == "heading" else tokens
+    children = _node_html(node.get("content", []), child_tokens, heading_index)
     content = text + children
     if node_type == "doc":
         return content

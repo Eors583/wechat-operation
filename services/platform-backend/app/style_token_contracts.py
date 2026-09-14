@@ -41,6 +41,7 @@ class StyleProperties(StyleContractModel):
 
 
 class StyleTokenPayload(StyleContractModel):
+    emphasis: StyleProperties | None = None
     table_header: StyleProperties | None = None
     table_cell: StyleProperties | None = None
     title: StyleProperties | None = None
@@ -61,6 +62,7 @@ EvidenceList = list[EvidenceBlockId]
 
 
 class LayoutModuleEvidence(StyleContractModel):
+    emphasis: EvidenceList | None = None
     table_header: EvidenceList | None = None
     table_cell: EvidenceList | None = None
     title: EvidenceList | None = None
