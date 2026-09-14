@@ -143,11 +143,6 @@ const sourceStyles = computed(() => {
     (editedModules.value[selectedId.value] ?? []).map((key) => [key, template?.styles[key]]),
   ) as Partial<Record<ModuleKey, ModuleStyle>>
 })
-const positionOptions = [
-  { label: '正文前', value: 'before_body' },
-  { label: '正文后', value: 'after_body' },
-  { label: '指定段落后', value: 'after_paragraph' },
-]
 watch(
   selectedId,
   () => {
@@ -291,31 +286,6 @@ const unlockGroup = (index: number) => {
 
 const unlockSourceBlock = (blockId: string) =>
   unlockGroup(lockedGroups.value.findIndex((group) => group.blockIds.includes(blockId)))
-
-const updateGroupPosition = (
-  index: number,
-  position: 'before_body' | 'after_body' | 'after_paragraph',
-) => {
-  const group = lockedGroups.value[index]
-  if (!group) return
-  group.position = position
-  markDirty()
-}
-
-const updateParagraphIndex = (index: number, value: string | number | null) => {
-  const group = lockedGroups.value[index]
-  if (!group) return
-  group.paragraphIndex = Math.max(1, Math.min(10000, Math.floor(Number(value) || 1)))
-  markDirty()
-}
-
-const groupSummary = (blockIds: string[]) => {
-  const selected = new Set(blockIds)
-  return sourceBlocks.value
-    .filter((block) => selected.has(block.id))
-    .map((block) => block.text.trim() || '无文字内容')
-    .join(' · ')
-}
 
 const setStyle = <K extends keyof ModuleStyle>(key: K, value: ModuleStyle[K]) => {
   if (activeStyle.value) {
@@ -820,58 +790,6 @@ const remove = async () => {
           </q-tabs>
           <template v-if="previewMode === 'source'">
             <div v-if="sourceBlocks.length" class="template-editor__source">
-              <q-expansion-item
-                v-if="lockedGroups.length"
-                icon="lock_outline"
-                :label="`固定设置 · ${lockedGroups.length}`"
-                class="template-editor__locked-list"
-              >
-                <div class="template-editor__locked-scroll">
-                  <div
-                    v-for="(group, index) in lockedGroups"
-                    :key="group.blockIds.join(',')"
-                    class="template-editor__locked-group"
-                  >
-                    <div class="template-editor__locked-heading">
-                      <strong>固定部分 {{ index + 1 }} · {{ group.blockIds.length }} 项</strong>
-                      <AppButton
-                        variant="ghost"
-                        label="解锁"
-                        :aria-label="`解锁固定部分 ${index + 1}`"
-                        :disabled="saving"
-                        @click="unlockGroup(index)"
-                      />
-                    </div>
-                    <p :title="groupSummary(group.blockIds)">{{ groupSummary(group.blockIds) }}</p>
-                    <div class="template-editor__locked-placement">
-                      <q-select
-                        :model-value="group.position"
-                        :options="positionOptions"
-                        outlined
-                        dense
-                        emit-value
-                        map-options
-                        label="插入位置"
-                        :disable="saving"
-                        @update:model-value="updateGroupPosition(index, $event)"
-                      />
-                      <q-input
-                        v-if="group.position === 'after_paragraph'"
-                        :model-value="group.paragraphIndex"
-                        type="number"
-                        min="1"
-                        max="10000"
-                        step="1"
-                        outlined
-                        dense
-                        label="第几段后"
-                        :disable="saving"
-                        @update:model-value="updateParagraphIndex(index, $event)"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </q-expansion-item>
               <TemplateSourcePreview
                 :key="selectedId"
                 :blocks="sourceBlocks"
@@ -1185,72 +1103,6 @@ const remove = async () => {
     > .template-source-preview {
       flex: 1 1 auto;
       min-height: 16rem;
-    }
-  }
-
-  &__locked-heading {
-    display: flex;
-    flex: 0 0 auto;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-
-    > span,
-    > strong {
-      flex: 1 1 auto;
-      min-width: 0;
-      overflow-wrap: anywhere;
-    }
-  }
-
-  &__locked-list {
-    flex: 0 0 auto;
-    min-width: 0;
-    background: var(--app-bg-surface);
-    border: 1px solid var(--app-border-default);
-    border-radius: 10px;
-  }
-
-  &__locked-scroll {
-    min-width: 0;
-    min-height: 0;
-    max-height: min(28vh, 240px);
-    padding-inline: 12px;
-    overflow-y: auto;
-  }
-
-  &__locked-group {
-    min-width: 0;
-    padding-bottom: 12px;
-
-    & + & {
-      padding-top: 12px;
-      border-top: 1px solid var(--app-border-default);
-    }
-
-    p {
-      max-width: 100%;
-      margin: 0 0 8px;
-      overflow: hidden;
-      color: var(--app-text-secondary);
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-  }
-
-  &__locked-placement {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
-    gap: 8px;
-    min-width: 0;
-
-    :deep(.q-field),
-    :deep(.q-field__control),
-    :deep(.q-field__control-container),
-    :deep(.q-field__native) {
-      min-width: 0;
-      max-width: 100%;
     }
   }
 
