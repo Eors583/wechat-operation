@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { LayoutTemplate, ModuleKey, ModuleStyle } from '@/api/types'
+import AppButton from '@/components/base/AppButton.vue'
 
 const props = defineProps<{
   blocks: NonNullable<LayoutTemplate['contentBlocks']>
@@ -8,12 +9,18 @@ const props = defineProps<{
   selectedIds: string[]
   lockedGroups: NonNullable<LayoutTemplate['lockedBlocks']>
   editedStyles: Partial<Record<ModuleKey, ModuleStyle>>
+  canLock: boolean
+  busy: boolean
 }>()
 const emit = defineEmits<{
   toggle: [id: string, extend: boolean]
   select: [ids: string[], endId: string]
+  lock: [position: 'before_body' | 'after_body']
+  unlock: [blockId: string]
+  clear: []
 }>()
 const frame = ref<HTMLIFrameElement | null>(null)
+const selecting = ref(false)
 let originalStyles = new Map<HTMLElement, string | null>()
 let cleanupSelection = () => {}
 
@@ -30,13 +37,18 @@ main{max-width:680px;margin:auto;min-width:0}
 .source-title{margin:0 0 24px;font-size:24px;line-height:1.4}
 .source-block{display:grid;grid-template-columns:28px minmax(0,1fr);gap:8px;min-width:0;border:1px solid transparent;border-radius:6px}
 .source-block[data-selected=true]{border-color:var(--app-action-primary);background:var(--app-action-soft)}
-.source-block[data-locked=true]{border-color:var(--app-border-strong)}
+.source-block[data-locked=true]{border-color:var(--app-action-primary);background:var(--app-action-soft);border-radius:0}
+.source-block[data-lock-start=true]{border-top-left-radius:6px;border-top-right-radius:6px}
+.source-block[data-lock-end=true]{border-bottom-left-radius:6px;border-bottom-right-radius:6px}
 .source-block,.source-block *{user-select:none!important;-webkit-user-select:none!important;-webkit-touch-callout:none}
+.source-block[data-locked=false]{cursor:crosshair}
 html[data-selecting=true],html[data-selecting=true] *{cursor:crosshair!important}
+.source-unlock{grid-column:1/-1;min-width:0;min-height:36px;padding:6px 10px;border:0;text-align:left;overflow-wrap:anywhere;background:var(--app-action-soft);color:var(--app-action-primary);font:inherit;font-size:12px;cursor:pointer}
+.source-unlock[hidden]{display:none}
 .source-select{align-self:start;min-width:0;min-height:28px;padding:2px;border:1px solid var(--app-border-default);border-radius:6px;background:var(--app-bg-surface);color:var(--app-text-secondary);cursor:pointer;font:inherit;font-size:12px}
 .source-select[aria-pressed=true]{background:var(--app-action-primary);color:var(--app-action-primary-text)}
 .source-select:disabled{cursor:default;color:var(--app-action-primary)}
-.source-select:focus-visible{outline:3px solid var(--app-focus);outline-offset:2px}
+.source-select:focus-visible,.source-unlock:focus-visible{outline:3px solid var(--app-focus);outline-offset:2px}
 .source-content{min-width:0;max-width:100%;overflow-x:auto;overflow-wrap:anywhere}
 .source-content *{max-width:100%;overflow-wrap:anywhere}
 .source-content img{max-width:100%!important;height:auto!important}
@@ -46,7 +58,7 @@ html[data-selecting=true],html[data-selecting=true] *{cursor:crosshair!important
 </style></head><body><main><h1 class="source-title"></h1>${props.blocks
     .map(
       (block, index) =>
-        `<section class="source-block" data-index="${index}"><button type="button" class="source-select" aria-label="选择第 ${index + 1} 部分" aria-pressed="false">${index + 1}</button><div class="source-content">${block.html}</div></section>`,
+        `<section class="source-block" data-index="${index}"><button type="button" class="source-unlock" hidden></button><button type="button" class="source-select" aria-label="选择第 ${index + 1} 部分" aria-pressed="false">${index + 1}</button><div class="source-content">${block.html}</div></section>`,
     )
     .join('')}</main></body></html>`,
 )
@@ -72,10 +84,52 @@ const applyModuleStyle = (element: HTMLElement, style: ModuleStyle) => {
   )
 }
 
-const syncState = () => {
+const syncSelection = () => {
   const document = frame.value?.contentDocument
   if (!document) return
   const selected = new Set(props.selectedIds)
+  const groups = new Map(
+    props.lockedGroups.flatMap((group) => group.blockIds.map((id) => [id, group] as const)),
+  )
+  document.querySelectorAll<HTMLElement>('main > .source-block').forEach((row, index) => {
+    const block = props.blocks[index]
+    if (!block) return
+    const group = groups.get(block.id)
+    row.dataset.selected = String(selected.has(block.id))
+    row.dataset.locked = String(!!group)
+    const startsGroup = !!group && groups.get(props.blocks[index - 1]?.id ?? '') !== group
+    row.dataset.lockStart = String(startsGroup)
+    row.dataset.lockEnd = String(!!group && groups.get(props.blocks[index + 1]?.id ?? '') !== group)
+    const button = row.querySelector<HTMLButtonElement>(':scope > .source-select')
+    if (button) {
+      button.disabled = !!group || props.busy
+      button.style.visibility = group ? 'hidden' : 'visible'
+      button.textContent = selected.has(block.id) ? '✓' : String(index + 1)
+      button.setAttribute('aria-pressed', String(selected.has(block.id)))
+      button.setAttribute('aria-label', `选择第 ${index + 1} 部分`)
+      button.title = `选择第 ${index + 1} 部分`
+    }
+    const unlock = row.querySelector<HTMLButtonElement>(':scope > .source-unlock')
+    if (unlock) {
+      unlock.hidden = !startsGroup
+      unlock.disabled = props.busy
+      if (group) {
+        const placement =
+          group.position === 'before_body'
+            ? '开头'
+            : group.position === 'after_body'
+              ? '结尾'
+              : `第 ${group.paragraphIndex} 段后`
+        unlock.textContent = `已固定到${placement} · 解锁`
+        unlock.setAttribute('aria-label', `解锁固定到${placement}的这一组内容`)
+      }
+    }
+  })
+}
+
+const syncStyles = () => {
+  const document = frame.value?.contentDocument
+  if (!document) return
   const locked = new Set(props.lockedGroups.flatMap((group) => group.blockIds))
   for (const [element, style] of originalStyles) {
     if (style === null) element.removeAttribute('style')
@@ -92,16 +146,6 @@ const syncState = () => {
     const block = props.blocks[index]
     if (!block) return
     const isLocked = locked.has(block.id)
-    row.dataset.selected = String(selected.has(block.id))
-    row.dataset.locked = String(isLocked)
-    const button = row.querySelector<HTMLButtonElement>(':scope > .source-select')
-    if (button) {
-      button.disabled = isLocked
-      button.textContent = isLocked ? '锁' : selected.has(block.id) ? '✓' : String(index + 1)
-      button.setAttribute('aria-pressed', String(selected.has(block.id)))
-      button.setAttribute('aria-label', `${isLocked ? '已锁定' : '选择'}第 ${index + 1} 部分`)
-      button.title = isLocked ? '在固定部分列表中解锁' : `选择第 ${index + 1} 部分`
-    }
     const content = row.querySelector<HTMLElement>(':scope > .source-content')
     if (!content) return
     const module = block.module as ModuleKey
@@ -191,6 +235,7 @@ const onLoad = () => {
     window.cancelAnimationFrame(scrollFrame)
     const previous = press
     press = null
+    selecting.value = false
     delete document.documentElement.dataset.selecting
     if (previous?.active) suppressClickUntil = Date.now() + 500
     if (
@@ -240,6 +285,18 @@ const onLoad = () => {
     previousScrollTime = time
     scrollFrame = window.requestAnimationFrame(autoScroll)
   }
+  const activate = () => {
+    if (!press || press.active) return
+    window.clearTimeout(holdTimer)
+    press.active = true
+    selecting.value = true
+    document.documentElement.dataset.selecting = 'true'
+    document.getSelection()?.removeAllRanges()
+    if (press.pointerId !== undefined) document.documentElement.setPointerCapture(press.pointerId)
+    selectTo(press.index)
+    previousScrollTime = performance.now()
+    scrollFrame = window.requestAnimationFrame(autoScroll)
+  }
   const begin = (
     target: EventTarget | null,
     x: number,
@@ -248,9 +305,10 @@ const onLoad = () => {
     touchId?: number,
   ) => {
     finish()
+    suppressClickUntil = 0
+    if (props.busy || (target as Element | null)?.closest('.source-unlock')) return
     const row = (target as Element | null)?.closest<HTMLElement>('main > .source-block')
     if (!row || row.dataset.locked === 'true') return
-    suppressClickUntil = 0
     press = {
       index: Number(row.dataset.index),
       x,
@@ -263,23 +321,18 @@ const onLoad = () => {
       moved: false,
       end: -1,
     }
-    holdTimer = window.setTimeout(() => {
-      if (!press) return
-      press.active = true
-      document.documentElement.dataset.selecting = 'true'
-      document.getSelection()?.removeAllRanges()
-      if (press.pointerId !== undefined) document.documentElement.setPointerCapture(press.pointerId)
-      selectTo(press.index)
-      previousScrollTime = performance.now()
-      scrollFrame = window.requestAnimationFrame(autoScroll)
-    }, 350)
+    holdTimer = window.setTimeout(activate, 350)
   }
   const move = (x: number, y: number) => {
     if (!press) return
-    const moved = Math.hypot(x - press.x, y - press.y) > 8
+    const moved = Math.hypot(x - press.x, y - press.y) > 5
     if (!press.active) {
-      if (moved) finish()
-      return
+      if (!moved) return
+      if (press.pointerId === undefined) {
+        finish()
+        return
+      }
+      activate()
     }
     press.currentY = y
     press.moved ||= moved
@@ -384,14 +437,20 @@ const onLoad = () => {
     (event) => {
       const target = event.target as Element | null
       if (target?.closest('a')) event.preventDefault()
+      if (props.busy) return
       if (event.detail !== 0 && Date.now() < suppressClickUntil) {
         event.preventDefault()
         return
       }
-      const button = target?.closest<HTMLButtonElement>('.source-select')
-      if (!button || button.disabled) return
-      const index = Number(button.parentElement?.dataset.index)
+      const row = target?.closest<HTMLElement>('main > .source-block')
+      if (!row) return
+      const index = Number(row.dataset.index)
       const block = props.blocks[index]
+      if (target?.closest('.source-unlock')) {
+        if (block) emit('unlock', block.id)
+        return
+      }
+      if (row.dataset.locked === 'true') return
       if (block) emit('toggle', block.id, event.shiftKey)
     },
     options,
@@ -400,36 +459,108 @@ const onLoad = () => {
     finish()
     listeners.abort()
   }
-  syncState()
+  syncSelection()
+  syncStyles()
 }
 onBeforeUnmount(() => cleanupSelection())
 watch(sourceDocument, () => cleanupSelection(), { flush: 'sync' })
-watch(() => [props.selectedIds, props.lockedGroups, props.editedStyles, props.title], syncState, {
+watch(() => [props.selectedIds, props.lockedGroups, props.busy], syncSelection, { deep: true })
+watch(() => [props.lockedGroups, props.editedStyles, props.title], syncStyles, {
   deep: true,
 })
 </script>
 
 <template>
-  <iframe
-    ref="frame"
-    class="template-source-preview"
-    :srcdoc="sourceDocument"
-    sandbox="allow-same-origin"
-    referrerpolicy="no-referrer"
-    title="完整文章预览，长按拖动或点击左侧编号选择固定内容"
-    @load="onLoad"
-  />
+  <div class="template-source-preview">
+    <iframe
+      ref="frame"
+      class="template-source-preview__frame"
+      :srcdoc="sourceDocument"
+      sandbox="allow-same-origin"
+      referrerpolicy="no-referrer"
+      title="完整文章预览，拖动或点击内容选择固定部分，触屏可长按拖动"
+      @load="onLoad"
+    />
+    <div class="template-source-preview__actions">
+      <span aria-live="polite">{{
+        selectedIds.length ? `已选 ${selectedIds.length} 部分` : '点击内容或拖动选择'
+      }}</span>
+      <AppButton
+        variant="ghost"
+        label="取消选择"
+        :disabled="!selectedIds.length || busy || selecting"
+        @click="emit('clear')"
+      />
+      <div class="template-source-preview__placements">
+        <AppButton
+          label="固定到开头"
+          icon="vertical_align_top"
+          :disabled="!selectedIds.length || !canLock || selecting"
+          @click="emit('lock', 'before_body')"
+        />
+        <AppButton
+          label="固定到结尾"
+          icon="vertical_align_bottom"
+          :disabled="!selectedIds.length || !canLock || selecting"
+          @click="emit('lock', 'after_body')"
+        />
+      </div>
+    </div>
+  </div>
 </template>
 
 <style scoped lang="scss">
 .template-source-preview {
-  display: block;
+  display: flex;
+  flex-direction: column;
   width: 100%;
-  height: 100%;
   min-width: 0;
   min-height: 0;
   background: var(--app-bg-surface);
   border: 1px solid var(--app-border-default);
   border-radius: 10px;
+
+  &__frame {
+    display: block;
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    border: 0;
+    border-radius: inherit;
+  }
+
+  &__actions {
+    display: flex;
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 8px 12px;
+    border-top: 1px solid var(--app-border-default);
+
+    > span {
+      flex: 1 1 auto;
+      min-width: 0;
+      color: var(--app-text-secondary);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+  }
+
+  &__placements {
+    display: grid;
+    flex: 1 1 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .app-button {
+    min-width: 0;
+    padding-inline: 8px;
+    overflow-wrap: anywhere;
+  }
 }
 </style>

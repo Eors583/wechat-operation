@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { api } from '@/api/client'
 import { queryClient } from '@/boot/query'
@@ -122,6 +122,18 @@ const selectedTemplate = computed(
 )
 const sourceBlocks = computed(() => selectedTemplate.value?.contentBlocks ?? [])
 const lockedGroups = computed(() => selectedTemplate.value?.lockedBlocks ?? [])
+let lockUndoRevision = 0
+let dismissLockUndo: (() => void) | undefined
+watch(
+  [selectedId, templateScopeKey, () => props.modelValue, lockedGroups, saving],
+  () => {
+    lockUndoRevision++
+    dismissLockUndo?.()
+    dismissLockUndo = undefined
+  },
+  { deep: true, flush: 'sync' },
+)
+onBeforeUnmount(() => dismissLockUndo?.())
 const lockedBlockIds = computed(
   () => new Set(lockedGroups.value.flatMap((group) => group.blockIds)),
 )
@@ -212,34 +224,73 @@ const toggleSourceBlock = (id: string, extend: boolean) => {
   lastSelectedBlockId.value = id
 }
 
-const lockSelection = () => {
+const notifyLockChange = (
+  message: string,
+  previous: NonNullable<LayoutTemplate['lockedBlocks']>,
+) => {
+  const templateId = selectedId.value
+  const revision = lockUndoRevision
+  dismissLockUndo = $q.notify({
+    type: 'positive',
+    message,
+    timeout: 5000,
+    actions: [
+      {
+        label: '撤销',
+        color: 'white',
+        handler: () => {
+          const template = selectedTemplate.value
+          if (
+            !template ||
+            template.id !== templateId ||
+            revision !== lockUndoRevision ||
+            saving.value
+          )
+            return
+          template.lockedBlocks = previous
+          const restoredLocks = new Set(previous.flatMap((group) => group.blockIds))
+          selectedBlockIds.value = selectedBlockIds.value.filter((id) => !restoredLocks.has(id))
+          markDirty()
+        },
+      },
+    ],
+  })
+}
+
+const lockSelection = (position: 'before_body' | 'after_body') => {
   const template = selectedTemplate.value
-  if (!template || lockedGroups.value.length >= 100) return
+  if (!template || saving.value || lockedGroups.value.length >= 100) return
   const selected = new Set(selectedBlockIds.value)
   const blockIds = sourceBlocks.value
     .filter((block) => selected.has(block.id) && !lockedBlockIds.value.has(block.id))
     .map((block) => block.id)
   if (!blockIds.length) return
-  const firstIndex = sourceBlocks.value.findIndex((block) => block.id === blockIds[0])
+  const previous = clone(lockedGroups.value)
   template.lockedBlocks = [
     ...lockedGroups.value,
     {
       blockIds,
-      position: firstIndex < sourceBlocks.value.length / 2 ? 'before_body' : 'after_body',
+      position,
       paragraphIndex: 1,
     },
   ]
   selectedBlockIds.value = []
   markDirty()
+  notifyLockChange(position === 'before_body' ? '已固定到开头。' : '已固定到结尾。', previous)
 }
 
 const unlockGroup = (index: number) => {
-  if (!selectedTemplate.value) return
+  if (!selectedTemplate.value || saving.value || !lockedGroups.value[index]) return
+  const previous = clone(lockedGroups.value)
   selectedTemplate.value.lockedBlocks = lockedGroups.value.filter(
     (_, groupIndex) => groupIndex !== index,
   )
   markDirty()
+  notifyLockChange('已解除固定。', previous)
 }
+
+const unlockSourceBlock = (blockId: string) =>
+  unlockGroup(lockedGroups.value.findIndex((group) => group.blockIds.includes(blockId)))
 
 const updateGroupPosition = (
   index: number,
@@ -766,26 +817,10 @@ const remove = async () => {
           </q-tabs>
           <template v-if="previewMode === 'source'">
             <div v-if="sourceBlocks.length" class="template-editor__source">
-              <div class="template-editor__selection">
-                <span aria-live="polite">已选 {{ selectedBlockIds.length }} 部分</span>
-                <AppButton
-                  icon="lock"
-                  label="锁定所选"
-                  :disabled="!selectedBlockIds.length || lockedGroups.length >= 100 || saving"
-                  @click="lockSelection"
-                />
-                <AppButton
-                  v-if="selectedBlockIds.length"
-                  variant="ghost"
-                  label="清除选择"
-                  @click="selectedBlockIds = []"
-                />
-              </div>
               <q-expansion-item
                 v-if="lockedGroups.length"
-                default-opened
                 icon="lock_outline"
-                :label="`固定部分（${lockedGroups.length} 组）`"
+                :label="`固定设置 · ${lockedGroups.length}`"
                 class="template-editor__locked-list"
               >
                 <div class="template-editor__locked-scroll">
@@ -834,9 +869,6 @@ const remove = async () => {
                   </div>
                 </div>
               </q-expansion-item>
-              <p class="template-editor__source-hint">
-                长按内容后拖动可连续选择，也可点击左侧编号或 Shift 连选。
-              </p>
               <TemplateSourcePreview
                 :key="selectedId"
                 :blocks="sourceBlocks"
@@ -844,7 +876,12 @@ const remove = async () => {
                 :selected-ids="selectedBlockIds"
                 :locked-groups="lockedGroups"
                 :edited-styles="sourceStyles"
+                :can-lock="!saving && lockedGroups.length < 100"
+                :busy="saving"
                 @toggle="toggleSourceBlock"
+                @lock="lockSelection"
+                @unlock="unlockSourceBlock"
+                @clear="selectedBlockIds = []"
                 @select="
                   (ids, endId) => {
                     selectedBlockIds = ids
@@ -1142,13 +1179,12 @@ const remove = async () => {
     min-width: 0;
     min-height: 0;
 
-    > iframe {
+    > .template-source-preview {
       flex: 1 1 auto;
       min-height: 16rem;
     }
   }
 
-  &__selection,
   &__locked-heading {
     display: flex;
     flex: 0 0 auto;
@@ -1215,7 +1251,6 @@ const remove = async () => {
     }
   }
 
-  &__source-hint,
   &__source-empty {
     flex: 0 0 auto;
     min-width: 0;
