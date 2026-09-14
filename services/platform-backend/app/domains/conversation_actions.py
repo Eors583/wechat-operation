@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domains.article import owned_article, save_local_article
+from app.domains.article import create_article, owned_article, save_local_article
 from app.domains.layout import DEFAULT_STYLE_TOKENS, save_layout_template
 from app.domains.personal_skills import create_personal_skill
 from app.domains.user_preference_memory import apply_explicit_memory, memory_command
@@ -147,8 +147,19 @@ async def plan_action(
             )
         ):
             return {"operation": "save_local"}
-        if re.search(r"(?:存入|存到|保存|放入|放到).{0,12}(?:公众号)?草稿箱", authorized):
-            return {"operation": "wechat_draft", "target_text": text}
+        if re.search(r"(?:存入|存到|保存|放入|放到|写入).{0,12}(?:公众号)?草稿箱", authorized):
+            action: dict[str, Any] = {"operation": "wechat_draft", "target_text": text}
+            if re.search(
+                r"不改写|不要改写|不修改正文|正文不变|只.{0,4}(?:排版|套模板)", authorized
+            ):
+                action["preserve_content"] = True
+                source = next(
+                    (m for m in recent if m.role == "user" and m.plain_text.strip() != text),
+                    None,
+                )
+                if source and len(source.plain_text.strip()) >= 100:
+                    action["source_message_id"] = source.id
+            return action
         if re.fullmatch(
             r"(?:请|帮我)?(?:直接|立即|确认)?(?:发表|发布)(?:这篇文章|当前文章|文章)?"
             r"(?:到.+)?[。！]?",
@@ -368,8 +379,41 @@ async def execute_action(
         metadata["template_id"] = template.id
         return f"已保存排版模板《{template.name}》。", metadata
     if operation in {"save_local", "wechat_draft", "wechat_publish"}:
+        if action.get("preserve_content") and action.get("source_message_id"):
+            source = await session.scalar(
+                select(Message).where(
+                    Message.id == action.get("source_message_id"),
+                    Message.task_id == task.id,
+                    Message.role == "user",
+                )
+            )
+            if source:
+                # Import text verbatim; formatting and WeChat writes use the existing services.
+                content = {
+                    "type": "doc",
+                    "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": line}]}
+                        if line
+                        else {"type": "paragraph"}
+                        for line in source.plain_text.splitlines()
+                    ],
+                }
+                imported, version = await create_article(
+                    session,
+                    owner_id=task.owner_id,
+                    project_id=task.project_id,
+                    task_id=task.id,
+                    title=task.title,
+                    summary=None,
+                    content=content,
+                    source="manual",
+                    created_by_type="user",
+                    created_by_id=task.owner_id,
+                )
+                task.current_article_id = imported.id
+                metadata.update(article_id=imported.id, version_no=version.version_no)
         if not task.current_article_id:
-            return "当前对话还没有文章。", metadata
+            return "请先单独粘贴完整正文，再告诉我套用排版并存入草稿箱。", metadata
         article = await owned_article(
             session, owner_id=task.owner_id, article_id=task.current_article_id
         )
@@ -395,7 +439,8 @@ async def execute_action(
             ).all()
         )
         if not renders or len({r.official_account_id for r in renders}) != 1:
-            return "请先为这篇文章选择目标公众号并生成排版预览。", metadata
+            metadata.update(article_id=article.id, version_no=article.current_version_no)
+            return "正文未改写。请打开预览选择公众号和排版，再存入草稿箱。", metadata
         render = renders[0]
         # A named destination must match the selected account; never silently use another one.
         from app.domains.wechat import owned_official_account

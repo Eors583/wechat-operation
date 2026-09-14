@@ -3064,6 +3064,14 @@ async def process_ai_run(
             "response_kind": "discussion",
             "suggestions": [],
             "conversation_action": action_metadata,
+            **(
+                {
+                    "article_id": action_metadata["article_id"],
+                    "version_no": action_metadata["version_no"],
+                }
+                if action_metadata.get("article_id") and action_metadata.get("version_no")
+                else {}
+            ),
         }
     elif completed_action_metadata:
         assistant_message.content_json = {
