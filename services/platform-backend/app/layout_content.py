@@ -6,7 +6,7 @@ import ipaddress
 import re
 from collections.abc import Iterator
 from html import escape
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import unquote, urlparse, urlunparse
 
 from bs4 import BeautifulSoup, Comment, NavigableString, Tag
 
@@ -130,7 +130,21 @@ def sanitize_content_html(value: str) -> str:
         if name in _MEDIA_TAGS:
             url = _safe_url(str(element.get("data-src") or element.get("src") or ""))
             replacement = soup.new_tag("a" if url else "span")
-            replacement.string = "此媒体请在原文查看"
+            cover = _safe_url(
+                unquote(str(element.get("data-cover") or element.get("poster") or "")), image=True,
+            )
+            if cover:
+                image = soup.new_tag("img", src=cover, alt="视频封面")
+                image.attrs.update({
+                    "referrerpolicy": "no-referrer", "style": _BOUNDS + ";height:auto",
+                })
+                replacement.append(image)
+                caption = soup.new_tag("span")
+                caption.string = "▶ 播放视频" if url else "视频"
+                caption["style"] = "display:block;text-align:center"
+                replacement.append(caption)
+            else:
+                replacement.string = "此媒体请在原文查看"
             if url:
                 replacement.attrs = {"href": url, "target": "_blank", "rel": "noopener noreferrer"}
             element.replace_with(replacement)
@@ -150,6 +164,9 @@ def sanitize_content_html(value: str) -> str:
             source = _safe_url(str(original.get("data-src", "")), image=True) or _safe_url(
                 str(original.get("src", "")), image=True
             )
+            if not source and not any(original.get(key) for key in ("data-src", "src")):
+                element.decompose()
+                continue
             if not source:
                 replacement = soup.new_tag("span")
                 replacement.string = "此图片请在原文查看"

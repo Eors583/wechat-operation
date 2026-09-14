@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { LayoutTemplate, ModuleKey, ModuleStyle } from '@/api/types'
 import AppButton from '@/components/base/AppButton.vue'
+import { openTemplateVideo } from '@/utils/templateMedia'
 
 const props = defineProps<{
   blocks: NonNullable<LayoutTemplate['contentBlocks']>
@@ -54,7 +55,7 @@ html[data-selecting=true],html[data-selecting=true] *{cursor:crosshair!important
 .source-content img{max-width:100%!important;height:auto!important}
 .source-content table{max-width:100%;border-collapse:collapse}
 .source-content pre{white-space:pre-wrap}
-.source-content a{cursor:default}
+.source-content a{cursor:default}.source-content a>span{cursor:pointer}
 </style></head><body><main><h1 class="source-title"></h1>${props.blocks
     .map(
       (block, index) =>
@@ -306,7 +307,7 @@ const onLoad = () => {
   ) => {
     finish()
     suppressClickUntil = 0
-    if (props.busy || (target as Element | null)?.closest('.source-unlock')) return
+    if (props.busy || (target as Element | null)?.closest('.source-unlock, a > span')) return
     const row = (target as Element | null)?.closest<HTMLElement>('main > .source-block')
     if (!row || row.dataset.locked === 'true') return
     press = {
@@ -438,6 +439,7 @@ const onLoad = () => {
       const target = event.target as Element | null
       if (target?.closest('a')) event.preventDefault()
       if (props.busy) return
+      if (target?.matches('a > span') && openTemplateVideo(target)) return
       if (event.detail !== 0 && Date.now() < suppressClickUntil) {
         event.preventDefault()
         return

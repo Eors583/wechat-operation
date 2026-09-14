@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
+import { openTemplateVideo } from '@/utils/templateMedia'
 
 const props = defineProps<{ html: string; label: string }>()
 const frame = ref<HTMLIFrameElement | null>(null)
@@ -37,7 +38,9 @@ const onLoad = () => {
   const observer = new ResizeObserver(resize)
   observer.observe(content)
   const preventNavigation = (event: MouseEvent) => {
-    if ((event.target as Element | null)?.closest('a')) event.preventDefault()
+    const target = event.target as Element | null
+    if (target?.closest('a')) event.preventDefault()
+    openTemplateVideo(target)
   }
   document.addEventListener('click', preventNavigation)
   cleanup = () => {
