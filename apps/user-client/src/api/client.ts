@@ -1406,8 +1406,8 @@ const mapTemplate = (value: unknown): LayoutTemplate => {
     versionId: optionalText(version.id),
     versionNo: numberValue(version.versionNo, numberValue(source.currentVersionNo)),
     sourceTitle: textValue(sourceSnapshot.title),
-    contentBlocks,
-    lockedBlocks,
+    contentBlocks: Array.isArray(sourceSnapshot.contentBlocks) ? contentBlocks : undefined,
+    lockedBlocks: Array.isArray(sourceSnapshot.lockedBlocks) ? lockedBlocks : undefined,
     lockedBlockCount: numberValue(envelope.lockedBlockCount, lockedBlocks.length),
     sourcePreview: sourcePreviewFromSnapshot(version.sourceSnapshot),
     extractionMode,
@@ -3256,6 +3256,25 @@ export const remoteApi: UserApi = {
       items: itemList(payload).map(mapTemplate),
       nextCursor: nextPageCursor(payload, cursor),
     }
+  },
+  async getTemplateVersion(templateId, versionId) {
+    const payload = record(
+      await openApiData(
+        openApi.GET('/api/v1/layout-templates/{template_id}', {
+          params: { path: { template_id: templateId } },
+        }),
+      ),
+    )
+    const versions = Array.isArray(payload.versions) ? payload.versions : []
+    const version = versions.find((item) => record(item).id === versionId)
+    if (!version) {
+      throw new ApiError(
+        '已保存的模板版本不存在，请重新选择模板。',
+        404,
+        'LAYOUT_VERSION_NOT_FOUND',
+      )
+    }
+    return mapTemplate({ template: payload.template, version })
   },
   async extractTemplate(accountId, url) {
     const response = await openApiData(

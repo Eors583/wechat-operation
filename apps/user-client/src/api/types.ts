@@ -566,6 +566,7 @@ export interface UserApi {
     cursor?: string,
     limit?: number,
   ): Promise<LayoutTemplatePage>
+  getTemplateVersion(templateId: string, versionId: string): Promise<LayoutTemplate>
   extractTemplate(accountId: string | null | undefined, url: string): Promise<LayoutTemplate>
   saveTemplate(template: LayoutTemplate, makeDefault?: boolean): Promise<LayoutTemplate>
   setDefaultTemplate(id: string): Promise<void>

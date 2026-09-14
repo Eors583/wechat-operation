@@ -10,6 +10,7 @@ import { createDefaultStyles } from '@/api/styleDefaults'
 import { tableExtensions } from '@/editor/tableExtensions'
 import ArticleTableMenu from '@/components/business/ArticleTableMenu.vue'
 import ArticleTitleChoices from '@/components/business/ArticleTitleChoices.vue'
+import ArticleFixedContent from '@/components/business/ArticleFixedContent.vue'
 import Link from '@tiptap/extension-link'
 import Image from '@tiptap/extension-image'
 import { moduleParagraph } from '@/editor/moduleParagraph'
@@ -29,6 +30,7 @@ import AsyncStatePanel from '@/components/composite/AsyncStatePanel.vue'
 import WechatFinalPreview from '@/components/business/WechatFinalPreview.vue'
 import { usePublicSettings } from '@/composables/usePublicSettings'
 import { useLocalDraftSave } from '@/composables/useLocalDraftSave'
+import { useArticleFixedContent } from '@/composables/useArticleFixedContent'
 
 const route = useRoute()
 const router = useRouter()
@@ -233,6 +235,13 @@ const templates = computed(() =>
 const selectedTemplate = computed(
   () => templates.value.find((item) => item.id === selectedTemplateId.value) ?? null,
 )
+const {
+  beforeHtml: fixedBeforeHtml,
+  afterHtml: fixedAfterHtml,
+  loading: fixedContentLoading,
+  error: fixedContentError,
+  retry: retryFixedContent,
+} = useArticleFixedContent(() => selectedTemplate.value)
 const templateChosen = ref(false)
 watch(selectedAccountId, () => {
   templateChosen.value = false
@@ -277,6 +286,11 @@ const editor = useEditor({
   content: '',
   editorProps: { attributes: { class: 'tiptap-body', 'aria-label': '文章正文编辑器' } },
   onUpdate: scheduleSave,
+})
+const fixedDocumentTitle = computed(() => {
+  if (!fixedBeforeHtml.value && !fixedAfterHtml.value) return null
+  const first = editor.value?.state.doc.firstChild
+  return first?.type.name === 'heading' && first.attrs.level === 1 ? first.textContent : null
 })
 
 watch(
@@ -1131,16 +1145,48 @@ onBeforeUnmount(() => {
               />
             </div>
             <div class="editor-scroll">
-              <EditorContent
-                :editor="editor"
+              <div
                 class="editor-document"
                 :class="{
                   'editor-document--with-marker': selectedTemplate?.styles.heading_marker.enabled,
+                  'editor-document--fixed-heading': fixedDocumentTitle !== null,
+                  'editor-document--fixed-footer': Boolean(fixedAfterHtml),
                 }"
                 :style="
                   templatePreviewCssVariables(selectedTemplate?.styles ?? createDefaultStyles())
                 "
-              />
+              >
+                <h1 v-if="fixedDocumentTitle !== null" class="editor-document__title">
+                  {{ fixedDocumentTitle }}
+                </h1>
+                <div v-if="fixedContentLoading" class="editor-document__status" role="status">
+                  <q-spinner size="18px" color="primary" />
+                  <span>正在加载固定内容…</span>
+                </div>
+                <div v-else-if="fixedContentError" class="editor-document__status" role="alert">
+                  <q-icon name="error_outline" color="negative" size="18px" />
+                  <span>固定内容加载失败。{{ fixedContentError }}</span>
+                  <q-btn
+                    flat
+                    dense
+                    no-caps
+                    color="primary"
+                    label="重试"
+                    @click="retryFixedContent"
+                  />
+                </div>
+                <ArticleFixedContent
+                  v-if="fixedBeforeHtml"
+                  :html="fixedBeforeHtml"
+                  label="文章开头固定内容"
+                />
+                <EditorContent :editor="editor" />
+                <ArticleFixedContent
+                  v-if="fixedAfterHtml"
+                  :html="fixedAfterHtml"
+                  label="文章结尾固定内容"
+                />
+              </div>
             </div>
           </section>
 
@@ -1547,6 +1593,32 @@ onBeforeUnmount(() => {
   border: 1px solid var(--app-border-default);
   border-radius: 12px;
   box-shadow: var(--app-shadow-sm);
+}
+.editor-document__status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 12px;
+  color: var(--app-text-secondary);
+
+  > span {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+.editor-document__title {
+  @include preview-module('title');
+
+  overflow-wrap: anywhere;
+}
+.editor-document--fixed-heading :deep(.tiptap-body > h1:first-child) {
+  display: none;
+}
+.editor-document--fixed-footer :deep(.tiptap-body) {
+  min-height: 0;
 }
 .layout-preview-pane {
   grid-template-rows: minmax(0, 1fr);

@@ -2521,7 +2521,15 @@ async def get_layout_template(
     user: User = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict[str, Any]:
-    template = await owned_template(session, owner_id=user.id, template_id=template_id)
+    # Saved articles retain read-only access to their owner's historical templates.
+    template = await session.scalar(
+        select(LayoutTemplate).where(
+            LayoutTemplate.id == template_id,
+            LayoutTemplate.owner_id == user.id,
+        )
+    )
+    if not template:
+        raise ApiError(404, "LAYOUT_TEMPLATE_NOT_FOUND", "排版模板不存在。")
     versions = list(
         (
             await session.scalars(

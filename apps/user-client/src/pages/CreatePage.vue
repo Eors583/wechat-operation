@@ -196,7 +196,6 @@ const selectedModelName = computed(
     (modelOptionsQuery.data.value ?? []).find((model) => model.id === selectedModelId.value)
       ?.name ?? '自动（稳定优先）',
 )
-const article = computed(() => bundle.value?.article ?? null)
 const fileSize = (bytes: number) =>
   bytes < 1024
     ? `${bytes} B`
@@ -237,7 +236,7 @@ const selectPreviewTemplate = (id: string | null) => {
 const previewTemplatesQuery = useQuery({
   queryKey: ['templates', 'article-preview'],
   queryFn: () => api.listTemplatesPage(undefined, undefined, 100),
-  enabled: computed(() => articleVisible.value && Boolean(article.value)),
+  enabled: computed(() => articleVisible.value && Boolean(selectedArticle.value)),
 })
 const previewTemplates = computed<LayoutTemplate[]>(() =>
   [

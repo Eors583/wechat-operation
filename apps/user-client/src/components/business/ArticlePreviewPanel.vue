@@ -13,6 +13,8 @@ import { moduleParagraph } from '@/editor/moduleParagraph'
 import { templatePreviewCssVariables } from '@/utils/templatePreviewStyles'
 import { separateArticleTitle } from '@/utils/articleTitle'
 import { tableExtensions } from '@/editor/tableExtensions'
+import { useArticleFixedContent } from '@/composables/useArticleFixedContent'
+import ArticleFixedContent from './ArticleFixedContent.vue'
 import ArticleTableMenu from './ArticleTableMenu.vue'
 import ArticleTitleChoices from './ArticleTitleChoices.vue'
 
@@ -50,8 +52,9 @@ const editorReady = ref(false)
 const fullPreviewHtml = ref('')
 const fullPreviewLoading = ref(false)
 const fullPreviewError = ref('')
-const hasLockedBlocks = computed(() =>
-  Boolean(props.template?.lockedBlocks?.length || props.template?.lockedBlockCount),
+const fixedContent = useArticleFixedContent(() => props.template)
+const hasFixedContent = computed(() =>
+  Boolean(fixedContent.beforeHtml.value || fixedContent.afterHtml.value),
 )
 let previewRequest = 0
 let editRevision = 0
@@ -241,10 +244,9 @@ const selectView = (value: 'edit' | 'layout') => {
 }
 
 watch(
-  () => [props.article.id, props.template?.versionId, hasLockedBlocks.value, editorReady.value],
+  () => [props.article.id, props.template?.versionId, editorReady.value],
   () => {
-    if (editorReady.value && (hasLockedBlocks.value || view.value === 'layout'))
-      selectView('layout')
+    if (editorReady.value && view.value === 'layout') selectView('layout')
   },
   { immediate: true, flush: 'post' },
 )
@@ -474,7 +476,10 @@ onBeforeUnmount(() => {
           :style="previewCssVariables"
           :class="[
             'article-panel__document',
-            { 'article-panel__document--with-marker': hasHeadingMarker },
+            {
+              'article-panel__document--with-marker': hasHeadingMarker,
+              'article-panel__document--with-fixed': hasFixedContent,
+            },
           ]"
         >
           <header class="article-panel__heading">
@@ -493,7 +498,33 @@ onBeforeUnmount(() => {
               @update:model-value="markDirty"
             />
           </header>
+          <div
+            v-if="fixedContent.loading.value || fixedContent.error.value"
+            class="article-panel__fixed-state"
+            role="status"
+          >
+            <q-spinner v-if="fixedContent.loading.value" color="primary" size="20px" />
+            <span>{{ fixedContent.error.value || '正在加载固定内容…' }}</span>
+            <q-btn
+              v-if="fixedContent.error.value"
+              flat
+              dense
+              color="primary"
+              label="重试"
+              @click="fixedContent.retry"
+            />
+          </div>
+          <ArticleFixedContent
+            v-if="fixedContent.beforeHtml.value"
+            :html="fixedContent.beforeHtml.value"
+            label="正文固定开头"
+          />
           <EditorContent :editor="editor" />
+          <ArticleFixedContent
+            v-if="fixedContent.afterHtml.value"
+            :html="fixedContent.afterHtml.value"
+            label="正文固定结尾"
+          />
         </div>
       </div>
     </div>
@@ -665,6 +696,25 @@ onBeforeUnmount(() => {
     margin-bottom: min(var(--article-title-margin-bottom), #{space.$space-3});
     padding-bottom: min(var(--article-title-margin-bottom), #{space.$space-3});
     border-bottom: 1px solid var(--app-border-default);
+  }
+
+  &__document--with-fixed :deep(.tiptap-body) {
+    min-height: 0;
+  }
+
+  &__fixed-state {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: space.$space-2;
+    min-width: 0;
+    color: var(--app-text-secondary);
+    overflow-wrap: anywhere;
+
+    > span {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
   }
 
   &__title,
