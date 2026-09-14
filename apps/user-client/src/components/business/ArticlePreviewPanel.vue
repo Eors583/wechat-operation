@@ -487,6 +487,7 @@ onBeforeUnmount(() => {
               v-model="title"
               class="article-panel__title"
               type="textarea"
+              rows="1"
               autogrow
               borderless
               stack-label
