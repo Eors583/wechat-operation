@@ -239,12 +239,7 @@ const previewTemplatesQuery = useQuery({
   enabled: computed(() => articleVisible.value && Boolean(selectedArticle.value)),
 })
 const previewTemplates = computed<LayoutTemplate[]>(() =>
-  [
-    ...(selectedArticle.value?.layoutTemplate ? [selectedArticle.value.layoutTemplate] : []),
-    ...(previewTemplatesQuery.data.value?.items ?? []).filter(
-      (template) => template.id !== selectedArticle.value?.layoutTemplate?.id,
-    ),
-  ].filter(
+  (previewTemplatesQuery.data.value?.items ?? []).filter(
     (template) =>
       template.enabled &&
       Boolean(template.versionId) &&

@@ -525,7 +525,10 @@ const remove = async () => {
   selectedId.value = localTemplates.value[0]?.id ?? ''
   draftTemplateIds.delete(removedId)
   dirtyTemplateIds.delete(removedId)
-  if (!isDraft) emit('changed')
+  if (!isDraft) {
+    await queryClient.invalidateQueries({ queryKey: ['templates'] })
+    emit('changed')
+  }
 }
 </script>
 

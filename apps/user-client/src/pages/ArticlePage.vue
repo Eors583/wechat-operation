@@ -218,14 +218,7 @@ const templatesQuery = useInfiniteQuery({
   enabled: computed(() => Boolean(selectedAccountId.value)),
 })
 const templates = computed(() =>
-  [
-    ...new Map(
-      [
-        ...(templatesQuery.data.value?.pages.flatMap((page) => page.items) ?? []),
-        ...(article.value?.layoutTemplate ? [article.value.layoutTemplate] : []),
-      ].map((template) => [template.id, template]),
-    ).values(),
-  ].filter(
+  (templatesQuery.data.value?.pages.flatMap((page) => page.items) ?? []).filter(
     (template) =>
       template.enabled &&
       (template.accountId === selectedAccountId.value ||
