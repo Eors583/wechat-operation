@@ -223,6 +223,26 @@ const updateComponentGroups = (groups: LayoutComponentGroup[]) => {
   selectedTemplate.value.componentGroups = groups
   markDirty()
 }
+const imageMarkers = computed(() => (selectedTemplate.value?.componentGroups ?? [])
+  .filter(group => group.kind === 'decorated_heading')
+  .map(group => {
+    const html = (selectedTemplate.value?.contentBlocks ?? [])
+      .filter(block => group.blockIds.includes(block.id)).map(block => block.html).join('')
+    const url = new DOMParser().parseFromString(html, 'text/html').querySelector('img')?.getAttribute('src') ?? ''
+    return { group, url }
+  }).sort((a, b) => (a.group.sequence ?? 0) - (b.group.sequence ?? 0)))
+const markerMode = computed(() => imageMarkers.value.some(item => item.group.enabled)
+  ? 'image' : selectedTemplate.value?.styles.heading_marker.enabled ? 'text' : 'none')
+const setMarkerMode = (mode: string) => {
+  if (!selectedTemplate.value || saving.value) return
+  selectedTemplate.value.styles.heading_marker.enabled = mode === 'text'
+  updateComponentGroups((selectedTemplate.value.componentGroups ?? []).map(group => group.kind === 'decorated_heading'
+    ? { ...group, enabled: mode === 'image', confirmed: mode === 'image' || group.confirmed } : group))
+  markStyleDirty()
+}
+const updateImageMarker = (id: string, patch: Partial<LayoutComponentGroup>) => {
+  updateComponentGroups((selectedTemplate.value?.componentGroups ?? []).map(group => group.id === id ? { ...group, ...patch } : group))
+}
 const addComponentGroup = () => {
   const groups = selectedTemplate.value?.componentGroups ?? []
   if (!selectedBlockIds.value.length || selectedBlockIds.value.length > 100 || groups.length >= 100) return
@@ -752,13 +772,26 @@ const remove = async (target: LayoutTemplate) => {
               label="使用重点文字样式"
               @update:model-value="setStyle('enabled', Boolean($event))"
             />
-            <q-toggle
+            <q-select
               v-if="activeModule === 'heading_marker'"
-              :model-value="activeStyle.enabled ?? false"
-              color="primary"
-              label="显示标题前序号标识"
-              @update:model-value="setStyle('enabled', Boolean($event))"
+              :model-value="markerMode"
+              label="序号类型"
+              outlined dense emit-value map-options
+              :options="[{ label: '不显示', value: 'none' }, { label: '文字序号', value: 'text' }, { label: '图片序号', value: 'image', disable: !imageMarkers.length }]"
+              @update:model-value="setMarkerMode"
             />
+            <template v-if="activeModule === 'heading_marker' && markerMode === 'image'">
+              <section v-for="item in imageMarkers" :key="item.group.id" class="template-editor__image-marker">
+                <img :src="item.url" :alt="`第 ${item.group.sequence ?? '?'} 章序号图片`" referrerpolicy="no-referrer" :style="{ width: `${item.group.imageWidth}px` }" />
+                <q-input :model-value="item.group.sequence" label="对应章节" type="number" min="1" max="100" outlined dense @update:model-value="updateImageMarker(item.group.id, { sequence: Number($event) })" />
+                <q-input :model-value="item.url" label="已保存的原图地址" readonly outlined dense />
+                <q-input :model-value="item.group.imageWidth" label="图片宽度（px）" type="number" min="24" max="680" outlined dense @update:model-value="updateImageMarker(item.group.id, { imageWidth: Number($event) })" />
+                <q-select :model-value="item.group.containerStyle.align || 'left'" label="对齐" :options="['left', 'center', 'right']" outlined dense @update:model-value="updateImageMarker(item.group.id, { containerStyle: { ...item.group.containerStyle, align: $event } })" />
+                <q-input :model-value="item.group.containerStyle.marginTop ?? 0" label="上间距" type="number" min="0" max="72" outlined dense @update:model-value="updateImageMarker(item.group.id, { containerStyle: { ...item.group.containerStyle, marginTop: Number($event) } })" />
+                <q-input :model-value="item.group.containerStyle.marginBottom ?? 8" label="下间距" type="number" min="0" max="72" outlined dense @update:model-value="updateImageMarker(item.group.id, { containerStyle: { ...item.group.containerStyle, marginBottom: Number($event) } })" />
+              </section>
+            </template>
+            <template v-else>
             <label v-if="activeModule !== 'emphasis'"
               >字号<q-slider
                 :model-value="activeStyle.fontSize"
@@ -875,6 +908,7 @@ const remove = async (target: LayoutTemplate) => {
                 @update:model-value="setStyle('borderAll', $event)"
               />
             </template>
+            </template>
           </template>
         </section>
 
@@ -947,8 +981,11 @@ const remove = async (target: LayoutTemplate) => {
               <p :style="moduleStyle('lead')">
                 {{ previewCopy.lead }}
               </p>
+              <div v-if="markerMode === 'image' && imageMarkers[0]" :style="{ textAlign: imageMarkers[0].group.containerStyle.align || 'left', marginTop: `${imageMarkers[0].group.containerStyle.marginTop ?? 0}px`, marginBottom: `${imageMarkers[0].group.containerStyle.marginBottom ?? 8}px` }">
+                <img :src="imageMarkers[0].url" alt="章节序号图片预览" referrerpolicy="no-referrer" :style="{ width: `${imageMarkers[0].group.imageWidth}px`, maxWidth: '100%', height: 'auto' }" />
+              </div>
               <p
-                v-if="selectedTemplate?.styles.heading_marker.enabled"
+                v-else-if="selectedTemplate?.styles.heading_marker.enabled"
                 class="template-editor__marker"
                 :style="moduleStyle('heading_marker')"
               >
@@ -1052,6 +1089,7 @@ const remove = async (target: LayoutTemplate) => {
 </template>
 
 <style scoped lang="scss">
+@use '@/styles/tokens' as space;
 .template-editor__table-wrap {
   min-width: 0;
   max-width: 100%;
@@ -1256,6 +1294,17 @@ const remove = async (target: LayoutTemplate) => {
     color: var(--app-text-secondary);
     overflow-wrap: anywhere;
     font-size: 12px;
+  }
+  &__image-marker {
+    display: flex;
+    flex-direction: column;
+    gap: space.$space-3;
+    min-width: 0;
+    max-width: 100%;
+    padding-block: space.$space-3;
+    border-bottom: 1px solid var(--app-border-default);
+    img { max-width: 100%; height: auto; }
+    .q-field { min-width: 0; max-width: 100%; }
   }
 
   &__sample {

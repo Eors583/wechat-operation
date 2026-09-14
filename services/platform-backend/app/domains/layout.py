@@ -477,6 +477,15 @@ def apply_visual_markers(
         )
     if len(groups) > 100:
         raise ValueError("Too many layout component groups")
+    decorations = [group for group in groups if group["kind"] == "decorated_heading"]
+    sequences = sorted(group["sequence"] for group in decorations)
+    if decorations and sequences == list(range(1, len(decorations) + 1)) and all(
+        group["confidence"] >= 0.9 for group in decorations
+    ):
+        ids = [key for group in decorations for key in group["block_ids"]]
+        if len(ids) == len(set(ids)):
+            for group in decorations:
+                group.update(confirmed=True, enabled=True)
     for index, group in enumerate(groups, 1):
         group["id"] = f"group-{index}"
     snapshot["component_groups"] = groups
