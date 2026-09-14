@@ -833,7 +833,7 @@ const remove = async (target: LayoutTemplate) => {
             class="template-editor__preview-tabs"
           >
             <q-tab name="source" label="完整原文与固定部分" />
-            <q-tab name="styles" label="排版样式预览" />
+            <q-tab name="styles" label="正文排版样式预览" />
           </q-tabs>
           <template v-if="previewMode === 'source'">
             <div v-if="sourceBlocks.length" class="template-editor__source">
@@ -867,7 +867,7 @@ const remove = async (target: LayoutTemplate) => {
                 >此模板尚无完整原文，请用上方原链接重新提取。已有排版样式仍可编辑。</template
               >
               <template v-else
-                >提取文章后可预览全文并锁定一个或多个部分；也可切换到排版样式预览。</template
+                >提取文章后可预览全文并锁定一个或多个部分；也可切换到正文排版样式预览。</template
               >
             </q-banner>
           </template>
