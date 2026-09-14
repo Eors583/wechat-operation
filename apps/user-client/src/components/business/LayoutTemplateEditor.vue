@@ -605,20 +605,6 @@ const remove = async (target: LayoutTemplate) => {
             full-width
             @click="addTemplate"
           />
-          <AppButton
-            v-if="selectedTemplate"
-            variant="outline"
-            :label="selectedTemplate.isDefault ? '默认模板' : '设为默认模板'"
-            full-width
-            :loading="saving"
-            :disabled="
-              selectedTemplate.isDefault ||
-              !account ||
-              !selectedTemplate.name.trim() ||
-              (!selectedTemplate.versionId && !draftTemplateIds.has(selectedTemplate.id))
-            "
-            @click="save(true)"
-          />
           <div class="template-editor__list">
             <div
               v-for="template in localTemplates"
@@ -644,6 +630,25 @@ const remove = async (target: LayoutTemplate) => {
               >
                 <q-menu>
                   <q-list>
+                    <q-item
+                      clickable
+                      v-close-popup
+                      :disable="
+                        saving ||
+                        template.isDefault ||
+                        !account ||
+                        !template.name.trim() ||
+                        (!template.versionId && !draftTemplateIds.has(template.id))
+                      "
+                      @click="
+                        selectedId = template.id
+                        save(true)
+                      "
+                    >
+                      <q-item-section>{{
+                        template.isDefault ? '默认模板' : '设为默认模板'
+                      }}</q-item-section>
+                    </q-item>
                     <q-item clickable v-close-popup @click="rename(template)">
                       <q-item-section>重命名</q-item-section>
                     </q-item>
