@@ -18,6 +18,14 @@ from app.domains.account_profile_context import (
     ACCOUNT_PROFILE_INSTRUCTIONS,
     freeze_account_profile,
 )
+from app.domains.account_style import (
+    STYLE_REVIEW_PROMPT,
+    STYLE_VERSION,
+    StyleReview,
+    document_paragraphs,
+    metric_deviations,
+    prose_metrics,
+)
 from app.domains.context_selection import (
     clean_delivery_blocks,
     context_weights,
@@ -2592,6 +2600,8 @@ async def process_ai_run(
         )
     await stage("validating_output")
     rewrite_history: list[dict[str, Any]] = []
+    style_reviews: list[dict[str, Any]] = []
+    style_rewrites = 0
     for rewrite_no in range(4):
         await ensure_not_cancelled()
         feedback: list[dict[str, Any]] = []
@@ -2683,6 +2693,110 @@ async def process_ai_run(
                         details={"reason": reason},
                     )
                 )
+            learned_style = model_context.get("untrusted_account_profile") or {}
+            if (
+                not feedback
+                and run.run_type == "article_generation"
+                and local_target is None
+                and not deterministic
+                and learned_style.get("prompt_version") == STYLE_VERSION
+                and learned_style.get("profile")
+                and any(
+                    dimension.get("consistency") == "stable"
+                    and dimension.get("core_supporting_article_count", 0) >= 5
+                    for dimension in learned_style["profile"].values()
+                )
+            ):
+                paragraphs = document_paragraphs(canonical_output)
+                metrics = prose_metrics(paragraphs)
+                deviations = metric_deviations(metrics, learned_style.get("style_metrics", {}))
+
+                def parse_style_review(
+                    reply: ModelResult,
+                    learned: dict[str, Any] = learned_style,
+                    draft: list[dict[str, str]] = paragraphs,
+                ) -> StyleReview:
+                    try:
+                        raw = reply.text.strip()
+                        if raw.startswith("```") and raw.endswith("```"):
+                            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                        data = (
+                            reply.structured
+                            if "violations" in reply.structured
+                            else json.loads(raw)
+                        )
+                        review = StyleReview.model_validate(data)
+                        for issue in review.violations:
+                            dimension = learned["profile"].get(issue.dimension, {})
+                            if (
+                                dimension.get("consistency") != "stable"
+                                or dimension.get("confidence") == "low"
+                                or dimension.get("core_supporting_article_count", 0) < 5
+                                or issue.evidence_article_id
+                                not in dimension.get("evidence_article_ids", [])
+                                or not any(issue.draft_excerpt in p["text"] for p in draft)
+                            ):
+                                raise ValueError("风格偏差缺少稳定画像或新稿原句依据")
+                        return review
+                    except (ValueError, TypeError) as error:
+                        raise ModelContractViolation(
+                            "风格检查缺少可核对依据。", code="ACCOUNT_STYLE_REVIEW_INVALID"
+                        ) from error
+
+                try:
+                    checked = await execute_model_call(
+                        purpose="article_planning",
+                        prompt=STYLE_REVIEW_PROMPT
+                        + "JSON Schema："
+                        + json.dumps(StyleReview.model_json_schema(), ensure_ascii=False),
+                        context={
+                            **model_context,
+                            "draft_article": {"paragraphs": paragraphs, "metrics": metrics},
+                            "style_metric_deviations": deviations,
+                        },
+                        snapshot=run.model_route_snapshot,
+                        result_validator=lambda reply: parse_style_review(reply),
+                    )
+                    review = parse_style_review(checked)
+                    style_reviews.append(
+                        {
+                            "attempt": rewrite_no,
+                            "metrics": metrics,
+                            "deviations": deviations,
+                            **review.model_dump(),
+                            "action": "rewrite"
+                            if review.violations and style_rewrites < 2 and rewrite_no < 3
+                            else "advisory"
+                            if review.violations
+                            else "accepted",
+                        }
+                    )
+                    if review.violations and style_rewrites < 2 and rewrite_no < 3:
+                        style_rewrites += 1
+                        reject(
+                            ApiError(
+                                422,
+                                "ACCOUNT_STYLE_DEVIATION",
+                                "请按这些有证据的风格偏差重写，保留本轮要求、事实与完整结构；"
+                                "数值范围仅作参考，不强凑比例，不复制历史原句或虚构个人经历。",
+                                details=review.model_dump(),
+                            )
+                        )
+                except (ApiError, ModelRouteExhausted, ModelContractViolation) as error:
+                    if isinstance(error, ApiError) and error.code == "AI_RUN_CANCELLED":
+                        raise
+                    # A failed stylistic opinion must not turn a valid article into a user error.
+                    style_reviews.append(
+                        {
+                            "attempt": rewrite_no,
+                            "action": "unavailable",
+                            "error_type": type(error).__name__,
+                        }
+                    )
+                run.context_snapshot = {
+                    **run.context_snapshot,
+                    "account_style_reviews": style_reviews,
+                }
         except ApiError as error:
             if error.code not in {
                 "ARTICLE_CONTENT_INVALID",
