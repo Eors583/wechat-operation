@@ -2966,7 +2966,8 @@ async def process_ai_run(
                         if part
                     ),
                 )
-            allowed, reason = await safety.check_text(
+            # Authorized document transcripts are source data, not generated content.
+            allowed, reason = (True, None) if transcript_sources else await safety.check_text(
                 candidate.text + ("\n" + "\n".join(title_candidates) if title_candidates else "")
             )
             if not allowed:
