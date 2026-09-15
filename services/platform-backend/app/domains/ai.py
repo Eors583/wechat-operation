@@ -640,7 +640,10 @@ def classify_run_type(
         normalized,
     ):
         return "article_generation"
-    if re.search(r"(?:给我|生成|提供|想|列出|再来).{0,8}(?:标题|题目)", normalized):
+    if re.search(
+        r"(?:给我|生成|提供|想|列出|再来|起|拟).{0,8}(?:标题|题目)"
+        r"|(?:标题|题目).{0,8}(?:评分|打分|备选)", normalized,
+    ):
         return "titles"
     if re.search(r"(?:提纲|大纲|文章结构|内容结构)", normalized):
         return "outline"
@@ -651,11 +654,12 @@ def classify_run_type(
         has_reference_material or has_reference_links or bool(extract_message_links(text))
     )
     reference_rewrite = has_material and bool(
-        re.search(r"改写|重写|润色|扩写|缩写", normalized)
+        re.search(r"改写|重写|润色|扩写|缩写|去\s*AI\s*味|去痕", normalized, re.IGNORECASE)
     )
     revision = has_current_article and bool(
         re.search(
             r"修改|改写|重写|润色|调整|删除|删掉|去掉|移除|替换|精简|扩写|缩写|优化|换个开头|改成|改为"
+            r"|去\s*[Aa][Ii]\s*味|去痕"
             r"|(?:标题|开头|结尾).{0,12}(?:改|换)"
             r"|(?:开头|结尾|这段|第.{0,4}(?:部分|段)).{0,16}(?:不要|别|改|直接|增加|删除)"
             r"|(?:这篇|这个|当前)?文章.{0,24}(?:不要|不能|缺少|没有|全是|都是)"
@@ -2468,6 +2472,16 @@ async def process_ai_run(
     grounding = None
     completed_action_metadata = None
     await emit("intent.detected", {"effective_run_type": run.run_type, **intent})
+    if deterministic and run.model_route_snapshot.get("provider_mode") != "internal":
+        await execute_model_call(
+            purpose="fast_task",
+            prompt=expert_prompt(expert) + (
+                "\n本轮属于平台确定性操作或原文提取，判断请求意图即可；"
+                "操作和原文由平台交付，不改写原文，不执行任何外部写入。只给一句意图描述。"
+            ),
+            context={"untrusted_user_input": user_input, "intent_decision": intent},
+            snapshot=run.model_route_snapshot,
+        )
     if deterministic:
         await stage("generating" if transcript_sources else "clarifying")
     else:
@@ -3177,6 +3191,78 @@ async def process_ai_run(
                 }
                 break
             raise OutputRewriteFailed(rewrite_history, execution_attempts) from error
+    if run.run_type == "article_generation" and local_target is None and not deterministic:
+        await stage("generating")
+        editorial_context = auxiliary_model_context({
+            **model_context, "draft_article": canonical_output,
+        })
+        titles_result = await execute_model_call(
+            purpose="article_planning",
+            prompt=expert_prompt(expert, "titles") + "\n" + TITLE_CONTRACT,
+            context=editorial_context,
+            snapshot=pipeline_route("article_planning"),
+        )
+        titles = parse_response(titles_result, TitleResponse)
+        validate_titles(titles)
+        expert_records["titles"] = titles.model_dump()
+        editorial_context["title_candidates"] = titles.model_dump()
+        polished = await execute_model_call(
+            purpose="article_revision",
+            prompt=expert_prompt(expert, "humanize") + "\n" + article_output_contract() + (
+                "\n对 draft_article 完成去AI味润色，保留完整事实、数字、引用、限制条件和文章结构。"
+                "按 writing_dna 保持文风，不编造第一人称经历，不抽掉专业知识，不为了短句压缩内容。"
+                "默认采用推荐标题；用户明确指定或要求保留标题时服从用户。只改正文的要求保留原标题。"
+                "返回完整文章，不附评分、分析或修改报告。"
+            ),
+            context=editorial_context,
+            snapshot=pipeline_route("article_revision"),
+        )
+        canonical_output = generated_article_content(polished.structured)
+        result = polished
+        title_candidates = [item.title for item in titles.candidates]
+        audits = []
+        for edit_round in range(3):
+            audit = draft_audit(canonical_output, user_input)
+            audits.append(audit)
+            if audit["passed"]:
+                break
+            if edit_round == 2:
+                raise ApiError(
+                    422, "EXPERT_STYLE_REVIEW_FAILED",
+                    "文章润色后仍未通过文风检查，本轮未保存文章。",
+                )
+            revised = await execute_model_call(
+                purpose="article_revision",
+                prompt=expert_prompt(expert, "humanize") + "\n" + article_output_contract() + (
+                    "\n只修正文风检查指出的问题，保留其他段落、事实、引文和信息量。"
+                    "返回完整文章。检查中的long_paragraphs仅为建议，不得为缩短段落删除事实。"
+                ),
+                context=auxiliary_model_context({
+                    **model_context, "draft_article": canonical_output, "style_audit": audit,
+                }),
+                snapshot=pipeline_route("article_revision"),
+            )
+            canonical_output = generated_article_content(revised.structured)
+            validate_article_completeness(canonical_output, model_context)
+            validate_publish_ready_article(canonical_output, model_context)
+            result = revised
+        expert_records["style_audits"] = audits
+        canonical_output = clean_delivery_blocks(canonical_output, user_input)
+        canonical_output = strip_unrequested_article_byline(canonical_output, model_context)
+        if model_context.get("layout_heading_numbers"):
+            canonical_output = without_heading_numbers(canonical_output)
+        enforce_article_body_boundary(canonical_output, title_candidates)
+        validate_article_completeness(canonical_output, model_context)
+        validate_publish_ready_article(canonical_output, model_context)
+        grounding = source_findings(canonical_output, model_context)
+        result = dataclass_replace(
+            result, structured=canonical_output, text=extract_plain_text(canonical_output),
+        )
+        allowed, reason = await safety.check_text(result.text)
+        if not allowed:
+            raise ApiError(422, "CONTENT_SAFETY_BLOCKED", "润色结果未通过安全检查。")
+        expert_records["article_plan"] = model_context.get("article_plan")
+        run.context_snapshot = {**run.context_snapshot, "wechat_expert_results": expert_records}
     if grounding_facts:
         reports = []
         for review_round in range(2):
