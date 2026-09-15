@@ -3367,6 +3367,7 @@ export const remoteApi: UserApi = {
       enabled: true,
       isDefault: makeDefault,
       styleTokens: stylesToTokens(template.styles),
+      componentGroups: template.componentGroups ?? [],
     }
     const payload = creating
       ? ({ ...shared, officialAccountId: template.accountId } satisfies LayoutTemplateCreateDto)

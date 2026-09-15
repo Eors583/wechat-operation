@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { api } from '@/api/client'
+import { platform } from '@/platform'
 import { queryClient } from '@/boot/query'
 import { createDefaultStyles } from '@/api/styleDefaults'
 import type { LayoutComponentGroup, LayoutTemplate, ModuleKey, ModuleStyle, OfficialAccount } from '@/api/types'
@@ -229,7 +230,7 @@ const imageMarkers = computed(() => (selectedTemplate.value?.componentGroups ?? 
     const html = (selectedTemplate.value?.contentBlocks ?? [])
       .filter(block => group.blockIds.includes(block.id)).map(block => block.html).join('')
     const url = new DOMParser().parseFromString(html, 'text/html').querySelector('img')?.getAttribute('src') ?? ''
-    return { group, url }
+    return { group, url: group.imageDocumentId ? markerUrls.value[group.imageDocumentId] ?? '' : url }
   }).sort((a, b) => (a.group.sequence ?? 0) - (b.group.sequence ?? 0)))
 const markerMode = computed(() => imageMarkers.value.some(item => item.group.enabled)
   ? 'image' : selectedTemplate.value?.styles.heading_marker.enabled ? 'text' : 'none')
@@ -243,6 +244,72 @@ const setMarkerMode = (mode: string) => {
 const updateImageMarker = (id: string, patch: Partial<LayoutComponentGroup>) => {
   updateComponentGroups((selectedTemplate.value?.componentGroups ?? []).map(group => group.id === id ? { ...group, ...patch } : group))
 }
+const markerUrls = ref<Record<string, string>>({})
+const loadingMarkerIds = new Set<string>()
+const uploadingMarker = ref(false)
+const newMarkerSequence = ref(1)
+let markerEditorDisposed = false
+watch(() => selectedTemplate.value?.componentGroups?.map(group => group.imageDocumentId).filter(Boolean), (ids) => {
+  for (const id of ids ?? []) {
+    if (!id || markerUrls.value[id] || loadingMarkerIds.has(id)) continue
+    loadingMarkerIds.add(id)
+    void api.downloadDocument(id).then(blob => {
+      if (markerEditorDisposed) return
+      if (!['image/png', 'image/jpeg'].includes(blob.type) || blob.size >= 1_000_000) throw new Error('序号图片格式无效，请重新上传。')
+      markerUrls.value[id] = URL.createObjectURL(blob)
+    }).catch(error => {
+      if (!markerEditorDisposed) $q.notify({ type: 'negative', message: error instanceof Error ? error.message : '序号图片加载失败。' })
+    })
+  }
+}, { immediate: true })
+onBeforeUnmount(() => {
+  markerEditorDisposed = true
+  Object.values(markerUrls.value).forEach(url => URL.revokeObjectURL(url))
+})
+const uploadMarker = async (existing?: LayoutComponentGroup) => {
+  const target = selectedTemplate.value
+  if (!target || saving.value || uploadingMarker.value) return
+  const sequence = existing?.sequence ?? Number(newMarkerSequence.value)
+  const groups = target.componentGroups ?? []
+  if (!sequence || !Number.isInteger(sequence) || sequence < 1 || sequence > 100
+    || groups.some(group => group.kind === 'decorated_heading' && group.id !== existing?.id && group.sequence === sequence)) {
+    $q.notify({ type: 'negative', message: '请填写 1—100 之间且不重复的章节编号。' })
+    return
+  }
+  if (!existing && groups.length >= 100) return
+  uploadingMarker.value = true
+  try {
+    const [file] = await platform.pickFiles('.png,.jpg,.jpeg')
+    if (!file) return
+    if (!['image/png', 'image/jpeg'].includes(file.type) || file.size === 0 || file.size >= 1_000_000) throw new Error('请选择小于 1 MB 的 PNG 或 JPG 图片。')
+    const attachment = await api.uploadFile(file, { saveToLibrary: false, waitForReady: false })
+    if (markerEditorDisposed || selectedTemplate.value !== target) return
+    if (!attachment.documentId) throw new Error('上传未完成，请重试。')
+    const current = target.componentGroups ?? []
+    if (current.some(group => group.kind === 'decorated_heading' && group.id !== existing?.id && group.sequence === sequence)) throw new Error('该章节已配置图片，请选择替换图片。')
+    let index = 1
+    while (current.some(group => group.id === `group-${index}`)) index += 1
+    const marker: LayoutComponentGroup = {
+      id: existing?.id ?? `group-${index}`, kind: 'decorated_heading', blockIds: [],
+      confirmed: true, enabled: true, confidence: 1,
+      containerStyle: {}, textStyle: {}, labelStyle: {}, fields: [], imageWidth: 120,
+      fallbackRender: 'error', paddingSides: null,
+      ...existing, sequence, imageDocumentId: attachment.documentId,
+    }
+    const oldUrl = markerUrls.value[attachment.documentId]
+    if (oldUrl) URL.revokeObjectURL(oldUrl)
+    markerUrls.value[attachment.documentId] = URL.createObjectURL(file)
+    updateComponentGroups(existing ? current.map(group => group.id === existing.id ? marker : group) : [...current, marker])
+    setMarkerMode('image')
+    const used = new Set(imageMarkers.value.map(item => item.group.sequence))
+    newMarkerSequence.value = Array.from({ length: 100 }, (_, position) => position + 1).find(value => !used.has(value)) ?? 100
+    $q.notify({ type: 'positive', message: `已对应第 ${sequence} 章，请保存模板。` })
+  } catch (error) {
+    $q.notify({ type: 'negative', message: error instanceof Error ? error.message : '序号图片上传失败。' })
+  } finally {
+    uploadingMarker.value = false
+  }
+}
 const addComponentGroup = () => {
   const groups = selectedTemplate.value?.componentGroups ?? []
   if (!selectedBlockIds.value.length || selectedBlockIds.value.length > 100 || groups.length >= 100) return
@@ -251,7 +318,7 @@ const addComponentGroup = () => {
   updateComponentGroups([...groups, {
     id: `group-${index}`, kind: 'lead_card', blockIds: [...selectedBlockIds.value],
     confirmed: false, enabled: false, confidence: 0,
-    containerStyle: {}, textStyle: {}, labelStyle: {}, fields: [], imageWidth: 120, sequence: null,
+    containerStyle: {}, textStyle: {}, labelStyle: {}, fields: [], imageWidth: 120, sequence: null, imageDocumentId: null, fallbackRender: 'error', paddingSides: null,
   }])
 }
 const markStyleDirty = () => {
@@ -413,6 +480,7 @@ const addTemplate = () => {
     template.sourcePreview = []
     template.sourceTitle = ''
     template.contentBlocks = []
+    template.componentGroups = []
     template.lockedBlocks = []
     template.versionNo = undefined
     template.versionId = undefined
@@ -451,6 +519,7 @@ const extract = async () => {
 }
 
 const save = async (makeDefault = false) => {
+  if (uploadingMarker.value) return
   const target = selectedTemplate.value
   if (!target) return
   await nameSaves.get(target.id)
@@ -772,6 +841,10 @@ const remove = async (target: LayoutTemplate) => {
               label="使用重点文字样式"
               @update:model-value="setStyle('enabled', Boolean($event))"
             />
+            <div v-if="activeModule === 'heading_marker'" class="template-editor__image-marker">
+              <q-input v-model.number="newMarkerSequence" label="新图片对应第几章" type="number" min="1" max="100" outlined dense :disable="uploadingMarker || saving" />
+              <q-btn outline color="primary" label="上传序号图片" icon="upload" :loading="uploadingMarker" :disable="saving || (selectedTemplate?.componentGroups?.length ?? 0) >= 100" @click="uploadMarker()" />
+            </div>
             <q-select
               v-if="activeModule === 'heading_marker'"
               :model-value="markerMode"
@@ -781,10 +854,21 @@ const remove = async (target: LayoutTemplate) => {
               @update:model-value="setMarkerMode"
             />
             <template v-if="activeModule === 'heading_marker' && markerMode === 'image'">
+              <q-select
+                :model-value="imageMarkers.every(item => item.group.fallbackRender === 'text_index') ? 'text_index' : 'error'"
+                label="缺少序号图片时" outlined dense emit-value map-options
+                :disable="saving || uploadingMarker"
+                :options="[{ label: '提示补齐图片', value: 'error' }, { label: '使用实际章节的文字序号', value: 'text_index' }]"
+                @update:model-value="updateComponentGroups((selectedTemplate?.componentGroups ?? []).map(group => group.kind === 'decorated_heading' ? { ...group, fallbackRender: $event } : group))"
+              />
               <section v-for="item in imageMarkers" :key="item.group.id" class="template-editor__image-marker">
-                <img :src="item.url" :alt="`第 ${item.group.sequence ?? '?'} 章序号图片`" referrerpolicy="no-referrer" :style="{ width: `${item.group.imageWidth}px` }" />
+                <img v-if="item.url" :src="item.url" :alt="`第 ${item.group.sequence ?? '?'} 章序号图片`" referrerpolicy="no-referrer" :style="{ width: `${item.group.imageWidth}px` }" />
                 <q-input :model-value="item.group.sequence" label="对应章节" type="number" min="1" max="100" outlined dense @update:model-value="updateImageMarker(item.group.id, { sequence: Number($event) })" />
-                <q-input :model-value="item.url" label="已保存的原图地址" readonly outlined dense />
+                <q-input v-if="!item.group.imageDocumentId" :model-value="item.url" label="已保存的原图地址" readonly outlined dense />
+                <div class="template-editor__marker-actions">
+                  <q-btn outline color="primary" label="替换图片" :loading="uploadingMarker" :disable="saving" @click="uploadMarker(item.group)" />
+                  <q-btn flat color="negative" label="移除映射" :disable="saving || uploadingMarker" @click="updateComponentGroups((selectedTemplate?.componentGroups ?? []).filter(group => group.id !== item.group.id))" />
+                </div>
                 <q-input :model-value="item.group.imageWidth" label="图片宽度（px）" type="number" min="24" max="680" outlined dense @update:model-value="updateImageMarker(item.group.id, { imageWidth: Number($event) })" />
                 <q-select :model-value="item.group.containerStyle.align || 'left'" label="对齐" :options="['left', 'center', 'right']" outlined dense @update:model-value="updateImageMarker(item.group.id, { containerStyle: { ...item.group.containerStyle, align: $event } })" />
                 <q-input :model-value="item.group.containerStyle.marginTop ?? 0" label="上间距" type="number" min="0" max="72" outlined dense @update:model-value="updateImageMarker(item.group.id, { containerStyle: { ...item.group.containerStyle, marginTop: Number($event) } })" />
@@ -1305,6 +1389,13 @@ const remove = async (target: LayoutTemplate) => {
     border-bottom: 1px solid var(--app-border-default);
     img { max-width: 100%; height: auto; }
     .q-field { min-width: 0; max-width: 100%; }
+  }
+  &__marker-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: space.$space-2;
+    min-width: 0;
+    > * { min-width: 0; max-width: 100%; }
   }
 
   &__sample {

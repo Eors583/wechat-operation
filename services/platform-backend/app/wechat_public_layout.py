@@ -142,6 +142,41 @@ class WeChatPublicLayoutExtractionProvider:
             extractor_version="wechat-public-dom-v3",
         )
 
+    async def fetch_marker_image(self, source: str) -> tuple[str, bytes]:
+        """Fetch only WeChat's fixed image CDN; never follow arbitrary redirects."""
+        parsed = urlparse(source)
+        if (
+            parsed.scheme not in {"https", "http"}
+            or parsed.hostname != "mmbiz.qpic.cn"
+            or parsed.username
+            or parsed.password
+            or parsed.port not in {None, 80, 443}
+        ):
+            raise ProviderUnavailable("章节图片地址不受支持，请上传图片替换。")
+        secure_source = parsed._replace(
+            scheme="https", netloc="mmbiz.qpic.cn", fragment=""
+        ).geturl()
+        try:
+            async with httpx.AsyncClient(
+                headers={**_BROWSER_HEADERS, "Accept": "image/png,image/jpeg"},
+                timeout=8.0,
+                follow_redirects=False,
+                transport=self._transport,
+            ) as client:
+                async with client.stream("GET", secure_source) as response:
+                    response.raise_for_status()
+                    mime = response.headers.get("content-type", "").split(";", 1)[0].strip()
+                    if mime not in {"image/png", "image/jpeg"}:
+                        raise ProviderUnavailable("章节图片须为 PNG 或 JPG。")
+                    content = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        content.extend(chunk)
+                        if len(content) >= 1_000_000:
+                            raise ProviderUnavailable("章节图片超过 1 MB，请上传压缩后的图片。")
+            return mime, bytes(content)
+        except httpx.HTTPError as exc:
+            raise ProviderUnavailable("章节原图暂不可读取，请上传图片替换。") from exc
+
     async def fetch_reference(self, *, source_url: str) -> WebReferenceContent:
         """Fetch real WeChat article text with the same guarded browser profile as layout import."""
 
@@ -186,9 +221,10 @@ class WeChatPublicLayoutExtractionProvider:
             parser.content_blocks = extract_content_blocks(page)
         except Exception as exc:
             raise ProviderUnavailable("微信公众号文章 HTML 解析失败") from exc
-        if len(parser.content_blocks) > 10_000 or sum(
-            len(block["html"]) for block in parser.content_blocks
-        ) > _MAX_HTML_CHARS:
+        if (
+            len(parser.content_blocks) > 10_000
+            or sum(len(block["html"]) for block in parser.content_blocks) > _MAX_HTML_CHARS
+        ):
             raise ProviderUnavailable("微信公众号完整文章内容过大，无法提取为模板。")
         samples = parser.samples
         text_samples = [sample.text for sample in samples if sample.text]
@@ -258,9 +294,7 @@ class WeChatPublicLayoutExtractionProvider:
                         if size > _MAX_HTML_CHARS:
                             raise ProviderUnavailable(f"{api.name} 返回的文章页面过大")
                         chunks.append(chunk)
-                    text = b"".join(chunks).decode(
-                        response.encoding or "utf-8", errors="replace"
-                    )
+                    text = b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
         except httpx.HTTPError as exc:
             raise ProviderUnavailable(f"{api.name} 暂时不可用") from exc
         _validate_article_html(text, provider_name=api.name)
@@ -510,9 +544,13 @@ def _style_tokens(samples: list[_Sample]) -> dict[str, Any]:
     tokens["divider"] = {"color": "#d1d5db", "margin_top": 16, "margin_bottom": 16}
     body_color = _weighted(body, lambda sample: _color(sample.style.get("color", "")))
     emphasized = [
-        sample for sample in samples
-        if sample.tag in {"p", "div", "section"} and len(sample.text) >= 2
-        and sample not in headings and sample not in quotes and sample not in captions
+        sample
+        for sample in samples
+        if sample.tag in {"p", "div", "section"}
+        and len(sample.text) >= 2
+        and sample not in headings
+        and sample not in quotes
+        and sample not in captions
         and (
             (_font_weight(sample) or 400) >= 600
             or (
@@ -526,7 +564,8 @@ def _style_tokens(samples: list[_Sample]) -> dict[str, Any]:
             "enabled": True,
             "background": "#00000000",
             **{
-                key: value for key, value in _token_from_samples(emphasized).items()
+                key: value
+                for key, value in _token_from_samples(emphasized).items()
                 if key in {"color", "background", "font_weight"}
             },
         }

@@ -5,6 +5,7 @@ const props = defineProps<{ groups: LayoutComponentGroup[]; blocks: LayoutConten
 const emit = defineEmits<{ update: [groups: LayoutComponentGroup[]]; select: [ids: string[]]; add: [] }>()
 const kinds = [
   { label: '导语卡片', value: 'lead_card' },
+  { label: '引用卡片', value: 'quote_card' },
   { label: '署名信息组', value: 'credits' },
   { label: '装饰标题组', value: 'decorated_heading' },
   { label: '普通正文', value: 'body' },
@@ -28,7 +29,7 @@ const setField = (index: number, fieldIndex: number, key: 'label' | 'value', val
       <div v-if="!groups.length" class="component-groups__empty">未发现组合组件，可选中原文后添加。</div>
       <section v-for="(group, index) in groups" :key="group.id" class="component-groups__item">
         <div class="component-groups__row">
-          <q-select :model-value="group.kind" :options="kinds" emit-value map-options dense outlined label="组件类型" :disable="disabled" @update:model-value="update(index, { kind: $event, enabled: false, confirmed: false })" />
+          <q-select :model-value="group.kind" :options="kinds" emit-value map-options dense outlined label="组件类型" :disable="disabled || !!group.imageDocumentId" @update:model-value="update(index, { kind: $event, enabled: false, confirmed: false })" />
           <q-badge :color="group.confirmed ? 'positive' : 'warning'">{{ group.confirmed ? '已确认' : '待确认' }}</q-badge>
           <q-btn flat dense label="选择此组" :disable="disabled" @click="emit('select', group.blockIds)" />
           <q-btn flat round dense icon="close" aria-label="移除组件" :disable="disabled" @click="emit('update', groups.filter((_, position) => position !== index))" />
@@ -39,6 +40,10 @@ const setField = (index: number, fieldIndex: number, key: 'label' | 'value', val
           <q-toggle :model-value="group.enabled" label="用于排版" :disable="disabled || !group.confirmed || ['body', 'fixed'].includes(group.kind)" @update:model-value="update(index, { enabled: Boolean($event) })" />
         </div>
         <div v-if="group.kind === 'lead_card'" class="component-groups__empty">使用新文章首段，不复制原文导语。</div>
+        <div v-if="group.kind === 'quote_card'" class="component-groups__empty">应用到新文章的引用段落，不复制原文。</div>
+        <div v-if="group.paddingSides" class="component-groups__row">
+          <q-input v-for="(side, sideIndex) in ['上', '右', '下', '左']" :key="side" :model-value="group.paddingSides[sideIndex]" :label="`${side}内边距`" type="number" min="0" max="72" outlined dense :disable="disabled" @update:model-value="update(index, { paddingSides: group.paddingSides!.map((value, position) => position === sideIndex ? Number($event) : value) })" />
+        </div>
         <template v-if="group.kind === 'credits'">
           <div v-for="(field, fieldIndex) in group.fields" :key="fieldIndex" class="component-groups__row">
             <q-input :model-value="field.label" label="字段" outlined dense maxlength="40" :disable="disabled" @update:model-value="setField(index, fieldIndex, 'label', $event)" />

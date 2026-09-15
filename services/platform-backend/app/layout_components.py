@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -36,8 +37,58 @@ def layout_image_inputs(blocks: list[dict[str, str]]) -> list[dict[str, str]]:
 
 
 _CREDIT = re.compile(
-    r"^(文(?=\s|[丨|｜:：])|作者|记者|编辑|见习编辑|责任编辑|审核|头图来源|图片来源|来源)\s*[丨|｜:：]?\s*(.*)"
+    r"^(文|作者|记者|编辑|见习编辑|责任编辑|责编|审核|头图来源|图片来源|来源|图|排版)"
+    r"\s*[丨|｜:：]\s*(.{1,120})$"
 )
+
+
+def image_family_evidence(blocks: list[dict[str, str]]) -> dict[str, dict[str, Any]]:
+    evidence: dict[str, dict[str, Any]] = {}
+    for index, block in enumerate(blocks):
+        soup = BeautifulSoup(block["html"], "html.parser")
+        images = soup.find_all("img")
+        if len(images) != 1 or soup.find("figure", attrs={"data-profile-card": "true"}):
+            continue
+        image = images[0]
+        width, ratio = str(image.get("data-w", "")), str(image.get("data-ratio", ""))
+        if not re.fullmatch(r"[1-9]\d{0,4}", width) or not re.fullmatch(r"\d+(?:\.\d+)?", ratio):
+            continue
+        if not 0 < float(ratio) < 10:
+            continue
+        following = next(
+            (item for item in blocks[index + 1 : index + 4] if item["text"].strip()), None
+        )
+        evidence[block["id"]] = {
+            "source_width": int(width),
+            "ratio": round(float(ratio), 6),
+            "alt": str(image.get("alt", ""))[:100],
+            "heading_block_id": following["id"]
+            if following and 0 < len(following["text"]) < 30
+            else None,
+        }
+    counts = Counter((item["source_width"], item["ratio"]) for item in evidence.values())
+    for item in evidence.values():
+        item["family_size"] = counts[item["source_width"], item["ratio"]]
+    return evidence
+
+
+def _padding_sides(style: dict[str, str]) -> list[float] | None:
+    pieces = style.get("padding", "").split()
+    if not 1 <= len(pieces) <= 4 or any(
+        not re.fullmatch(r"\d+(?:\.\d+)?(?:px)?", value) for value in pieces
+    ):
+        return None
+    values = [float(value.removesuffix("px")) for value in pieces]
+    values = (
+        values * 4
+        if len(values) == 1
+        else values * 2
+        if len(values) == 2
+        else [values[0], values[1], values[2], values[1]]
+        if len(values) == 3
+        else values
+    )
+    return values if all(value <= 72 for value in values) else None
 
 
 def _tag_style(tag: Tag) -> dict[str, str]:
@@ -109,12 +160,16 @@ def _properties(style: dict[str, str]) -> StyleProperties:
         "font-size": "font_size",
         "padding": "padding",
         "margin-bottom": "margin_bottom",
+        "margin-top": "margin_top",
     }.items():
         value = style.get(css, "")
         if re.fullmatch(r"\d+(?:\.\d+)?px", value) and float(value[:-2]) <= 72:
             result[key] = float(value[:-2])
     if style.get("text-align") in {"left", "center", "right", "justify"}:
         result["align"] = style["text-align"]
+    line_height = style.get("line-height", "").removesuffix("em")
+    if re.fullmatch(r"\d+(?:\.\d+)?", line_height) and 1 <= float(line_height) <= 3:
+        result["line_height"] = float(line_height)
     if style.get("font-weight") in {"400", "500", "600", "700"}:
         result["font_weight"] = int(style["font-weight"])
     elif style.get("font-weight") == "bold":
@@ -124,6 +179,7 @@ def _properties(style: dict[str, str]) -> StyleProperties:
 
 def recognize_component_groups(blocks: list[dict[str, str]]) -> list[dict[str, Any]]:
     groups: list[LayoutComponentGroup] = []
+    families = image_family_evidence(blocks)
     index = 0
     while index < len(blocks) and len(groups) < 100:
         block = blocks[index]
@@ -134,6 +190,8 @@ def recognize_component_groups(blocks: list[dict[str, str]]) -> list[dict[str, A
         if style.get("text-align") == "right" and _CREDIT.match(text) and len(text) <= 160:
             label_style, value_style = _credit_styles(soup, style)
             ids, fields = [], []
+            start = index
+            total_length = 0
             while index < len(blocks) and len(fields) < 12:
                 current = blocks[index]
                 match = _CREDIT.match(current["text"].strip())
@@ -141,11 +199,26 @@ def recognize_component_groups(blocks: list[dict[str, str]]) -> list[dict[str, A
                     not match
                     or len(current["text"]) > 160
                     or _styles(current["html"]).get("text-align") != "right"
+                    or (len(match[2]) > 20 and re.search(r"[。？，,?!！]", match[2]))
+                    or total_length + len(current["text"]) >= 200
                 ):
                     break
                 ids.append(current["id"])
-                fields.append({"label": match[1], "value": ""})
+                total_length += len(current["text"])
+                labels = re.findall(
+                    r"(?:^|\s)(文|作者|记者|见习编辑|责任编辑|责编|编辑|审核|头图来源|图片来源|来源|图|排版)"
+                    r"\s*[丨|｜:：]",
+                    current["text"].strip(),
+                )
+                fields.extend({"label": label, "value": ""} for label in labels or [match[1]])
+                if len(fields) > 12:
+                    fields = []
+                    index += 1
+                    break
                 index += 1
+            if len(fields) < 2:
+                index = max(index, start + 1)
+                continue
             group = LayoutComponentGroup(
                 id=f"group-{len(groups) + 1}",
                 kind="credits",
@@ -160,15 +233,15 @@ def recognize_component_groups(blocks: list[dict[str, str]]) -> list[dict[str, A
             continue
         background = _color(style.get("background-color", style.get("background", "")))
         if (
-            index < 12
-            and 8 <= len(text) <= 180
+            20 <= len(text) <= 300
             and background
             and background.lower() != "#ffffff"
             and not soup.find("img")
+            and ("inline-block" == style.get("display") or _padding_sides(style) is not None)
         ):
             group = LayoutComponentGroup(
                 id=f"group-{len(groups) + 1}",
-                kind="lead_card",
+                kind="lead_card" if index < 12 else "quote_card",
                 block_ids=[block["id"]],
                 confidence=0.75,
                 container_style=StyleProperties(
@@ -181,6 +254,7 @@ def recognize_component_groups(blocks: list[dict[str, str]]) -> list[dict[str, A
                         if key in {"color", "font-size", "font-weight", "text-align"}
                     }
                 ),
+                padding_sides=_padding_sides(style),
             )
         if (
             not text
@@ -188,7 +262,6 @@ def recognize_component_groups(blocks: list[dict[str, str]]) -> list[dict[str, A
             and not soup.find("figure", attrs={"data-profile-card": "true"})
             and index + 1 < len(blocks)
         ):
-            following = blocks[index + 1]
             image = soup.find("img")
             width = str(image.get("width", "")) if image else ""
             width_match = (
@@ -199,17 +272,18 @@ def recognize_component_groups(blocks: list[dict[str, str]]) -> list[dict[str, A
             image_width = (
                 float(width) if width.isdigit() else float(width_match[1]) if width_match else 0
             )
-            heading = following["module"] in {"heading1", "heading2"} or (
-                2 <= len(following["text"]) <= 60
-                and BeautifulSoup(following["html"], "html.parser").find(["strong", "b"])
-            )
-            if heading and 0 < image_width <= 240:
+            family = families.get(block["id"], {})
+            if (
+                family.get("family_size", 0) >= 2
+                and not family.get("alt")
+                and family.get("heading_block_id")
+            ):
                 group = LayoutComponentGroup(
                     id=f"group-{len(groups) + 1}",
                     kind="decorated_heading",
-                    block_ids=[block["id"], following["id"]],
-                    confidence=0.55,
-                    image_width=max(24, round(image_width)),
+                    block_ids=[block["id"], family["heading_block_id"]],
+                    confidence=0.75,
+                    image_width=max(24, min(680, round(image_width or 150))),
                     container_style=StyleProperties(align="left", margin_bottom=8),
                 )
         if group:

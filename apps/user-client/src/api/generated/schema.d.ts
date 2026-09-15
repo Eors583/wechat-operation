@@ -3472,13 +3472,22 @@ export interface components {
             readonly container_style?: components["schemas"]["StyleProperties"];
             /** @default false */
             readonly enabled: boolean;
+            /**
+             * @default error
+             * @enum {string}
+             */
+            readonly fallback_render: "error" | "text_index";
             readonly fields?: readonly components["schemas"]["LayoutCreditField"][];
             readonly id: string;
+            /** @default null */
+            readonly image_document_id: string | null;
             /** @default 120 */
             readonly image_width: number;
             /** @enum {string} */
-            readonly kind: "lead_card" | "credits" | "decorated_heading" | "body" | "fixed";
+            readonly kind: "lead_card" | "quote_card" | "credits" | "decorated_heading" | "body" | "fixed";
             readonly label_style?: components["schemas"]["StyleProperties"];
+            /** @default null */
+            readonly padding_sides: readonly number[] | null;
             readonly sequence?: number | null;
             readonly text_style?: components["schemas"]["StyleProperties"];
         };
@@ -3559,6 +3568,7 @@ export interface components {
         };
         /** LayoutTemplateCreate */
         readonly LayoutTemplateCreate: {
+            readonly component_groups?: readonly components["schemas"]["LayoutComponentGroup"][];
             /**
              * Enabled
              * @default true

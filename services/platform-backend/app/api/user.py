@@ -2279,6 +2279,7 @@ async def public_settings(
 
 
 class LayoutTemplateCreate(BaseModel):
+    component_groups: list[LayoutComponentGroup] = Field(default_factory=list, max_length=100)
     official_account_id: str | None = None
     name: str = Field(min_length=1, max_length=120)
     enabled: bool = True
@@ -2410,6 +2411,7 @@ async def create_layout_template(
         official_account_id=payload.official_account_id,
         enabled=payload.enabled,
         style_tokens=payload.style_tokens.model_dump(exclude_none=True),
+        component_groups=payload.component_groups,
     )
     if payload.is_default:
         await set_default_layout_template(session, template)
@@ -2795,6 +2797,7 @@ async def create_article_render(
             )
     render = await create_render(
         session,
+        storage=storage,
         owner_id=user.id,
         article_id=payload.article_id,
         article_version_no=payload.article_version_no,

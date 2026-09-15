@@ -91,19 +91,29 @@ def _compatible_draft_html(html: str) -> str:
             ):
                 # Restore the native component seen in the source article. A plain
                 # anchor or an MP4 URL does not create a WeChat draft video player.
-                player = soup.new_tag("iframe", attrs={
-                    "class": "video_iframe rich_pages wx_video_iframe",
-                    "data-mpvid": video_id,
-                    "data-vidtype": "2",
-                    "data-src": "https://mp.weixin.qq.com/mp/readtemplate?" + urlencode({
-                        "t": "pages/video_player_tmpl", "action": "mpvideo",
-                        "auto": "0", "vid": video_id,
-                    }),
-                    "data-ratio": "1.7777777777777777",
-                    "data-w": "1920",
-                    "width": "100%", "height": "360",
-                    "frameborder": "0", "allowfullscreen": "true",
-                })
+                player = soup.new_tag(
+                    "iframe",
+                    attrs={
+                        "class": "video_iframe rich_pages wx_video_iframe",
+                        "data-mpvid": video_id,
+                        "data-vidtype": "2",
+                        "data-src": "https://mp.weixin.qq.com/mp/readtemplate?"
+                        + urlencode(
+                            {
+                                "t": "pages/video_player_tmpl",
+                                "action": "mpvideo",
+                                "auto": "0",
+                                "vid": video_id,
+                            }
+                        ),
+                        "data-ratio": "1.7777777777777777",
+                        "data-w": "1920",
+                        "width": "100%",
+                        "height": "360",
+                        "frameborder": "0",
+                        "allowfullscreen": "true",
+                    },
+                )
                 player.attrs.update(wechat_video_attributes(link))
                 player["scrolling"] = str(player.get("scrolling", "no"))
                 image = link.find("img", src=True)
@@ -113,18 +123,16 @@ def _compatible_draft_html(html: str) -> str:
                     if (
                         cover_url.scheme in {"http", "https"}
                         and (cover_url.hostname or "").endswith(".qpic.cn")
-                        and not cover_url.username and not cover_url.password
+                        and not cover_url.username
+                        and not cover_url.password
                     ):
                         player["data-cover"] = cover
                 link.replace_with(player)
                 restored_videos += 1
                 continue
-            restricted = (
-                url.scheme.lower() not in {"", "http", "https"}
-                or (
-                    url.hostname in {None, "mp.weixin.qq.com"}
-                    and (path == "/mp" or path.startswith("/mp/"))
-                )
+            restricted = url.scheme.lower() not in {"", "http", "https"} or (
+                url.hostname in {None, "mp.weixin.qq.com"}
+                and (path == "/mp" or path.startswith("/mp/"))
             )
         except ValueError:
             restricted = True
@@ -354,13 +362,18 @@ class WechatOpenPlatformClient:
             raise WechatApiError(code, str(result.get("errmsg", "")))
         return cast(dict[str, Any], result)
 
-    async def upload_permanent_image(self, *, access_token: str, cover: WechatCover) -> str:
+    async def upload_permanent_image(
+        self, *, access_token: str, cover: WechatCover, article_body: bool = False
+    ) -> str:
         owns_client = self._client is None
         client = self._client or httpx.AsyncClient(base_url=WECHAT_API_BASE, timeout=20.0)
         try:
             response = await client.post(
-                "/cgi-bin/material/add_material",
-                params={"access_token": access_token, "type": "image"},
+                "/cgi-bin/media/uploadimg" if article_body else "/cgi-bin/material/add_material",
+                params={
+                    "access_token": access_token,
+                    **({} if article_body else {"type": "image"}),
+                },
                 files={"media": (cover.filename, cover.content, cover.mime_type)},
             )
             response.raise_for_status()
@@ -385,7 +398,7 @@ class WechatOpenPlatformClient:
                     f"WeChat cover upload rejected the access token ({code})", code=code
                 )
             raise WechatApiError(code, str(result.get("errmsg", "")))
-        media_id = result.get("media_id")
+        media_id = result.get("url" if article_body else "media_id")
         if not isinstance(media_id, str) or not media_id:
             raise ProviderUnavailable("WeChat cover upload did not return a media ID")
         return media_id
@@ -399,6 +412,38 @@ class WechatOpenPlatformClient:
         html: str,
         thumb_media_id: str,
     ) -> str:
+        # Uploaded template markers are embedded in immutable previews. WeChat
+        # requires its own image URLs in draft content, never data/blob URLs.
+        soup = BeautifulSoup(html, "html.parser")
+        uploaded: dict[str, str] = {}
+        images = soup.find_all("img")
+        for image in images:
+            source = str(image.get("src", ""))
+            if not source.startswith("data:"):
+                continue
+            match = re.fullmatch(r"data:(image/(?:png|jpeg));base64,([A-Za-z0-9+/=]+)", source)
+            if not match or len(source) > 1_334_000:
+                raise ProviderUnavailable("Invalid embedded draft image")
+            if source not in uploaded:
+                try:
+                    content = base64.b64decode(match[2], validate=True)
+                except ValueError as exc:
+                    raise ProviderUnavailable("Invalid embedded draft image") from exc
+                if not 0 < len(content) < 1_000_000 or len(uploaded) >= 100:
+                    raise ProviderUnavailable("Embedded draft image exceeds limits")
+                uploaded[source] = await self.upload_permanent_image(
+                    access_token=access_token,
+                    cover=WechatCover(
+                        ref=hashlib.sha256(content).hexdigest(),
+                        filename="heading.png" if match[1] == "image/png" else "heading.jpg",
+                        mime_type=match[1],
+                        content=content,
+                    ),
+                    article_body=True,
+                )
+            image["src"] = uploaded[source]
+        if uploaded:
+            html = str(soup)
         result = await self._post(
             "/cgi-bin/draft/add",
             {
@@ -930,8 +975,10 @@ async def ensure_authorizer_access_token(
     expires_at = account.token_expires_at
     if expires_at and expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=UTC)
-    if not force and account.token_secret_ref and (
-        not expires_at or expires_at > utcnow() + timedelta(seconds=300)
+    if (
+        not force
+        and account.token_secret_ref
+        and (not expires_at or expires_at > utcnow() + timedelta(seconds=300))
     ):
         return account
     metadata = account.technical_metadata if isinstance(account.technical_metadata, dict) else {}
@@ -987,7 +1034,8 @@ async def ensure_authorizer_access_token(
                 continue
             logger.warning(
                 "wechat_authorizer_token_refresh_failed appid=%s errcode=%s",
-                account.authorizer_appid, exc.code,
+                account.authorizer_appid,
+                exc.code,
             )
             raise
         except ProviderAuthenticationError as exc:

@@ -324,6 +324,14 @@ def sanitize_content_html(value: str) -> str:
                 "loading": "lazy",
             })
             width = str(original.get("width", ""))
+            # Keep numeric image-family evidence through HTML sanitization.
+            for key in {
+                "data-w", "data-ratio", "data-cropselx1", "data-cropselx2",
+                "data-cropsely1", "data-cropsely2",
+            }:
+                value = str(original.get(key, ""))
+                if re.fullmatch(r"\d{1,5}(?:\.\d{1,18})?", value):
+                    element[key] = value
             if re.fullmatch(r"[1-9][0-9]{0,3}", width) and not re.search(r"(?:^|;)width:", style):
                 style += f";width:{width}px"
             style += ";height:auto"

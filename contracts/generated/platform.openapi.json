@@ -28931,6 +28931,7 @@
       },
       "LayoutTemplateCreate": {
         "properties": {
+          "component_groups": { "type": "array", "maxItems": 100, "items": { "$ref": "#/components/schemas/LayoutComponentGroup" } },
           "is_default": { "type": "boolean", "title": "Is Default", "default": false },
           "official_account_id": {
             "anyOf": [
@@ -35341,6 +35342,7 @@
             "type": "string",
             "enum": [
               "lead_card",
+              "quote_card",
               "credits",
               "decorated_heading",
               "body",
@@ -35353,7 +35355,6 @@
               "type": "string",
               "pattern": "^content-[1-9][0-9]{0,5}$"
             },
-            "minItems": 1,
             "maxItems": 100
           },
           "confirmed": {
@@ -35392,6 +35393,15 @@
             "maximum": 680,
             "default": 120
           },
+          "image_document_id": {
+            "anyOf": [
+              { "type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$" },
+              { "type": "null" }
+            ],
+            "default": null
+          },
+          "fallback_render": { "type": "string", "enum": ["error", "text_index"], "default": "error" },
+          "padding_sides": { "anyOf": [ { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "number", "minimum": 0, "maximum": 72 } }, { "type": "null" } ], "default": null },
           "sequence": {
             "anyOf": [
               {

@@ -80,7 +80,7 @@ class LayoutModuleEvidence(StyleContractModel):
 
 class LayoutComponentDecision(StyleContractModel):
     group_id: str = Field(pattern=r"^group-[1-9][0-9]{0,3}$")
-    kind: Literal["lead_card", "credits", "decorated_heading", "body"]
+    kind: Literal["lead_card", "quote_card", "credits", "decorated_heading", "body"]
     confidence: float = Field(ge=0, le=1)
 
 

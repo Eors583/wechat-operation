@@ -16,8 +16,19 @@ class LayoutContentBlock(BaseModel):
     html: str = Field(max_length=5_000_000)
     text: str = Field(max_length=5_000_000)
     module: Literal[
-        "title", "lead", "heading_marker", "heading1", "heading2", "body", "highlight",
-        "quote", "list", "caption", "divider", "table_header", "table_cell",
+        "title",
+        "lead",
+        "heading_marker",
+        "heading1",
+        "heading2",
+        "body",
+        "highlight",
+        "quote",
+        "list",
+        "caption",
+        "divider",
+        "table_header",
+        "table_cell",
     ] = "body"
 
 
@@ -38,8 +49,8 @@ class LayoutCreditField(BaseModel):
 class LayoutComponentGroup(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(pattern=r"^group-[1-9][0-9]{0,3}$")
-    kind: Literal["lead_card", "credits", "decorated_heading", "body", "fixed"]
-    block_ids: list[ContentBlockId] = Field(min_length=1, max_length=100)
+    kind: Literal["lead_card", "quote_card", "credits", "decorated_heading", "body", "fixed"]
+    block_ids: list[ContentBlockId] = Field(max_length=100)
     confirmed: bool = False
     enabled: bool = False
     confidence: float = Field(default=0, ge=0, le=1)
@@ -49,6 +60,13 @@ class LayoutComponentGroup(BaseModel):
     fields: list[LayoutCreditField] = Field(default_factory=list, max_length=12)
     image_width: int = Field(default=120, ge=24, le=680)
     sequence: int | None = Field(default=None, ge=1, le=100)
+    fallback_render: Literal["error", "text_index"] = "error"
+    padding_sides: list[Annotated[float, Field(ge=0, le=72)]] | None = Field(
+        default=None, min_length=4, max_length=4
+    )
+    image_document_id: str | None = Field(
+        default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    )
 
 
 class LayoutSourceSnapshot(BaseModel):
