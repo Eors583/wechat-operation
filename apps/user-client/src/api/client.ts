@@ -2275,7 +2275,7 @@ const settleWechatOperation = async (
       pending.operationStatus = 'unknown'
       writePendingArticleOutcome(pending)
       throw new ApiError(
-        '微信返回结果未知。为避免重复发布，已保留原操作并禁止新建提交；请查询原操作状态或凭操作编号对账。',
+        '微信暂未确认结果，原操作已保留，请稍后再试。',
         409,
         'WECHAT_RESULT_UNKNOWN',
         { operationId, result: operation.result },
@@ -2307,7 +2307,7 @@ const settleWechatOperation = async (
 
   writePendingArticleOutcome(pending)
   throw new ApiError(
-    '公众号仍在处理。已保留原操作，请稍后继续查询，不要重复提交。',
+    '微信仍在处理中，请稍后再试。',
     202,
     'WECHAT_OPERATION_PENDING',
     { operationId },
@@ -2984,7 +2984,7 @@ export const remoteApi: UserApi = {
         (input.renderId && existing.renderId !== input.renderId))
     ) {
       throw new ApiError(
-        '该文章已有微信操作待确认。为避免重复发布，请先继续查询原操作。',
+        '微信仍在处理中，请稍后再试。',
         409,
         'WECHAT_OPERATION_CONFLICT',
         { operationId: existing.operationId },
@@ -3059,7 +3059,7 @@ export const remoteApi: UserApi = {
           await remoteApi.refreshPendingArticleOutcome(pending.articleId).catch(() => undefined)
         }
         throw new ApiError(
-          '服务端已有同一篇文章的微信操作正在处理。已找回原操作，请查询原结果，不会重复提交。',
+          '微信仍在处理中，请稍后再试。',
           409,
           error.code,
           error.details,

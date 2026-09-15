@@ -385,13 +385,11 @@ const {
   preparing: finalPreparing,
   submitting: outcomeLoading,
   busy: wechatBusy,
-  pending: pendingOutcome,
   visible: finalDialog,
   locked: finalSnapshot,
   chooseCover,
   openFinal,
   confirm: confirmOutcome,
-  resume: resumePendingOutcome,
 } = useArticleWechatWorkflow({
   article: () => selectedArticle.value,
   account: () =>
@@ -1360,22 +1358,14 @@ const openArticle = async (message: Message) => {
                 coverAssetId || selectedArticle.coverState === 'ready' ? '更换封面' : '选择封面'
               "
               :loading="coverUploading"
-              :disabled="previewBusy || Boolean(pendingOutcome)"
+              :disabled="previewBusy"
               @click="chooseCover"
             />
           </div>
         </template>
       </ArticlePreviewPanel>
       <template #actions>
-        <template v-if="pendingOutcome">
-          <span>该文章有待确认的微信操作</span>
-          <AppButton
-            variant="outline"
-            label="查询原操作结果"
-            :loading="outcomeLoading"
-            @click="resumePendingOutcome"
-          />
-        </template>
+
         <AppButton
           class="article-preview-dialog__button article-preview-dialog__local"
           variant="outline"
@@ -1390,7 +1380,7 @@ const openArticle = async (message: Message) => {
           label="存公众号草稿箱"
           v-if="publicSettings.wechat.wechatDraftEnabled"
           :loading="finalPreparing"
-          :disabled="previewBusy || Boolean(pendingOutcome)"
+          :disabled="previewBusy"
           @click="openFinal('draft')"
         />
         <AppButton
@@ -1398,7 +1388,7 @@ const openArticle = async (message: Message) => {
           label="直接发布"
           v-if="publicSettings.wechat.wechatPublishEnabled"
           :loading="finalPreparing"
-          :disabled="previewBusy || Boolean(pendingOutcome)"
+          :disabled="previewBusy"
           @click="openFinal('publish')"
         />
       </template>

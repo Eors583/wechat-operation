@@ -24,6 +24,13 @@ export function useArticleWechatWorkflow(options: {
   const coverUploading = ref(false)
   const preparing = ref(false)
   const submitting = ref(false)
+  const actionLabel = ref('正在存入草稿箱…')
+  const loadingGroup = `wechat-outcome-${crypto.randomUUID()}`
+  watch([preparing, submitting], ([prepare, submit]) => {
+    if (prepare || submit)
+      $q.loading.show({ group: loadingGroup, message: actionLabel.value, delay: 0 })
+    else $q.loading.hide(loadingGroup)
+  }, { flush: 'sync' })
   const visible = ref(false)
   const pending = ref<PendingArticleOutcome | null>(null)
   const locked = shallowRef<{
@@ -39,6 +46,7 @@ export function useArticleWechatWorkflow(options: {
   let active = true
   onScopeDispose(() => {
     active = false
+    $q.loading.hide(loadingGroup)
   })
   const current = (id: string) => active && options.article()?.id === id
   const notifyError = (error: unknown, fallback: string) => {
@@ -95,6 +103,10 @@ export function useArticleWechatWorkflow(options: {
     const account = options.account()
     const template = options.template()
     if (!article || busy.value || options.blocked()) return
+    if (pending.value) {
+      await resume()
+      return
+    }
     if (!account || !template?.versionId) {
       $q.notify({ type: 'warning', message: '请先选择目标公众号和可用的排版模板。' })
       return
@@ -115,6 +127,7 @@ export function useArticleWechatWorkflow(options: {
       options.account()?.id === account.id &&
       options.template()?.versionId === template.versionId &&
       coverAssetId.value === cover
+    actionLabel.value = action === 'publish' ? '正在发布…' : '正在存入草稿箱…'
     preparing.value = true
     try {
       // A failed status lookup must not permit a second WeChat submission.
@@ -122,7 +135,8 @@ export function useArticleWechatWorkflow(options: {
       if (!unchanged()) return
       pending.value = existing
       if (existing) {
-        $q.notify({ type: 'warning', message: '该文章已有待确认操作，请先查询原操作结果。' })
+        preparing.value = false
+        await resume()
         return
       }
       const saved = await options.save()
@@ -165,6 +179,7 @@ export function useArticleWechatWorkflow(options: {
   const confirm = async () => {
     const snapshot = locked.value
     if (!snapshot || !visible.value || submitting.value || !current(snapshot.article.id)) return
+    actionLabel.value = snapshot.action === 'publish' ? '正在发布…' : '正在存入草稿箱…'
     submitting.value = true
     try {
       const result = await api.setArticleOutcome({
@@ -212,6 +227,7 @@ export function useArticleWechatWorkflow(options: {
       })
       if (!approved || !current(article.id) || busy.value) return
     }
+    actionLabel.value = pending.value?.outcome === 'publish' ? '正在发布…' : '正在存入草稿箱…'
     submitting.value = true
     try {
       const result = await api.resumePendingArticleOutcome(article.id)
@@ -228,6 +244,14 @@ export function useArticleWechatWorkflow(options: {
       submitting.value = false
     }
   }
+  watch(
+    () => pending.value?.operationId,
+    (id) => {
+      // Only resume status reads automatically; an unacknowledged write needs explicit continuation.
+      if (id && !busy.value) void resume()
+    },
+    { immediate: true, flush: 'post' },
+  )
   return {
     coverAssetId,
     coverName,

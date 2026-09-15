@@ -79,7 +79,6 @@ const {
   chooseCover,
   openFinal,
   confirm: confirmOutcome,
-  resume: resumePendingOutcome,
 } = useArticleWechatWorkflow({
   article: () => article.value,
   account: () => selectedAccount.value,
@@ -173,18 +172,6 @@ const chooseTitle = async (value: string) => {
   }
 }
 
-const pendingOutcomeText = computed(() => {
-  const pending = pendingOutcome.value
-  if (!pending) return ''
-  const action = pending.outcome === 'publish' ? '发布' : '写入公众号草稿箱'
-  const stage = {
-    queued: '排队中',
-    submitting: '提交中',
-    reconciling: '结果核对中',
-    unknown: '结果未知',
-  }[pending.operationStatus]
-  return `${action}${stage}`
-})
 const versions = computed(() => [
   ...new Map(
     (versionsQuery.data.value?.pages.flatMap((page) => page.items) ?? []).map((version) => [
@@ -982,18 +969,7 @@ onBeforeUnmount(() => {
                 </q-item>
               </template>
             </q-select>
-            <q-banner v-if="pendingOutcome" rounded class="article-meta__warning">
-              <strong>{{ pendingOutcomeText }}</strong>
-              <div>操作编号：{{ pendingOutcome.operationId || '尚未取得（将重用原幂等键）' }}</div>
-              <div>已锁定原排版版本；在结果确认前禁止新建微信提交。</div>
-              <template #action
-                ><AppButton
-                  variant="outline"
-                  label="查询原操作"
-                  :loading="outcomeLoading"
-                  @click="resumePendingOutcome"
-              /></template>
-            </q-banner>
+
             <q-banner
               v-if="selectedAccount?.status === 'reconnect'"
               rounded
@@ -1078,13 +1054,13 @@ onBeforeUnmount(() => {
               variant="outline"
               label="存公众号草稿箱"
               :loading="finalPreparing"
-              :disabled="Boolean(pendingOutcome) || Boolean(selectedAccount && !canDraft)"
+              :disabled="Boolean(selectedAccount && !canDraft)"
               @click="openFinal('draft')"
             /><AppButton
               v-if="publicSettings.wechat.wechatPublishEnabled"
               label="直接发布"
               :loading="finalPreparing"
-              :disabled="Boolean(pendingOutcome) || Boolean(selectedAccount && !canPublish)"
+              :disabled="Boolean(selectedAccount && !canPublish)"
               @click="openFinal('publish')"
             />
           </div>
