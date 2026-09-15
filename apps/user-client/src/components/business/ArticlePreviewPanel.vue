@@ -15,6 +15,7 @@ import { separateArticleTitle } from '@/utils/articleTitle'
 import { tableExtensions } from '@/editor/tableExtensions'
 import { useArticleFixedContent } from '@/composables/useArticleFixedContent'
 import ArticleFixedContent from './ArticleFixedContent.vue'
+import LockedContentEditor from './LockedContentEditor.vue'
 import ArticleTableMenu from './ArticleTableMenu.vue'
 import ArticleTitleChoices from './ArticleTitleChoices.vue'
 
@@ -50,11 +51,17 @@ defineEmits<{
   'select-account': [accountId: string | null]
 }>()
 const $q = useQuasar()
+const editedTemplate = ref<LayoutTemplate | null>(null)
+const activeTemplate = computed(() => editedTemplate.value ?? props.template)
+const editingFixed = ref(false)
+const editingBlocks = ref<NonNullable<LayoutTemplate['contentBlocks']>>([])
 const fallbackStyles = createDefaultStyles()
 const previewCssVariables = computed(() =>
-  templatePreviewCssVariables(props.template?.styles ?? fallbackStyles),
+  templatePreviewCssVariables(activeTemplate.value?.styles ?? fallbackStyles),
 )
-const hasHeadingMarker = computed(() => props.template?.styles.heading_marker.enabled === true)
+const hasHeadingMarker = computed(
+  () => activeTemplate.value?.styles.heading_marker.enabled === true,
+)
 const dirty = ref(false)
 const saving = ref(false)
 const saveState = ref<'saved' | 'saving' | 'failed'>('saved')
@@ -65,7 +72,54 @@ const editorReady = ref(false)
 const fullPreviewHtml = ref('')
 const fullPreviewLoading = ref(false)
 const fullPreviewError = ref('')
-const fixedContent = useArticleFixedContent(() => props.template)
+const fixedContent = useArticleFixedContent(() => activeTemplate.value)
+const editFixedContent = (position: 'before_body' | 'after_body') => {
+  const template = fixedContent.template.value
+  if (!template || props.readOnly || props.interactionLocked || saving.value) return
+  const ids = new Set(
+    template.lockedBlocks
+      ?.filter((group) => group.position === position)
+      .flatMap((group) => group.blockIds),
+  )
+  editingBlocks.value = template.contentBlocks?.filter((block) => ids.has(block.id)) ?? []
+  editingFixed.value = true
+}
+const applyFixedContent = async (blocks: NonNullable<LayoutTemplate['contentBlocks']>) => {
+  const template = fixedContent.template.value
+  if (!template || props.readOnly || props.interactionLocked || saving.value) return
+  const articleId = props.article.id
+  editingBlocks.value = blocks
+  const changes = new Map(blocks.map((block) => [block.id, block]))
+  saving.value = true
+  try {
+    const saved = await api.saveTemplate({
+      ...template,
+      contentBlocks: template.contentBlocks?.map((block) => changes.get(block.id) ?? block),
+    })
+    if (articleId === props.article.id && template.id === activeTemplate.value?.id) {
+      editedTemplate.value = saved
+      markDirty()
+    }
+    $q.notify({ type: 'positive', message: '固定内容已保存到模板，请保存文章以应用新版。' })
+    void queryClient.invalidateQueries({ queryKey: ['templates'], refetchType: 'none' })
+  } catch (error) {
+    $q.notify({
+      type: 'negative',
+      message: error instanceof Error ? error.message : '固定内容保存失败。',
+    })
+    if (articleId === props.article.id && template.id === activeTemplate.value?.id)
+      editingFixed.value = true
+  } finally {
+    saving.value = false
+  }
+}
+watch(
+  () => [props.article.id, props.accountId, props.template?.id, props.template?.versionId],
+  () => {
+    editedTemplate.value = null
+    editingFixed.value = false
+  },
+)
 const hasFixedContent = computed(() =>
   Boolean(fixedContent.beforeHtml.value || fixedContent.afterHtml.value),
 )
@@ -73,7 +127,10 @@ let previewRequest = 0
 let editRevision = 0
 const savedTemplateVersionId = ref(props.article.layoutTemplate?.versionId)
 const layoutDirty = computed(() =>
-  Boolean(props.template?.versionId && props.template.versionId !== savedTemplateVersionId.value),
+  Boolean(
+    activeTemplate.value?.versionId &&
+    activeTemplate.value.versionId !== savedTemplateVersionId.value,
+  ),
 )
 const canSave = computed(() => (dirty.value || layoutDirty.value) && !saving.value)
 const invalidateFullPreview = () => {
@@ -141,7 +198,7 @@ watch(
 )
 
 watch(
-  () => [props.accountId, props.template?.id, props.template?.versionId],
+  () => [props.accountId, activeTemplate.value?.id, activeTemplate.value?.versionId],
   () => {
     invalidateFullPreview()
     if (layoutDirty.value) markDirty()
@@ -160,7 +217,7 @@ const saveNow = async () => {
   saving.value = true
   saveState.value = 'saving'
   const revision = editRevision
-  const templateVersionId = props.template?.versionId
+  const templateVersionId = activeTemplate.value?.versionId
   try {
     const saved = await api.saveArticle({
       id: props.article.id,
@@ -174,7 +231,7 @@ const saveNow = async () => {
     })
     versionNo.value = saved.versionNo
     savedTemplateVersionId.value = saved.layoutTemplate?.versionId
-    dirty.value = revision !== editRevision || props.template?.versionId !== templateVersionId
+    dirty.value = revision !== editRevision || activeTemplate.value?.versionId !== templateVersionId
     saveState.value = dirty.value ? 'failed' : 'saved'
     queryClient.setQueryData(['article', props.article.id], saved)
     await Promise.all([
@@ -213,9 +270,9 @@ const loadFullPreview = async () => {
   fullPreviewLoading.value = true
   const articleId = props.article.id
   const articleVersionNo = props.article.versionNo
-  const templateId = props.template?.id ?? null
-  const templateVersionId = props.template?.versionId
-  const accountId = props.accountId ?? props.template?.accountId ?? props.article.accountId
+  const templateId = activeTemplate.value?.id ?? null
+  const templateVersionId = activeTemplate.value?.versionId
+  const accountId = props.accountId ?? activeTemplate.value?.accountId ?? props.article.accountId
   const revision = editRevision
   let request: number | undefined
   try {
@@ -223,9 +280,10 @@ const loadFullPreview = async () => {
     if (
       !editorReady.value ||
       articleId !== props.article.id ||
-      accountId !== (props.accountId ?? props.template?.accountId ?? props.article.accountId) ||
-      templateId !== (props.template?.id ?? null) ||
-      templateVersionId !== props.template?.versionId ||
+      accountId !==
+        (props.accountId ?? activeTemplate.value?.accountId ?? props.article.accountId) ||
+      templateId !== (activeTemplate.value?.id ?? null) ||
+      templateVersionId !== activeTemplate.value?.versionId ||
       revision !== editRevision
     )
       return
@@ -252,8 +310,9 @@ const loadFullPreview = async () => {
     if (
       editorReady.value &&
       view.value === 'layout' &&
-      (accountId !== (props.accountId ?? props.template?.accountId ?? props.article.accountId) ||
-        templateVersionId !== props.template?.versionId)
+      (accountId !==
+        (props.accountId ?? activeTemplate.value?.accountId ?? props.article.accountId) ||
+        templateVersionId !== activeTemplate.value?.versionId)
     )
       void loadFullPreview()
   }
@@ -265,7 +324,7 @@ const selectView = (value: 'edit' | 'layout') => {
 }
 
 watch(
-  () => [props.article.id, props.accountId, props.template?.versionId, editorReady.value],
+  () => [props.article.id, props.accountId, activeTemplate.value?.versionId, editorReady.value],
   () => {
     if (editorReady.value && view.value === 'layout') selectView('layout')
   },
@@ -300,6 +359,12 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <LockedContentEditor
+    v-model="editingFixed"
+    :blocks="editingBlocks"
+    apply-label="保存到模板"
+    @apply="applyFixedContent"
+  />
   <section
     class="article-panel"
     aria-label="文章预览编辑区"
@@ -566,6 +631,8 @@ onBeforeUnmount(() => {
             v-if="fixedContent.beforeHtml.value"
             :html="fixedContent.beforeHtml.value"
             label="正文固定开头"
+            :editable="!readOnly && !interactionLocked && !saving"
+            @edit="editFixedContent('before_body')"
           />
           <EditorContent :editor="editor" />
           <ArticleFixedContent
@@ -573,6 +640,8 @@ onBeforeUnmount(() => {
             v-if="fixedContent.afterHtml.value"
             :html="fixedContent.afterHtml.value"
             label="正文固定结尾"
+            :editable="!readOnly && !interactionLocked && !saving"
+            @edit="editFixedContent('after_body')"
           />
         </div>
       </div>
