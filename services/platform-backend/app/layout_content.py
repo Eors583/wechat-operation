@@ -40,6 +40,7 @@ _CSS_PROPERTIES = {
     "margin-bottom", "margin-left", "padding", "padding-top", "padding-right", "padding-bottom",
     "padding-left", "text-align", "text-decoration", "text-indent", "vertical-align", "width",
     "max-width", "min-width", "overflow-wrap", "word-break", "white-space", "table-layout",
+    "align-items", "justify-content", "flex-wrap", "flex-shrink", "gap",
 }
 _CSS_VALUE = re.compile(r"^[\w\s#.,%()'\"/+-]+$", re.UNICODE)
 _CSS_UNSAFE = re.compile(r"(?:url|expression|var|attr|image-set)\s*\(|!|@|\\\\|[\x00-\x1f]", re.I)
@@ -300,6 +301,14 @@ def sanitize_content_html(value: str) -> str:
             element.attrs.update(profile_attributes)
             element["data-profile-card"] = "true"
         style = _safe_style(str(original.get("style", "")))
+        # Small empty shapes need their height; text containers must remain fluid.
+        if not element.get_text(strip=True) and not element.find("img") and name != "img":
+            height = re.search(
+                r"(?:^|;)\s*height\s*:\s*(\d+(?:\.\d+)?)px\s*(?:!important\s*)?(?:;|$)",
+                str(original.get("style", "")), re.I,
+            )
+            if height and 0 < float(height[1]) <= 128:
+                style += f";height:{height[1]}px"
         align = str(original.get("align", ""))
         if align in {"left", "center", "right", "justify"}:
             style += f";text-align:{align}"
@@ -377,9 +386,19 @@ def _module(element: Tag, text: str) -> str:
 
 def _selectable_parts(root: Tag, depth: int = 0) -> Iterator[tuple[str, str, str]]:
     children = list(root.children)
+    # Keep horizontal ornaments and single-paragraph illustrated cards intact.
+    visual_group = bool(
+        re.search(r"(?:^|;)display:(?:inline-)?flex(?:;|$)", str(root.get("style", "")))
+        or (
+            root.find("img")
+            and len(root.find_all("p")) <= 1
+            and not root.find(["h1", "h2", "h3", "table", "ul", "ol"])
+            and root.find(style=re.compile(r"(?:^|;)border(?:-width|-style)?:"))
+        )
+    )
     # Imported rich text can nest blocks inside formatting tags. Split those
     # wrappers too, but keep tables, lists, figures and inline-only groups intact.
-    if depth >= 80 or root.name not in _CONTAINERS or not root.find(_BLOCK_TAGS):
+    if visual_group or depth >= 80 or root.name not in _CONTAINERS or not root.find(_BLOCK_TAGS):
         text = root.get_text(" ", strip=True)
         if (
             text or root.find(["img", "hr", "br"])
