@@ -2551,6 +2551,8 @@ export interface components {
             /** Base Version No */
             readonly base_version_no: number;
             readonly content: components["schemas"]["TiptapDocument-Input"];
+            /** Fixed Content Blocks */
+            readonly fixed_content_blocks?: readonly components["schemas"]["LayoutContentBlock"][] | null;
             /**
              * Source
              * @default manual
@@ -2587,11 +2589,16 @@ export interface components {
             readonly name: string;
             /** Official Account Id */
             readonly official_account_id: string | null;
+            readonly source_snapshot?: components["schemas"]["LayoutSourceSnapshot"] | null;
+            /** Source Url */
+            readonly source_url?: string | null;
             readonly style_tokens: components["schemas"]["StyleTokenPayload"];
             /** Template Id */
             readonly template_id: string;
             /** Template Version Id */
             readonly template_version_id: string;
+            /** Version No */
+            readonly version_no?: number | null;
         };
         /** ArticleLibrarySource */
         readonly ArticleLibrarySource: {

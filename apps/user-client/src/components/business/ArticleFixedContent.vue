@@ -47,6 +47,7 @@ const onLoad = () => {
     blocks: () => props.blocks,
     enabled: () => !!props.editable,
     save: props.saveBlock,
+    isolateVideoUploads: true,
     error: (message) => $q.notify({ type: 'negative', message }),
   })
   prepareTemplateVideos(document)

@@ -392,6 +392,7 @@ export interface SendMessageResult extends TaskBundle {
 }
 
 export interface ArticleSaveInput {
+  fixedContentBlocks?: LayoutContentBlock[]
   templateVersionId?: string
   id: string
   title: string

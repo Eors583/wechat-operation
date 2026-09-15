@@ -367,6 +367,7 @@ async def save_article_version(
     created_by_id: str,
     template_version_id: str | None = None,
     restored_layout: dict[str, Any] | None = None,
+    fixed_content_blocks: list[dict[str, Any]] | None = None,
 ) -> tuple[Article, ArticleVersion]:
     article = await owned_article(
         session, owner_id=owner_id, article_id=article_id, for_update=True
@@ -380,7 +381,7 @@ async def save_article_version(
         )
     previous = await current_article_version(session, article=article)
     # Layout belongs to the immutable article version, not editor HTML or browser storage.
-    # Only internal restoration may replace it from an existing version's snapshot.
+    # Fixed-content edits are stored here and never update the shared template.
     layout = restored_layout if source == "restore" else previous.layout_snapshot
     if template_version_id and (
         not layout or layout.get("template_version_id") != template_version_id
@@ -406,6 +407,33 @@ async def save_article_version(
             "official_account_id": template.official_account_id,
             "style_tokens": template_version.style_tokens,
             "locked_block_count": len(template_version.source_snapshot.get("locked_blocks", [])),
+        }
+    if fixed_content_blocks is not None:
+        from .layout import uploaded_marker_assets, validated_source_snapshot
+
+        if not layout:
+            raise ApiError(422, "ARTICLE_LAYOUT_REQUIRED", "请先选择文章排版。")
+        template_version = await session.get(LayoutTemplateVersion, layout["template_version_id"])
+        template = await session.get(LayoutTemplate, layout["template_id"])
+        if not template_version or not template or template.owner_id != owner_id:
+            raise ApiError(404, "LAYOUT_TEMPLATE_NOT_FOUND", "排版模板版本不存在。")
+        snapshot = layout.get("source_snapshot") or template_version.source_snapshot
+        locked_ids = {
+            key for group in snapshot.get("locked_blocks", []) for key in group["block_ids"]
+        }
+        changes = {block["id"]: block for block in fixed_content_blocks}
+        if len(changes) != len(fixed_content_blocks) or not changes.keys() <= locked_ids:
+            raise ApiError(422, "ARTICLE_FIXED_CONTENT_INVALID", "只能修改当前文章的固定排版内容。")
+        snapshot = validated_source_snapshot({
+            **snapshot,
+            "content_blocks": [
+                changes.get(block["id"], block) for block in snapshot.get("content_blocks", [])
+            ],
+        })
+        await uploaded_marker_assets(session, owner_id=owner_id, snapshot=snapshot)
+        layout = {
+            **layout, "source_snapshot": snapshot, "source_url": template.source_url,
+            "version_no": template_version.version_no,
         }
     content = canonical_article_content(content)
     next_no = article.current_version_no + 1

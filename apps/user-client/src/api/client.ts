@@ -1200,7 +1200,8 @@ const mapArticle = (value: unknown): Article => {
   const layoutTemplate = textValue(layout.templateVersionId)
     ? mapTemplate({
         template: { ...layout, id: layout.templateId, enabled: true, extractionStatus: 'manual' },
-        version: { id: layout.templateVersionId, styleTokens: layout.styleTokens },
+        version: { id: layout.templateVersionId, styleTokens: layout.styleTokens,
+          sourceSnapshot: layout.sourceSnapshot, versionNo: layout.versionNo },
         lockedBlockCount: numberValue(layout.lockedBlockCount),
       })
     : undefined
@@ -2764,6 +2765,7 @@ export const remoteApi: UserApi = {
     let body = {
       baseVersionNo: input.baseVersionNo,
       ...(input.templateVersionId ? { templateVersionId: input.templateVersionId } : {}),
+      ...(input.fixedContentBlocks ? { fixedContentBlocks: input.fixedContentBlocks } : {}),
       title: input.title,
       summary: input.summary,
       content,

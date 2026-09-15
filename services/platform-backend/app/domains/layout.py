@@ -1353,6 +1353,8 @@ async def create_render(
             raise ApiError(409, "LAYOUT_TEMPLATE_EMPTY", "模板还没有可用版本。")
         tokens = validate_style_tokens(template_version.style_tokens)
     snapshot = template_version.source_snapshot if template_version else {}
+    if saved_layout and template_id == saved_layout.get("template_id"):
+        snapshot = saved_layout.get("source_snapshot") or snapshot
     assets = await uploaded_marker_assets(session, owner_id=owner_id, snapshot=snapshot)
     active_ids = {
         group.get("image_document_id")

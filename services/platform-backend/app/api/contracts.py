@@ -207,6 +207,9 @@ class ArticleLayoutSnapshot(ContractModel):
     official_account_id: str | None
     style_tokens: StyleTokenPayload
     locked_block_count: int = Field(default=0, ge=0, le=100)
+    source_snapshot: LayoutSourceSnapshot | None = None
+    source_url: str | None = None
+    version_no: int | None = None
 
 
 class TiptapDocument(ContractModel):

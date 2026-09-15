@@ -25783,6 +25783,21 @@
               }
             ],
             "title": "Template Version Id"
+          },
+          "fixed_content_blocks": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LayoutContentBlock"
+                },
+                "maxItems": 10000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fixed Content Blocks"
           }
         },
         "type": "object",
@@ -25880,6 +25895,38 @@
             "minimum": 0,
             "title": "Locked Block Count",
             "default": 0
+          },
+          "source_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LayoutSourceSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "version_no": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version No"
           }
         },
         "additionalProperties": false,

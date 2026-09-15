@@ -53,7 +53,13 @@ defineEmits<{
 }>()
 const $q = useQuasar()
 const editedTemplate = ref<LayoutTemplate | null>(null)
-const activeTemplate = computed(() => editedTemplate.value ?? props.template)
+const activeTemplate = computed(() => {
+  if (editedTemplate.value) return editedTemplate.value
+  const saved = props.article.layoutTemplate
+  return saved?.versionId === props.template?.versionId && saved?.contentBlocks
+    ? saved
+    : props.template
+})
 const fallbackStyles = createDefaultStyles()
 const previewCssVariables = computed(() =>
   templatePreviewCssVariables(activeTemplate.value?.styles ?? fallbackStyles),
@@ -122,29 +128,13 @@ watch(
 const applyFixedContent = async (blocks: NonNullable<LayoutTemplate['contentBlocks']>) => {
   const template = fixedContent.template.value
   if (!template || props.readOnly || props.interactionLocked || saving.value) return
-  const articleId = props.article.id
   const changes = new Map(blocks.map((block) => [block.id, block]))
-  saving.value = true
-  try {
-    const saved = await api.saveTemplate({
-      ...template,
-      contentBlocks: template.contentBlocks?.map((block) => changes.get(block.id) ?? block),
-    })
-    if (articleId === props.article.id && template.id === activeTemplate.value?.id) {
-      editedTemplate.value = saved
-      markDirty()
-    }
-    $q.notify({ type: 'positive', message: '固定内容已保存到模板，请保存文章以应用新版。' })
-    void queryClient.invalidateQueries({ queryKey: ['templates'], refetchType: 'none' })
-  } catch (error) {
-    $q.notify({
-      type: 'negative',
-      message: error instanceof Error ? error.message : '固定内容保存失败。',
-    })
-    throw error
-  } finally {
-    saving.value = false
+  editedTemplate.value = {
+    ...template,
+    contentBlocks: template.contentBlocks?.map((block) => changes.get(block.id) ?? block),
   }
+  markDirty()
+  if (view.value === 'layout') await loadFullPreview()
 }
 watch(
   () => [props.article.id, props.accountId, props.template?.id, props.template?.versionId],
@@ -267,6 +257,9 @@ const saveNow = async () => {
       baseVersionNo: versionNo.value,
       reason: 'preview_edit',
       templateVersionId,
+      fixedContentBlocks: editedTemplate.value?.contentBlocks?.filter((block) =>
+        editedTemplate.value?.lockedBlocks?.some((group) => group.blockIds.includes(block.id)),
+      ),
     })
     versionNo.value = saved.versionNo
     savedTemplateVersionId.value = saved.layoutTemplate?.versionId
@@ -385,6 +378,7 @@ const addFixedEditButtons = (event: Event) => {
     blocks: () => fixedContent.template.value?.contentBlocks ?? [],
     enabled: () => !props.readOnly && !props.interactionLocked && !saving.value,
     save: (block) => applyFixedContent([block]),
+    isolateVideoUploads: true,
     error: (message) => $q.notify({ type: 'negative', message }),
   })
 }

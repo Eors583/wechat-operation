@@ -2,6 +2,7 @@ import { api, uploadTemplateVideo } from '@/api/client'
 import type { LayoutContentBlock } from '@/api/types'
 
 type Options = {
+  isolateVideoUploads?: boolean
   blocks: () => LayoutContentBlock[]
   enabled: (id: string) => boolean
   save: (block: LayoutContentBlock) => Promise<void> | void
@@ -166,13 +167,24 @@ export const mountFixedContentEditing = (document: Document, options: Options) =
             if (!file) return
             void (async () => {
               if (isVideo) {
+                const videoId = options.isolateVideoUploads
+                  ? `wxv_${Array.from(crypto.getRandomValues(new Uint32Array(3))).join('')}`
+                  : element.getAttribute('data-mpvid')!
                 busy = true
                 try {
-                  await uploadTemplateVideo(element.getAttribute('data-mpvid')!, file, () => {})
+                  await uploadTemplateVideo(videoId, file, () => {})
                 } finally {
                   busy = false
                 }
-                if (!signal.aborted && options.enabled(id)) await commit(index, () => {})
+                if (!signal.aborted && options.enabled(id)) {
+                  await commit(index, (video) => {
+                    const url = new URL(video.getAttribute('href')!)
+                    url.searchParams.set('vid', videoId)
+                    video.setAttribute('href', url.toString())
+                    video.setAttribute('data-src', url.toString())
+                    video.setAttribute('data-mpvid', videoId)
+                  })
+                }
               } else {
                 if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type))
                   throw new Error('请选择 PNG、JPG、GIF 或 WebP 图片。')
