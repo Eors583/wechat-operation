@@ -297,6 +297,11 @@ def sanitize_content_html(value: str) -> str:
             if name == "figure" and element.get("data-profile-card") == "true" else {}
         )
         element.attrs = {}
+        image_document_id = str(original.get("data-fixed-image-id", ""))
+        if name == "img" and re.fullmatch(
+            r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", image_document_id
+        ):
+            element["data-fixed-image-id"] = image_document_id
         if (
             original.get("data-layout-fragment") == "true"
             or original.get("data-tools")

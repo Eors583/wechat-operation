@@ -16,7 +16,7 @@ import { separateArticleTitle } from '@/utils/articleTitle'
 import { tableExtensions } from '@/editor/tableExtensions'
 import { useArticleFixedContent } from '@/composables/useArticleFixedContent'
 import ArticleFixedContent from './ArticleFixedContent.vue'
-import LockedContentEditor from './LockedContentEditor.vue'
+import { mountFixedContentEditing } from '@/utils/fixedContentEditing'
 import ArticleTableMenu from './ArticleTableMenu.vue'
 import ArticleTitleChoices from './ArticleTitleChoices.vue'
 
@@ -54,8 +54,6 @@ defineEmits<{
 const $q = useQuasar()
 const editedTemplate = ref<LayoutTemplate | null>(null)
 const activeTemplate = computed(() => editedTemplate.value ?? props.template)
-const editingFixed = ref(false)
-const editingBlocks = ref<NonNullable<LayoutTemplate['contentBlocks']>>([])
 const fallbackStyles = createDefaultStyles()
 const previewCssVariables = computed(() =>
   templatePreviewCssVariables(activeTemplate.value?.styles ?? fallbackStyles),
@@ -121,22 +119,10 @@ watch(
   },
   { immediate: true },
 )
-const editFixedContent = (position?: 'before_body' | 'after_body') => {
-  const template = fixedContent.template.value
-  if (!template || props.readOnly || props.interactionLocked || saving.value) return
-  const ids = new Set(
-    template.lockedBlocks
-      ?.filter((group) => !position || group.position === position)
-      .flatMap((group) => group.blockIds),
-  )
-  editingBlocks.value = template.contentBlocks?.filter((block) => ids.has(block.id)) ?? []
-  editingFixed.value = true
-}
 const applyFixedContent = async (blocks: NonNullable<LayoutTemplate['contentBlocks']>) => {
   const template = fixedContent.template.value
   if (!template || props.readOnly || props.interactionLocked || saving.value) return
   const articleId = props.article.id
-  editingBlocks.value = blocks
   const changes = new Map(blocks.map((block) => [block.id, block]))
   saving.value = true
   try {
@@ -155,8 +141,7 @@ const applyFixedContent = async (blocks: NonNullable<LayoutTemplate['contentBloc
       type: 'negative',
       message: error instanceof Error ? error.message : '固定内容保存失败。',
     })
-    if (articleId === props.article.id && template.id === activeTemplate.value?.id)
-      editingFixed.value = true
+    throw error
   } finally {
     saving.value = false
   }
@@ -165,7 +150,6 @@ watch(
   () => [props.article.id, props.accountId, props.template?.id, props.template?.versionId],
   () => {
     editedTemplate.value = null
-    editingFixed.value = false
   },
 )
 const hasFixedContent = computed(() =>
@@ -389,25 +373,22 @@ watch(
 const fullPreviewDocument = computed(
   () => `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><style>
     *{box-sizing:border-box}html,body{margin:0;min-width:0}body{padding:1.5rem;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;overflow-wrap:anywhere}body>section{max-width:100%}img{max-width:100%;height:auto}table{max-width:100%;table-layout:fixed}pre{white-space:pre-wrap;overflow-wrap:anywhere}
-  [data-template-locked=true]{position:relative}
-    .fixed-edit-button{position:absolute;top:0;right:0;padding:8px 12px;border:1px solid currentColor;border-radius:4px;background:Canvas;color:CanvasText;cursor:pointer;opacity:0;pointer-events:none}
-    [data-template-locked=true]:hover>.fixed-edit-button,[data-template-locked=true]:focus-within>.fixed-edit-button{opacity:1;pointer-events:auto}
-    @media(hover:none){.fixed-edit-button{opacity:1;pointer-events:auto}}
   </style></head><body>${fullPreviewHtml.value}</body></html>`,
 )
 
+let cleanupFixedEditing = () => {}
 const addFixedEditButtons = (event: Event) => {
+  cleanupFixedEditing()
   const document = (event.target as HTMLIFrameElement).contentDocument
-  if (!document || props.readOnly || props.interactionLocked) return
-  for (const section of document.querySelectorAll<HTMLElement>('[data-template-locked="true"]')) {
-    const button = document.createElement('button')
-    button.type = 'button'
-    button.className = 'fixed-edit-button'
-    button.textContent = '修改固定内容'
-    button.addEventListener('click', () => editFixedContent())
-    section.append(button)
-  }
+  if (!document || props.readOnly) return
+  cleanupFixedEditing = mountFixedContentEditing(document, {
+    blocks: () => fixedContent.template.value?.contentBlocks ?? [],
+    enabled: () => !props.readOnly && !props.interactionLocked && !saving.value,
+    save: (block) => applyFixedContent([block]),
+    error: (message) => $q.notify({ type: 'negative', message }),
+  })
 }
+onBeforeUnmount(() => cleanupFixedEditing())
 
 const setLink = () => {
   if (!editor.value) return
@@ -431,12 +412,6 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <LockedContentEditor
-    v-model="editingFixed"
-    :blocks="editingBlocks"
-    apply-label="保存到模板"
-    @apply="applyFixedContent"
-  />
   <section
     class="article-panel"
     aria-label="文章预览编辑区"
@@ -704,7 +679,8 @@ onBeforeUnmount(() => {
             :html="fixedContent.beforeHtml.value"
             label="正文固定开头"
             :editable="!readOnly && !interactionLocked && !saving"
-            @edit="editFixedContent('before_body')"
+            :blocks="fixedContent.template.value?.contentBlocks ?? []"
+            :save-block="(block) => applyFixedContent([block])"
           />
           <EditorContent :editor="editor" />
           <ArticleFixedContent
@@ -713,7 +689,8 @@ onBeforeUnmount(() => {
             :html="fixedContent.afterHtml.value"
             label="正文固定结尾"
             :editable="!readOnly && !interactionLocked && !saving"
-            @edit="editFixedContent('after_body')"
+            :blocks="fixedContent.template.value?.contentBlocks ?? []"
+            :save-block="(block) => applyFixedContent([block])"
           />
         </div>
       </div>

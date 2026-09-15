@@ -42,7 +42,12 @@ export const useArticleFixedContent = (
     const blocks = new Map(resolved.value?.contentBlocks?.map((block) => [block.id, block.html]))
     for (const group of resolved.value?.lockedBlocks ?? []) {
       if (group.position !== 'before_body' && group.position !== 'after_body') continue
-      const html = group.blockIds.map((id) => blocks.get(id) ?? '').join('')
+      const html = group.blockIds
+        .map(
+          (id) =>
+            `<section data-fixed-block-id="${id}" style="display:contents">${blocks.get(id) ?? ''}</section>`,
+        )
+        .join('')
       const key = group.position === 'before_body' ? 'beforeHtml' : 'afterHtml'
       result[key] += `<section data-template-locked="true">${html}</section>`
     }

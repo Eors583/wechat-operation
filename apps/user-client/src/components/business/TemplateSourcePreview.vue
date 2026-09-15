@@ -2,6 +2,8 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { LayoutTemplate, ModuleKey, ModuleStyle } from '@/api/types'
 import AppButton from '@/components/base/AppButton.vue'
+import { useQuasar } from 'quasar'
+import { mountFixedContentEditing } from '@/utils/fixedContentEditing'
 import {
   playTemplateVideo,
   prepareTemplateVideos,
@@ -23,11 +25,12 @@ const emit = defineEmits<{
   select: [ids: string[], endId: string]
   lock: [position: 'before_body' | 'after_body']
   unlock: [blockId: string]
-  edit: [blockId: string]
+  apply: [block: NonNullable<LayoutTemplate['contentBlocks']>[number]]
   clear: []
 }>()
 const frame = ref<HTMLIFrameElement | null>(null)
 const selecting = ref(false)
+const $q = useQuasar()
 let originalStyles = new Map<HTMLElement, string | null>()
 let emphasisElements: HTMLElement[] = []
 let cleanupSelection = () => {}
@@ -37,7 +40,7 @@ let cleanupSelection = () => {}
 const sourceDocument = computed(
   () => `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'; script-src 'none'; media-src blob:; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data: blob:; style-src 'unsafe-inline'; script-src 'none'; media-src blob:; form-action 'none'; base-uri 'none'">
 <meta name="referrer" content="no-referrer"><style>
 *{box-sizing:border-box}html,body{margin:0;min-width:0;font-family:system-ui,'Microsoft YaHei',sans-serif}
 body{padding:16px;color:CanvasText;background:Canvas;color-scheme:light;overflow-wrap:anywhere}
@@ -53,9 +56,6 @@ main{max-width:680px;margin:auto;min-width:0}
 html[data-selecting=true],html[data-selecting=true] *{cursor:crosshair!important}
 .source-unlock{grid-column:1/-1;min-width:0;min-height:36px;padding:6px 10px;border:0;text-align:left;overflow-wrap:anywhere;background:var(--app-action-soft);color:var(--app-action-primary);font:inherit;font-size:12px;cursor:pointer}
 .source-unlock[hidden]{display:none}
-.source-edit:not([hidden]){opacity:0;pointer-events:none}
-.source-block:hover>.source-edit,.source-block:focus-within>.source-edit{opacity:1;pointer-events:auto}
-@media(hover:none){.source-edit:not([hidden]){opacity:1;pointer-events:auto}}
 .source-select{align-self:start;min-width:0;min-height:28px;padding:2px;border:1px solid var(--app-border-default);border-radius:6px;background:var(--app-bg-surface);color:var(--app-text-secondary);cursor:pointer;font:inherit;font-size:12px}
 .source-select[aria-pressed=false]:not(:focus-visible){opacity:0}
 .source-select[aria-pressed=true]{background:var(--app-action-primary);color:var(--app-action-primary-text)}
@@ -70,7 +70,7 @@ html[data-selecting=true],html[data-selecting=true] *{cursor:crosshair!important
 </style></head><body><main><h1 class="source-title"></h1>${props.blocks
     .map(
       (block, index) =>
-        `<section class="source-block" data-index="${index}"><button type="button" class="source-edit source-unlock" hidden>修改固定内容</button><button type="button" class="source-unlock" hidden></button><button type="button" class="source-select" aria-label="选择第 ${index + 1} 部分" aria-pressed="false"></button><div class="source-content">${block.html}</div></section>`,
+        `<section class="source-block" data-index="${index}"><button type="button" class="source-unlock" hidden></button><button type="button" class="source-select" aria-label="选择第 ${index + 1} 部分" aria-pressed="false"></button><div class="source-content" data-fixed-block-id="${block.id}">${block.html}</div></section>`,
     )
     .join('')}</main></body></html>`,
 )
@@ -107,6 +107,9 @@ const syncSelection = () => {
     const block = props.blocks[index]
     if (!block) return
     const group = groups.get(block.id)
+    row.querySelectorAll<HTMLElement>('[data-inline-text]').forEach((element) => {
+      element.contentEditable = String(!!group && !props.busy)
+    })
     row.dataset.selected = String(selected.has(block.id))
     row.dataset.locked = String(!!group)
     const startsGroup = !!group && groups.get(props.blocks[index - 1]?.id ?? '') !== group
@@ -120,11 +123,6 @@ const syncSelection = () => {
       button.setAttribute('aria-pressed', String(selected.has(block.id)))
       button.setAttribute('aria-label', `选择第 ${index + 1} 部分`)
       button.title = `选择第 ${index + 1} 部分`
-    }
-    const edit = row.querySelector<HTMLButtonElement>(':scope > .source-edit')
-    if (edit) {
-      edit.hidden = !group
-      edit.disabled = props.busy
     }
     const unlock = row.querySelector<HTMLButtonElement>(':scope > .source-unlock:not(.source-edit)')
     if (unlock) {
@@ -227,6 +225,12 @@ const onLoad = () => {
   const document = frame.value?.contentDocument
   const previewWindow = document?.defaultView
   if (!document || !previewWindow || !frame.value) return
+  const stopEditing = mountFixedContentEditing(document, {
+    blocks: () => props.blocks,
+    enabled: (id) => !props.busy && props.lockedGroups.some((group) => group.blockIds.includes(id)),
+    save: (block) => emit('apply', block),
+    error: (message) => $q.notify({ type: 'negative', message }),
+  })
   prepareTemplateVideos(document)
   originalStyles = new Map()
   emphasisElements = Array.from(
@@ -491,6 +495,7 @@ const onLoad = () => {
     'click',
     (event) => {
       const target = event.target as Element | null
+      if (target?.closest('[data-inline-text], .inline-upload')) return
       if (target?.closest('a')) event.preventDefault()
       if (props.busy || target?.closest('video')) return
       if (target?.closest('[data-video-play]') && playTemplateVideo(target, props.sourceUrl)) return
@@ -503,10 +508,6 @@ const onLoad = () => {
       if (!row) return
       const index = Number(row.dataset.index)
       const block = props.blocks[index]
-      if (target?.closest('.source-edit')) {
-        if (block) emit('edit', block.id)
-        return
-      }
       if (target?.closest('.source-unlock')) {
         if (block) emit('unlock', block.id)
         return
@@ -517,6 +518,7 @@ const onLoad = () => {
     options,
   )
   cleanupSelection = () => {
+    stopEditing()
     releaseTemplateVideos(document)
     finish()
     listeners.abort()

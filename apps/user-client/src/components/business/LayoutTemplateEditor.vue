@@ -8,7 +8,6 @@ import { createDefaultStyles } from '@/api/styleDefaults'
 import type { LayoutComponentGroup, LayoutTemplate, ModuleKey, ModuleStyle, OfficialAccount } from '@/api/types'
 import AppButton from '@/components/base/AppButton.vue'
 import AppDialog from '@/components/base/AppDialog.vue'
-import LockedContentEditor from '@/components/business/LockedContentEditor.vue'
 import TemplateSourcePreview from '@/components/business/TemplateSourcePreview.vue'
 
 const props = withDefaults(
@@ -125,31 +124,11 @@ const selectedTemplate = computed(
 )
 const sourceBlocks = computed(() => selectedTemplate.value?.contentBlocks ?? [])
 const lockedGroups = computed(() => selectedTemplate.value?.lockedBlocks ?? [])
-const editingLockedContent = ref(false)
-const editingBlockIds = ref<string[]>([])
-const editingTemplateId = ref('')
-const editableBlocks = computed(() =>
-  sourceBlocks.value.filter((block) => editingBlockIds.value.includes(block.id)),
-)
-const editLockedContent = (blockId: string) => {
-  const group = lockedGroups.value.find((item) => item.blockIds.includes(blockId))
-  if (!group || saving.value) return
-  editingBlockIds.value = [...group.blockIds]
-  editingTemplateId.value = selectedId.value
-  editingLockedContent.value = true
-}
-const applyLockedContent = (blocks: NonNullable<LayoutTemplate['contentBlocks']>) => {
-  if (!selectedTemplate.value || selectedId.value !== editingTemplateId.value || saving.value)
-    return
-  const edits = new Map(blocks.map((block) => [block.id, block]))
-  selectedTemplate.value.contentBlocks = sourceBlocks.value.map(
-    (block) => edits.get(block.id) ?? block,
-  )
+const applyLockedContent = (block: NonNullable<LayoutTemplate['contentBlocks']>[number]) => {
+  if (!selectedTemplate.value || saving.value) return
+  selectedTemplate.value.contentBlocks = sourceBlocks.value.map(item => item.id === block.id ? block : item)
   markDirty()
 }
-watch([selectedId, templateScopeKey, () => props.modelValue], () => {
-  editingLockedContent.value = false
-})
 let lockUndoRevision = 0
 let dismissLockUndo: (() => void) | undefined
 watch(
@@ -1044,7 +1023,7 @@ const remove = async (target: LayoutTemplate) => {
                 @toggle="toggleSourceBlock"
                 @lock="lockSelection"
                 @unlock="unlockSourceBlock"
-                @edit="editLockedContent"
+                @apply="applyLockedContent"
                 @clear="selectedBlockIds = []"
                 @select="
                   (ids, endId) => {
@@ -1173,11 +1152,7 @@ const remove = async (target: LayoutTemplate) => {
       />
     </template>
   </AppDialog>
-  <LockedContentEditor
-    v-model="editingLockedContent"
-    :blocks="editableBlocks"
-    @apply="applyLockedContent"
-  />
+
 </template>
 
 <style scoped lang="scss">

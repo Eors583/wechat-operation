@@ -1,13 +1,23 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
+import { useQuasar } from 'quasar'
+import type { LayoutContentBlock } from '@/api/types'
+import { mountFixedContentEditing } from '@/utils/fixedContentEditing'
 import {
   playTemplateVideo,
   prepareTemplateVideos,
   releaseTemplateVideos,
 } from '@/utils/templateMedia'
 
-const props = defineProps<{ html: string; label: string; sourceUrl?: string; editable?: boolean }>()
-const emit = defineEmits<{ edit: [] }>()
+const props = defineProps<{
+  html: string
+  label: string
+  sourceUrl?: string
+  editable?: boolean
+  blocks: LayoutContentBlock[]
+  saveBlock: (block: LayoutContentBlock) => Promise<void>
+}>()
+const $q = useQuasar()
 const frame = ref<HTMLIFrameElement | null>(null)
 const height = ref(1)
 let cleanup = () => {}
@@ -18,7 +28,7 @@ const sourceDocument = computed(
   () => `<!doctype html><html lang="zh-CN"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data:; style-src 'unsafe-inline'; script-src 'none'; media-src blob:; form-action 'none'; base-uri 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: http: data: blob:; style-src 'unsafe-inline'; script-src 'none'; media-src blob:; form-action 'none'; base-uri 'none'">
 <style>
 *{box-sizing:border-box}html,body{margin:0;min-width:0}
 body{font-family:system-ui,'Microsoft YaHei',sans-serif;color:CanvasText;color-scheme:light;overflow-wrap:anywhere}
@@ -33,6 +43,12 @@ const onLoad = () => {
   const document = frame.value?.contentDocument
   const content = document?.querySelector('main')
   if (!document || !content) return
+  const stopEditing = mountFixedContentEditing(document, {
+    blocks: () => props.blocks,
+    enabled: () => !!props.editable,
+    save: props.saveBlock,
+    error: (message) => $q.notify({ type: 'negative', message }),
+  })
   prepareTemplateVideos(document)
   const resize = () => {
     height.value = Math.max(
@@ -50,6 +66,7 @@ const onLoad = () => {
   }
   document.addEventListener('click', preventNavigation)
   cleanup = () => {
+    stopEditing()
     releaseTemplateVideos(document)
     observer.disconnect()
     document.removeEventListener('click', preventNavigation)
@@ -73,15 +90,6 @@ onBeforeUnmount(() => cleanup())
       referrerpolicy="no-referrer"
       @load="onLoad"
     />
-    <q-btn
-      v-if="editable"
-      class="fixed-content__edit"
-      label="修改固定内容"
-      icon="edit"
-      color="primary"
-      size="sm"
-      @click="emit('edit')"
-    />
   </div>
 </template>
 
@@ -90,27 +98,6 @@ onBeforeUnmount(() => cleanup())
   position: relative;
   min-width: 0;
   max-width: 100%;
-
-  &__edit {
-    position: absolute;
-    inset-block-start: 0;
-    inset-inline-end: 0;
-    opacity: 0;
-    pointer-events: none;
-  }
-
-  &:hover &__edit,
-  &:focus-within &__edit {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  @media (hover: none) {
-    &__edit {
-      opacity: 1;
-      pointer-events: auto;
-    }
-  }
 }
 
 .article-fixed-content {

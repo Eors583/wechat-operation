@@ -976,6 +976,13 @@ def _document_with_locked_content(
     snapshot = validated_source_snapshot(snapshot)
     components = [group for group in snapshot["component_groups"] if group["enabled"]]
     blocks = {block["id"]: block["html"] for block in snapshot["content_blocks"]}
+    for key, markup in blocks.items():
+        fragment = BeautifulSoup(markup, "html.parser")
+        for image in fragment.select("img[data-fixed-image-id]"):
+            source = (marker_images or {}).get(str(image["data-fixed-image-id"]))
+            if source:
+                image["src"] = source
+        blocks[key] = str(fragment)
     before: list[str] = []
     after: list[str] = []
     between: dict[int, list[str]] = {}
@@ -1033,7 +1040,11 @@ def _document_with_locked_content(
             image["style"] = f"width:{component['image_width']}px;max-width:100%;height:auto"
             decorations[sequence] = f'<section style="max-width:100%;{container}">{image}</section>'
     for group in snapshot["locked_blocks"]:
-        fragment = "".join(blocks[block_id] for block_id in group["block_ids"])
+        fragment = "".join(
+            f'<section data-fixed-block-id="{html.escape(block_id, quote=True)}" '
+            'style="display:contents">'
+            + blocks[block_id] + "</section>" for block_id in group["block_ids"]
+        )
         fragment = f'<section data-template-locked="true">{fragment}</section>'
         if group["position"] == "before_body":
             before.append(fragment)
@@ -1229,11 +1240,23 @@ async def template_marker_image(
     return mime, content
 
 
+def fixed_image_ids(snapshot: dict[str, Any]) -> set[str]:
+    locked = {key for group in snapshot.get("locked_blocks", []) for key in group["block_ids"]}
+    return {
+        str(image["data-fixed-image-id"])
+        for block in snapshot.get("content_blocks", []) if block["id"] in locked
+        for image in BeautifulSoup(block["html"], "html.parser").select("img[data-fixed-image-id]")
+    }
+
+
 async def uploaded_marker_assets(
     session: AsyncSession, *, owner_id: str, snapshot: dict[str, Any]
 ) -> dict[str, Asset]:
     assets: dict[str, Asset] = {}
-    for group in snapshot.get("component_groups", []):
+    image_groups = [*snapshot.get("component_groups", []), *(
+        {"image_document_id": key} for key in fixed_image_ids(snapshot)
+    )]
+    for group in image_groups:
         document_id = group.get("image_document_id")
         if not document_id or document_id in assets:
             continue
@@ -1319,6 +1342,8 @@ async def create_render(
         for group in snapshot.get("component_groups", [])
         if group.get("enabled")
     }
+    fixed_ids = fixed_image_ids(snapshot)
+    active_ids.update(fixed_ids)
     marker_images: dict[str, str] = {}
     for document_id, asset in assets.items():
         if document_id not in active_ids:
@@ -1328,7 +1353,7 @@ async def create_render(
         try:
             content = await storage.read_bytes(object_key=asset.object_key, max_bytes=1_000_000)
         except ProviderUnavailable as exc:
-            if all(
+            if document_id not in fixed_ids and all(
                 group.get("fallback_render") == "text_index"
                 for group in snapshot.get("component_groups", [])
                 if group.get("enabled") and group.get("kind") == "decorated_heading"
