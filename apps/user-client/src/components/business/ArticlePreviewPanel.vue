@@ -72,7 +72,7 @@ const saving = ref(false)
 const saveState = ref<'saved' | 'saving' | 'failed'>('saved')
 const versionNo = ref(props.article.versionNo)
 const title = ref(props.article.title)
-const view = ref<'edit' | 'layout'>('layout')
+const view = ref<'edit' | 'layout'>('edit')
 const editorReady = ref(false)
 const fullPreviewHtml = ref('')
 const fullPreviewLoading = ref(false)
@@ -229,7 +229,7 @@ watch(
   () => [props.accountId, activeTemplate.value?.id, activeTemplate.value?.versionId],
   () => {
     invalidateFullPreview()
-    view.value = 'layout'
+    view.value = 'edit'
     if (layoutDirty.value) markDirty()
   },
 )
@@ -457,20 +457,6 @@ onBeforeUnmount(() => {
         {{ accountsError || templatesError }}
       </span>
       <slot name="cover" />
-      <q-btn-toggle
-        :model-value="view"
-        class="article-panel__view-toggle"
-        :options="[
-          { label: readOnly ? '正文阅读' : '正文编辑', value: 'edit' },
-          { label: '完整排版', value: 'layout' },
-        ]"
-        dense
-        no-caps
-        unelevated
-        toggle-color="primary"
-        aria-label="切换文章预览方式"
-        @update:model-value="selectView"
-      />
       <template v-if="!readOnly && view === 'edit'">
         <q-separator vertical />
         <q-btn
@@ -785,12 +771,6 @@ onBeforeUnmount(() => {
     color: var(--app-text-secondary);
     font-size: 13px;
     overflow-wrap: anywhere;
-  }
-
-  &__view-toggle {
-    min-width: 0;
-    max-width: 100%;
-    margin-left: auto;
   }
 
   &__full-preview {
