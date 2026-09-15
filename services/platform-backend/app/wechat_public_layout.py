@@ -715,9 +715,9 @@ def _line_height(sample: _Sample) -> float | None:
 
 
 def _margin_bottom(sample: _Sample) -> int | None:
-    return _dimension(sample.style.get("margin-bottom", "")) or _box_index(
-        sample.style.get("margin", ""), -1
-    )
+    if "margin-bottom" in sample.style:
+        return _dimension(sample.style["margin-bottom"])
+    return _box_index(sample.style.get("margin", ""), -1)
 
 
 def _padding(sample: _Sample) -> int | None:
@@ -733,10 +733,12 @@ def _box_index(value: str, index: int) -> int | None:
     if not numbers:
         return None
     if len(numbers) == 1:
-        return numbers[0]
-    if index == -1:
-        return numbers[2] if len(numbers) >= 3 else numbers[0]
-    return numbers[index] if index < len(numbers) else None
+        number = numbers[0]
+    elif index == -1:
+        number = numbers[2] if len(numbers) >= 3 else numbers[0]
+    else:
+        number = numbers[index] if index < len(numbers) else None
+    return number if number is not None and 0 <= number <= 72 else None
 
 
 def _color(value: str) -> str | None:
