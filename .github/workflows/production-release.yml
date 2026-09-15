@@ -1,0 +1,143 @@
+name: Production release
+run-name: Deploy ${{ inputs.service }} from ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Service to build and deploy
+        type: choice
+        required: true
+        default: backend
+        options: [backend, user, admin]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Deployment script lint
+        run: shellcheck scripts/ci-ssh-entry.sh scripts/deploy-ci-release.sh
+      - name: Select production service
+        id: service
+        env:
+          SERVICE: ${{ inputs.service }}
+        run: |
+          case "$SERVICE" in
+            backend) context=services/platform-backend; target=runtime ;;
+            user) context=apps/user-client; target=production ;;
+            admin) context=apps/admin-console; target=production ;;
+            *) exit 1 ;;
+          esac
+          echo "context=$context" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/eors583/wechat-ai-$SERVICE:git-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+      - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
+        if: inputs.service == 'backend'
+        with:
+          version: '0.8.17'
+          enable-cache: true
+      - name: Backend lint
+        if: inputs.service == 'backend'
+        run: uv run --project services/platform-backend --frozen ruff check services/platform-backend
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        if: inputs.service != 'backend'
+        with:
+          version: '11.19.0'
+          run_install: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: inputs.service != 'backend'
+        with:
+          node-version: '22.22'
+          cache: pnpm
+          cache-dependency-path: ${{ steps.service.outputs.context }}/pnpm-lock.yaml
+      - name: Frontend lint
+        if: inputs.service != 'backend'
+        env:
+          PROJECT: ${{ steps.service.outputs.context }}
+        run: |
+          pnpm --dir "$PROJECT" install --frozen-lockfile
+          pnpm --dir "$PROJECT" lint
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and publish production image
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: ${{ steps.service.outputs.context }}
+          target: ${{ steps.service.outputs.target }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.service.outputs.image }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/Eors583/wechat-operation
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ inputs.service }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.service }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Configure dedicated deployment SSH identity
+        env:
+          SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.PRODUCTION_KNOWN_HOSTS }}
+        run: |
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Deliver Git source and switch the selected service
+        env:
+          HOST: ${{ vars.PRODUCTION_HOST }}
+          SERVICE: ${{ inputs.service }}
+          IMAGE_DIGEST: ${{ needs.build.outputs.digest }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git bundle create "$RUNNER_TEMP/release.bundle" HEAD
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 \
+            "root@$HOST" "stage $GITHUB_SHA" < "$RUNNER_TEMP/release.bundle"
+          printf '%s\n' "$REGISTRY_TOKEN" | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            -o ConnectTimeout=15 "root@$HOST" \
+            "deploy $GITHUB_SHA $SERVICE $IMAGE_DIGEST $REGISTRY_USER"
+          {
+            echo '### Production release completed'
+            echo "- Service: $SERVICE"
+            echo "- Commit: $GITHUB_SHA"
+            echo "- Image digest: $IMAGE_DIGEST"
+            echo '- Functional tests were not run; manual acceptance is required.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove temporary SSH identity
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519

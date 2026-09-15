@@ -44,7 +44,7 @@ services:
     restart: unless-stopped
 
   user-web:
-    image: wechat-ai-user:${USER_WEB_VERSION:-preview}
+    image: ${USER_WEB_IMAGE_REPOSITORY:-wechat-ai-user}:${USER_WEB_VERSION:-preview}
     build:
       context: ../../apps/user-client
       target: production
@@ -54,7 +54,7 @@ services:
     restart: unless-stopped
 
   admin-web:
-    image: wechat-ai-admin:${ADMIN_WEB_VERSION:-preview}
+    image: ${ADMIN_WEB_IMAGE_REPOSITORY:-wechat-ai-admin}:${ADMIN_WEB_VERSION:-preview}
     build:
       context: ../../apps/admin-console
       target: production
