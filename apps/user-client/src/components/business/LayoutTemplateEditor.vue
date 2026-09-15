@@ -224,7 +224,7 @@ const updateComponentGroups = (groups: LayoutComponentGroup[]) => {
   markDirty()
 }
 const imageMarkers = computed(() => (selectedTemplate.value?.componentGroups ?? [])
-  .filter(group => group.kind === 'decorated_heading')
+  .filter(group => group.kind === 'decorated_heading' && (group.sequence !== null || group.imageDocumentId))
   .map(group => {
     const html = (selectedTemplate.value?.contentBlocks ?? [])
       .filter(block => group.blockIds.includes(block.id)).map(block => block.html).join('')
@@ -238,7 +238,7 @@ const setMarkerMode = (mode: string) => {
   if (!selectedTemplate.value || saving.value) return
   selectedTemplate.value.styles.heading_marker.enabled = mode === 'text'
   updateComponentGroups((selectedTemplate.value.componentGroups ?? []).map(group => group.kind === 'decorated_heading'
-    ? { ...group, enabled: mode === 'image', confirmed: mode === 'image' || group.confirmed } : group))
+    ? { ...group, enabled: mode === 'image' && group.sequence !== null, confirmed: (mode === 'image' && group.sequence !== null) || group.confirmed } : group))
   markStyleDirty()
 }
 const updateImageMarker = (id: string, patch: Partial<LayoutComponentGroup>) => {
