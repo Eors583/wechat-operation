@@ -1752,8 +1752,11 @@ async def prepare_ai_run(
     if run_type == "clarification" and ai_settings.get("max_clarification_rounds") == 0:
         run_type = "article_generation"
     transcript_required = (
-        intent_decision.get("domain") == "general"
+        run_type == "discussion"
+        and intent_decision.get("domain") == "general"
         and intent_decision.get("fidelity") == "verbatim"
+        and intent_decision.get("task") in {"extraction", "verification"}
+        and not explicit_article_request(text)
     )
     if conversation_action and not needs_model(conversation_action):
         file_ids = []
@@ -2213,7 +2216,12 @@ async def process_ai_run(
         )
     if intent.get("needs_clarification"):
         deterministic = ("请明确本轮要处理的对象，以及希望提取原文、翻译、总结还是修改。", [])
-    elif general_task and intent.get("fidelity") == "verbatim":
+    elif (
+        run.run_type == "discussion" and general_task
+        and intent.get("fidelity") == "verbatim"
+        and intent.get("task") in {"extraction", "verification"}
+        and not explicit_article_request(user_input)
+    ):
         response, transcript_sources = await document_transcript(
             session, owner_id=run.owner_id, document_ids=model_context.get("document_ids", []),
             model_files=model_context.get("untrusted_model_files", []),

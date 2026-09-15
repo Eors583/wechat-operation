@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.domains.conversation_actions import plan_action
+from app.domains.dialogue_flow import explicit_article_request
 from app.domains.general_intent import INTENT_PROMPT, parse_intent
 from app.domains.preference_learning import is_preference_only
 from app.model_gateway import active_route_snapshot, generate_with_frozen_route
@@ -36,6 +37,18 @@ async def resolve_intent(
             action,
             decision,
         )
+    if (
+        fallback in {"article_generation", "clarification", "article_conflict_confirmation"}
+        and explicit_article_request(text)
+        and not is_preference_only(text)
+    ):
+        # Current writing authority cannot inherit a previous turn's transcript mode.
+        decision.update({
+            "intent": fallback, "resolved": fallback, "task": "rewrite",
+            "fidelity": "semantic", "needs_clarification": False,
+            "source": "explicit_article_request",
+        })
+        return fallback, None, decision
     route = await active_route_snapshot(session, purpose="fast_task", settings=settings)
     routed = await generate_with_frozen_route(
         snapshot=route,
