@@ -1064,10 +1064,6 @@ const openArticle = async (message: Message) => {
                 <div v-else-if="isFailureMessage(message)" class="message__failure" role="alert">
                   <strong><q-icon name="error_outline" />本次生成没有完成</strong>
                   <p>{{ message.content }}</p>
-                  <div class="message__failure-meta">
-                    <span v-if="message.errorCode">错误代码：{{ message.errorCode }}</span>
-                    <span v-if="message.aiRunId">运行编号：{{ message.aiRunId }}</span>
-                  </div>
                   <div class="message__failure-actions">
                     <AppButton
                       v-if="alternativeModel"
@@ -1184,14 +1180,6 @@ const openArticle = async (message: Message) => {
                     }}</strong
                   >
                   <p>{{ displayedRunFailure.message }}</p>
-                  <div class="message__failure-meta">
-                    <span v-if="displayedRunFailure.errorCode"
-                      >错误代码：{{ displayedRunFailure.errorCode }}</span
-                    >
-                    <span v-if="displayedRunFailure.runId"
-                      >运行编号：{{ displayedRunFailure.runId }}</span
-                    >
-                  </div>
                   <div class="message__failure-actions">
                     <AppButton
                       v-if="alternativeModel && !awaitingConfirmation"
@@ -1311,14 +1299,6 @@ const openArticle = async (message: Message) => {
             <div class="message__failure" role="alert">
               <strong><q-icon name="error_outline" />本次生成没有完成</strong>
               <p>{{ displayedRunFailure.message }}</p>
-              <div class="message__failure-meta">
-                <span v-if="displayedRunFailure.errorCode"
-                  >错误代码：{{ displayedRunFailure.errorCode }}</span
-                >
-                <span v-if="displayedRunFailure.runId"
-                  >运行编号：{{ displayedRunFailure.runId }}</span
-                >
-              </div>
               <div v-if="alternativeModel" class="message__failure-actions">
                 <AppButton
                   variant="ghost"
