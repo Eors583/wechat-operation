@@ -11,6 +11,7 @@ import { headingMarkers, headingMarkerKey, type HeadingMarker } from '@/editor/h
 import { createDefaultStyles } from '@/api/styleDefaults'
 import { queryClient } from '@/boot/query'
 import { moduleParagraph } from '@/editor/moduleParagraph'
+import { headingLineBreak } from '@/editor/headingLineBreak'
 import { templatePreviewCssVariables } from '@/utils/templatePreviewStyles'
 import { separateArticleTitle } from '@/utils/articleTitle'
 import { tableExtensions } from '@/editor/tableExtensions'
@@ -174,6 +175,7 @@ const editor = useEditor({
     ...tableExtensions,
     StarterKit.configure({ paragraph: false }),
     moduleParagraph,
+    headingLineBreak,
     Link.configure({ openOnClick: false }),
     Image.configure({ inline: false }),
   ],

@@ -14,6 +14,7 @@ import ArticleFixedContent from '@/components/business/ArticleFixedContent.vue'
 import Link from '@tiptap/extension-link'
 import Image from '@tiptap/extension-image'
 import { moduleParagraph } from '@/editor/moduleParagraph'
+import { headingLineBreak } from '@/editor/headingLineBreak'
 import { ApiError, api } from '@/api/client'
 import { queryClient } from '@/boot/query'
 import type { Article, ArticleVersion } from '@/api/types'
@@ -275,6 +276,7 @@ const editor = useEditor({
     ...tableExtensions,
     StarterKit.configure({ paragraph: false }),
     moduleParagraph,
+    headingLineBreak,
     Link.configure({ openOnClick: false }),
     Image.configure({ inline: false }),
   ],
