@@ -15,7 +15,7 @@ export const mountFixedContentEditing = (document: Document, options: Options) =
   const urls: string[] = []
   let busy = false
   const style = document.createElement('style')
-  style.textContent = `[data-inline-text]{cursor:text!important;user-select:text!important;-webkit-user-select:text!important;outline-offset:2px}[data-inline-text]:hover,[data-inline-text]:focus{outline:1px dashed var(--app-action-primary,#087443)}[data-inline-text] *{user-select:text!important;-webkit-user-select:text!important}.inline-upload{position:fixed;max-width:calc(100vw - 16px);padding:6px 10px;border:1px solid currentColor;border-radius:4px;background:Canvas;color:CanvasText;font:14px system-ui;cursor:pointer;z-index:1}.inline-upload[hidden]{display:none}`
+  style.textContent = `[data-inline-text]{cursor:text!important;user-select:text!important;-webkit-user-select:text!important;outline:none!important}[data-inline-text] *{user-select:text!important;-webkit-user-select:text!important}.inline-upload{position:fixed;max-width:calc(100vw - 16px);padding:6px 10px;border:1px solid currentColor;border-radius:4px;background:Canvas;color:CanvasText;font:14px system-ui;cursor:pointer;z-index:1}.inline-upload[hidden]{display:none}`
   document.head.append(style)
   const upload = document.createElement('button')
   upload.type = 'button'
