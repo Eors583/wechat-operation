@@ -41,14 +41,27 @@ export DOCKER_CONFIG
 DOCKER_CONFIG=$(mktemp -d)
 trap 'rm -rf -- "$DOCKER_CONFIG"; rm -f -- "$bundle"' EXIT
 # The deploy job supplies a short-lived, read-only package token over encrypted stdin.
-docker login ghcr.io --username "$actor" --password-stdin
-docker pull "$repository@$digest"
-[[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$repository@$digest")" = linux/amd64 ]]
-[[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$repository@$digest")" = "$revision" ]]
-docker tag "$repository@$digest" "$repository:$tag"
+archive=".deploy-images/wechat-ai-$service-$tag.tar.gz"
+delivery=registry
+if [[ -f "$archive" && -f "$archive.image-id" ]]; then
+  # The runner pulled this exact registry digest, then delivered a SHA-256 checked archive.
+  cat >/dev/null
+  docker load --input "$archive"
+  [[ "$(docker image inspect --format '{{.Id}}' "$repository:$tag")" = "$(cat "$archive.image-id")" ]]
+  delivery=github-ssh-archive
+else
+  if ! timeout 45 docker login ghcr.io --username "$actor" --password-stdin \
+    || ! timeout 180 docker pull "$repository@$digest"; then
+    echo 'Registry pull unavailable or timed out; request the verified GitHub archive.' >&2
+    exit 75
+  fi
+  docker tag "$repository@$digest" "$repository:$tag"
+fi
+[[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$repository:$tag")" = linux/amd64 ]]
+[[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$repository:$tag")" = "$revision" ]]
 record=".deploy-images/ci-$service-$tag-rollback.txt"
 printf '%s\n' "$repository_key=$previous_repository" "$version_key=$previous_tag" \
-  "target=$repository:$tag" "digest=$digest" > "$record"
+  "target=$repository:$tag" "digest=$digest" "delivery=$delivery" > "$record"
 docker image inspect --format '{{.Id}} {{.RepoTags}}' "$previous_repository:$previous_tag" >> "$record"
 git merge --ff-only "$revision"
 compose=(docker compose --env-file .env.server -f deploy/compose/compose.server-preview.yml)
@@ -96,4 +109,6 @@ if [[ "$previous_repository" != "$repository" ]]; then
   docker tag "$previous_repository:$previous_tag" "$repository:$previous_tag"
 fi
 bash scripts/prune-release-images.sh "$service" "$tag" "$previous_tag" "$repository"
+# Compressed CI archives are delivery files; loaded current/previous Docker images are retained.
+rm -f -- "$archive" "$archive.image-id"
 printf '%s\n' 'Service switched; previous image retained. Functional tests not run.'

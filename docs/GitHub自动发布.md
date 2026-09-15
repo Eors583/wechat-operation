@@ -16,6 +16,9 @@
 - 服务器通过 SSH 标准输入接收临时令牌，执行 `docker login --password-stdin`；
   Docker 登录配置放在临时目录，退出时删除。令牌不写入 `.env.server` 或源码。
 - 镜像按构建返回的 SHA-256 digest 拉取，再检查平台与完整 Git revision 标签。
+- 服务器拉取超过 3 分钟或仓库不可达时，自动回退到 GitHub runner 下载同一 digest，
+  压缩后经 SSH 交付；校验归档 SHA-256、镜像 ID、平台和 Git revision 后才切换。
+  发布摘要和回滚记录明确标记交付方式；回退同样不使用本机或服务器构建。
 - production 环境只允许 `main` 分支，存放 `PRODUCTION_SSH_KEY`、
   `PRODUCTION_KNOWN_HOSTS` 两个 Secret，以及 `PRODUCTION_HOST` 变量。
 - 部署密钥为专用 Ed25519 密钥。服务器授权采用 `restrict` 与 forced command，
