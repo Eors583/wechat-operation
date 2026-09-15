@@ -78,6 +78,9 @@ const editorReady = ref(false)
 const fullPreviewHtml = ref('')
 const fullPreviewLoading = ref(false)
 const fullPreviewError = ref('')
+const silentFixedUpdate = ref(false)
+const fullPreviewFrame = ref<HTMLIFrameElement | null>(null)
+let previewScroll = { x: 0, y: 0 }
 const fixedContent = useArticleFixedContent(() => activeTemplate.value)
 const editorMarkers = ref<HeadingMarker[]>([])
 watch(
@@ -134,8 +137,13 @@ const applyFixedContent = async (blocks: NonNullable<LayoutTemplate['contentBloc
     ...template,
     contentBlocks: template.contentBlocks?.map((block) => changes.get(block.id) ?? block),
   }
-  markDirty()
-  if (view.value === 'layout') await loadFullPreview()
+  silentFixedUpdate.value = view.value === 'layout' && Boolean(fullPreviewHtml.value)
+  try {
+    markDirty()
+    if (view.value === 'layout') await loadFullPreview()
+  } finally {
+    silentFixedUpdate.value = false
+  }
 }
 watch(
   () => [props.article.id, props.accountId, props.template?.id, props.template?.versionId],
@@ -158,7 +166,7 @@ const layoutDirty = computed(() =>
 const canSave = computed(() => (dirty.value || layoutDirty.value) && !saving.value)
 const invalidateFullPreview = () => {
   previewRequest += 1
-  fullPreviewHtml.value = ''
+  if (!silentFixedUpdate.value) fullPreviewHtml.value = ''
   fullPreviewError.value = ''
 }
 const markDirty = () => {
@@ -200,6 +208,7 @@ watch(editorMarkers, () => {
 })
 
 const hydrateArticle = () => {
+  silentFixedUpdate.value = false
   invalidateFullPreview()
   versionNo.value = props.article.versionNo
   savedTemplateVersionId.value = props.article.layoutTemplate?.versionId
@@ -230,6 +239,7 @@ watch(
 watch(
   () => [props.accountId, activeTemplate.value?.id, activeTemplate.value?.versionId],
   () => {
+    silentFixedUpdate.value = false
     invalidateFullPreview()
     view.value = 'edit'
     if (layoutDirty.value) markDirty()
@@ -277,7 +287,8 @@ const saveNow = async () => {
       $q.notify({ type: 'warning', message: '保存期间内容有修改，请再次保存。' })
       return null
     }
-    $q.notify({ type: 'positive', message: '文章修改已保存。' })
+    if (!silentFixedUpdate.value)
+      $q.notify({ type: 'positive', message: '文章修改已保存。' })
     return saved
   } catch (error) {
     saveState.value = 'failed'
@@ -335,10 +346,17 @@ const loadFullPreview = async () => {
       null,
       saved.versionNo,
     )
-    if (request === previewRequest) fullPreviewHtml.value = render.html
+    if (request === previewRequest) {
+      const window = fullPreviewFrame.value?.contentWindow
+      previewScroll = { x: window?.scrollX ?? 0, y: window?.scrollY ?? 0 }
+      fullPreviewHtml.value = render.html
+    }
   } catch (error) {
-    if (request === previewRequest)
+    if (request === previewRequest) {
       fullPreviewError.value = error instanceof Error ? error.message : '完整排版加载失败。'
+      if (silentFixedUpdate.value)
+        $q.notify({ type: 'negative', message: fullPreviewError.value })
+    }
   } finally {
     fullPreviewLoading.value = false
     if (
@@ -374,6 +392,8 @@ const fullPreviewDocument = computed(
 let cleanupFixedEditing = () => {}
 const addFixedEditButtons = (event: Event) => {
   cleanupFixedEditing()
+  const frame = event.target as HTMLIFrameElement
+  frame.contentWindow?.scrollTo(previewScroll.x, previewScroll.y)
   const document = (event.target as HTMLIFrameElement).contentDocument
   if (!document || props.readOnly) return
   cleanupFixedEditing = mountFixedContentEditing(document, {
@@ -680,7 +700,7 @@ onBeforeUnmount(() => {
     <div v-if="view === 'layout'" class="article-panel__full-preview">
       <h2 class="article-panel__full-title text-h6">{{ title }}</h2>
       <div
-        v-if="fullPreviewLoading"
+        v-if="fullPreviewLoading && !fullPreviewHtml"
         class="article-panel__preview-state"
         role="status"
         aria-live="polite"
@@ -690,6 +710,7 @@ onBeforeUnmount(() => {
       </div>
       <iframe
         v-else-if="fullPreviewHtml"
+        ref="fullPreviewFrame"
         class="article-panel__full-frame"
         :srcdoc="fullPreviewDocument"
         sandbox="allow-same-origin"
