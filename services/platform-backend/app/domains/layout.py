@@ -472,10 +472,7 @@ def apply_visual_markers(
     ]
     for marker in markers:
         if marker.get("sequence") is None:
-            source_id = by_id[marker["image_id"]]["block_id"]
-            for candidate in snapshot.get("component_groups", []):
-                if candidate["kind"] == "decorated_heading" and source_id in candidate["block_ids"]:
-                    groups.append({**candidate, "enabled": False, "confirmed": False})
+            # A negative visual classification overrides the structural candidate.
             continue
         source = by_id[marker["image_id"]]
         index = positions[source["block_id"]]
