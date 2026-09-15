@@ -35,6 +35,8 @@ export const headingMarkers = (getMarkers: () => HeadingMarker[]) =>
                   const image = document.createElement('img')
                   image.src = marker.url
                   image.alt = `第 ${number} 章序号`
+                  image.style.display = 'inline-block'
+                  image.style.marginInline = '0'
                   image.style.width = `${marker.group.imageWidth}px`
                   image.style.maxWidth = '100%'
                   image.style.height = 'auto'
