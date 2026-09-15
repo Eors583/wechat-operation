@@ -1,0 +1,2 @@
+# Daily at 04:30 in the production server's timezone.
+30 4 * * * root /bin/sh /usr/local/lib/wechat-ci/cleanup-release-temp.sh 2>&1 | /usr/bin/logger -t wechat-release-cleanup
