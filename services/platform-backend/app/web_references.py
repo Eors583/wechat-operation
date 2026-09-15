@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import json
 import re
 import socket
 from collections.abc import Awaitable, Callable
@@ -10,6 +11,7 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
 import httpx
+from bs4 import BeautifulSoup
 
 from app.providers import ProviderUnavailable, WebReferenceContent
 from app.wechat_public_layout import WeChatArticleApiConfig
@@ -19,6 +21,36 @@ MAX_EXTRACTED_CHARACTERS = 300_000
 MAX_REDIRECTS = 3
 
 HostResolver = Callable[[str], Awaitable[list[str]]]
+
+
+def wechat_search_results(body: str) -> str:
+    """Parse public result snippets; never execute redirect JavaScript or bypass a captcha."""
+    soup = BeautifulSoup(body, "html.parser")
+    results = []
+    for item in soup.select("ul.news-list li")[:10]:
+        anchor = item.select_one("h3 a")
+        if anchor is None:
+            continue
+        url = urljoin("https://weixin.sogou.com/", str(anchor.get("href") or ""))
+        parsed = urlparse(url)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname not in {"weixin.sogou.com", "mp.weixin.qq.com"}
+            or parsed.username or parsed.password
+        ):
+            continue
+        summary = item.select_one("p.txt-info")
+        source = item.select_one(".s-p")
+        results.append({
+            "title": anchor.get_text(" ", strip=True)[:200],
+            "url": url,
+            "summary": summary.get_text(" ", strip=True)[:1000] if summary else "",
+            "source_and_date": source.get_text(" ", strip=True)[:300] if source else "",
+            "scope": "search_snippet_only",
+        })
+    if not results:
+        raise ProviderUnavailable("WeChat search returned no accessible results")
+    return json.dumps(results, ensure_ascii=False)
 
 
 def extract_message_links(text: str) -> list[str]:
@@ -208,6 +240,17 @@ class SafeHttpWebReferenceProvider:
                 except httpx.HTTPError as exc:
                     raise ProviderUnavailable("Web reference could not be fetched") from exc
                 if content_type == "text/html":
+                    if (
+                        urlparse(requested_url).hostname == "weixin.sogou.com"
+                        and urlparse(requested_url).path == "/weixin"
+                    ):
+                        return WebReferenceContent(
+                            requested_url=requested_url,
+                            final_url=current_url,
+                            title="微信公众号搜索结果",
+                            text=wechat_search_results(body),
+                            content_type=content_type,
+                        )
                     parser = _PageTextExtractor()
                     parser.feed(body)
                     text = "\n".join(
