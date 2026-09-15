@@ -1,8 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { playTemplateVideo, prepareTemplateVideos, releaseTemplateVideos } from '@/utils/templateMedia'
+import {
+  playTemplateVideo,
+  prepareTemplateVideos,
+  releaseTemplateVideos,
+} from '@/utils/templateMedia'
 
-const props = defineProps<{ html: string; label: string; sourceUrl?: string }>()
+const props = defineProps<{ html: string; label: string; sourceUrl?: string; editable?: boolean }>()
+const emit = defineEmits<{ edit: [] }>()
 const frame = ref<HTMLIFrameElement | null>(null)
 const height = ref(1)
 let cleanup = () => {}
@@ -56,20 +61,58 @@ onBeforeUnmount(() => cleanup())
 </script>
 
 <template>
-  <iframe
-    ref="frame"
-    class="article-fixed-content"
-    :style="{ height: `${height}px` }"
-    :srcdoc="sourceDocument"
-    :title="label"
-    sandbox="allow-same-origin"
-    allow="autoplay; fullscreen"
-    referrerpolicy="no-referrer"
-    @load="onLoad"
-  />
+  <div class="fixed-content">
+    <iframe
+      ref="frame"
+      class="article-fixed-content"
+      :style="{ height: `${height}px` }"
+      :srcdoc="sourceDocument"
+      :title="label"
+      sandbox="allow-same-origin"
+      allow="autoplay; fullscreen"
+      referrerpolicy="no-referrer"
+      @load="onLoad"
+    />
+    <q-btn
+      v-if="editable"
+      class="fixed-content__edit"
+      label="修改固定内容"
+      icon="edit"
+      color="primary"
+      size="sm"
+      @click="emit('edit')"
+    />
+  </div>
 </template>
 
 <style scoped lang="scss">
+.fixed-content {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+
+  &__edit {
+    position: absolute;
+    inset-block-start: 0;
+    inset-inline-end: 0;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  &:hover &__edit,
+  &:focus-within &__edit {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  @media (hover: none) {
+    &__edit {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+}
+
 .article-fixed-content {
   display: block;
   width: 100%;

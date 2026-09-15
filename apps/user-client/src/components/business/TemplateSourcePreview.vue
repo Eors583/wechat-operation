@@ -53,6 +53,9 @@ main{max-width:680px;margin:auto;min-width:0}
 html[data-selecting=true],html[data-selecting=true] *{cursor:crosshair!important}
 .source-unlock{grid-column:1/-1;min-width:0;min-height:36px;padding:6px 10px;border:0;text-align:left;overflow-wrap:anywhere;background:var(--app-action-soft);color:var(--app-action-primary);font:inherit;font-size:12px;cursor:pointer}
 .source-unlock[hidden]{display:none}
+.source-edit:not([hidden]){opacity:0;pointer-events:none}
+.source-block:hover>.source-edit,.source-block:focus-within>.source-edit{opacity:1;pointer-events:auto}
+@media(hover:none){.source-edit:not([hidden]){opacity:1;pointer-events:auto}}
 .source-select{align-self:start;min-width:0;min-height:28px;padding:2px;border:1px solid var(--app-border-default);border-radius:6px;background:var(--app-bg-surface);color:var(--app-text-secondary);cursor:pointer;font:inherit;font-size:12px}
 .source-select[aria-pressed=false]:not(:focus-visible){opacity:0}
 .source-select[aria-pressed=true]{background:var(--app-action-primary);color:var(--app-action-primary-text)}
@@ -120,7 +123,7 @@ const syncSelection = () => {
     }
     const edit = row.querySelector<HTMLButtonElement>(':scope > .source-edit')
     if (edit) {
-      edit.hidden = !startsGroup
+      edit.hidden = !group
       edit.disabled = props.busy
     }
     const unlock = row.querySelector<HTMLButtonElement>(':scope > .source-unlock:not(.source-edit)')
