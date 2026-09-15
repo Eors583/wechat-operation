@@ -18,6 +18,7 @@ const chooseFiles = (accept = '*/*') =>
     input.multiple = true
     input.accept = accept
     input.onchange = () => resolve(Array.from(input.files ?? []))
+    input.oncancel = () => resolve([])
     input.click()
   })
 

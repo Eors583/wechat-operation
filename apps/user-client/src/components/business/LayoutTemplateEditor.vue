@@ -248,7 +248,8 @@ const updateImageMarker = (id: string, patch: Partial<LayoutComponentGroup>) => 
 const markerUrls = ref<Record<string, string>>({})
 const loadingMarkerIds = new Set<string>()
 const markerErrors = ref<Record<string, string>>({})
-const uploadingMarker = ref(false)
+const uploadingMarkerSource = ref<string | null>(null)
+const uploadingMarker = computed(() => uploadingMarkerSource.value !== null)
 const newMarkerSequence = ref(1)
 let markerEditorDisposed = false
 const loadMarker = async (item: (typeof imageMarkers.value)[number]) => {
@@ -288,6 +289,7 @@ onBeforeUnmount(() => {
 const uploadMarker = async (existing?: LayoutComponentGroup) => {
   const target = selectedTemplate.value
   if (!target || saving.value || uploadingMarker.value) return
+  const uploadSource = existing?.id ?? 'new'
   const sequence = existing?.sequence ?? Number(newMarkerSequence.value)
   const groups = target.componentGroups ?? []
   existing ??= groups.find(group => group.kind === 'decorated_heading' && group.sequence === sequence)
@@ -296,7 +298,7 @@ const uploadMarker = async (existing?: LayoutComponentGroup) => {
     return
   }
   if (!existing && groups.length >= 100) return
-  uploadingMarker.value = true
+  uploadingMarkerSource.value = uploadSource
   try {
     const [file] = await platform.pickFiles('.png,.jpg,.jpeg')
     if (!file) return
@@ -305,7 +307,7 @@ const uploadMarker = async (existing?: LayoutComponentGroup) => {
     if (markerEditorDisposed || selectedTemplate.value !== target) return
     if (!attachment.documentId) throw new Error('上传未完成，请重试。')
     const current = target.componentGroups ?? []
-    if (current.some(group => group.kind === 'decorated_heading' && group.id !== existing?.id && group.sequence === sequence)) throw new Error('该章节已配置图片，请选择替换图片。')
+    if (current.some(group => group.kind === 'decorated_heading' && group.id !== existing?.id && group.sequence === sequence)) throw new Error('该章节已配置图片，请在对应章节上传图片。')
     let index = 1
     while (current.some(group => group.id === `group-${index}`)) index += 1
     const marker: LayoutComponentGroup = {
@@ -326,7 +328,7 @@ const uploadMarker = async (existing?: LayoutComponentGroup) => {
   } catch (error) {
     $q.notify({ type: 'negative', message: error instanceof Error ? error.message : '序号图片上传失败。' })
   } finally {
-    uploadingMarker.value = false
+    uploadingMarkerSource.value = null
   }
 }
 const addComponentGroup = () => {
@@ -862,7 +864,7 @@ const remove = async (target: LayoutTemplate) => {
             />
             <div v-if="activeModule === 'heading_marker'" class="template-editor__image-marker">
               <q-input v-model.number="newMarkerSequence" label="图片对应第几章" type="number" min="1" max="100" outlined dense :disable="uploadingMarker || saving" />
-              <q-btn outline color="primary" :label="imageMarkers.some(item => item.group.sequence === Number(newMarkerSequence)) ? `替换第 ${newMarkerSequence} 章图片` : '上传序号图片'" icon="upload" :loading="uploadingMarker" :disable="saving" @click="uploadMarker()" />
+              <q-btn outline color="primary" label="上传图片" icon="upload" :loading="uploadingMarkerSource === 'new'" :disable="saving || uploadingMarker" @click="uploadMarker()" />
             </div>
             <q-select
               v-if="activeModule === 'heading_marker'"
@@ -898,7 +900,7 @@ const remove = async (target: LayoutTemplate) => {
                 <q-input :model-value="item.group.containerStyle.marginBottom ?? 8" label="下间距" type="number" min="0" max="72" outlined dense @update:model-value="updateImageMarker(item.group.id, { containerStyle: { ...item.group.containerStyle, marginBottom: Number($event) } })" />
                 </q-expansion-item>
                 <div class="template-editor__marker-actions">
-                  <q-btn outline color="primary" label="替换图片" :loading="uploadingMarker" :disable="saving" @click="uploadMarker(item.group)" />
+                  <q-btn outline color="primary" label="上传图片" :loading="uploadingMarkerSource === item.group.id" :disable="saving || uploadingMarker" @click="uploadMarker(item.group)" />
                   <q-btn flat color="negative" label="移除映射" :disable="saving || uploadingMarker" @click="updateComponentGroups((selectedTemplate?.componentGroups ?? []).filter(group => group.id !== item.group.id))" />
                 </div>
               </section>
