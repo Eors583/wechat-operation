@@ -558,7 +558,10 @@ def classify_run_type(
         normalized,
     ):
         return "article_generation"
-    if re.search(r"(?:给我|生成|提供|想|列出|再来).{0,8}(?:标题|题目)", normalized):
+    if re.search(
+        r"(?:给我|生成|提供|想|列出|再来|起|拟).{0,8}(?:标题|题目)"
+        r"|(?:标题|题目).{0,8}(?:评分|打分|备选)", normalized,
+    ):
         return "titles"
     if re.search(r"(?:提纲|大纲|文章结构|内容结构)", normalized):
         return "outline"
@@ -575,11 +578,12 @@ def classify_run_type(
         has_reference_material or has_reference_links or bool(extract_message_links(text))
     )
     reference_rewrite = has_material and bool(
-        re.search(r"改写|重写|润色|扩写|缩写", normalized)
+        re.search(r"改写|重写|润色|扩写|缩写|去\s*AI\s*味|去痕", normalized, re.IGNORECASE)
     )
     revision = has_current_article and bool(
         re.search(
             r"修改|改写|重写|润色|调整|删除|删掉|去掉|移除|替换|精简|扩写|缩写|优化|换个开头|改成|改为"
+            r"|去\s*[Aa][Ii]\s*味|去痕"
             r"|(?:标题|开头|结尾).{0,12}(?:改|换)"
             r"|(?:开头|结尾|这段|第.{0,4}(?:部分|段)).{0,16}(?:不要|别|改|直接|增加|删除)"
             r"|(?:这篇|这个|当前)?文章.{0,24}(?:不要|不能|缺少|没有|全是|都是)"

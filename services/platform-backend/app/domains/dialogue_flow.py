@@ -58,8 +58,8 @@ def explicit_article_request(text: str) -> bool:
     """A requested article remains the deliverable even when research is also requested."""
     return bool(
         re.search(
-            r"(?:写|撰写|创作|生成|完成|产出).{0,60}(?:文章|推文|公众号内容)"
-            r"|写成(?:一|1)?篇|整理成文章|生成全文|完整成文",
+            r"(?:写|撰写|创作|生成|完成|产出).{0,60}(?:文章|推文|公众号内容|初稿|成稿|稿件)"
+            r"|写成(?:一|1)?篇|整理成文章|生成全文|完整成文|写稿",
             text,
         )
     ) and not re.search(r"(?:不要|不用|无需|别|先不).{0,5}(?:写|生成|创作)", text)
