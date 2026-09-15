@@ -80,12 +80,22 @@ else
 fi
 [[ "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$repository:$tag")" = linux/amd64 ]]
 [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$repository:$tag")" = "$revision" ]]
+compose=(docker compose --env-file .env.server -f deploy/compose/compose.server-preview.yml)
+if [[ "$previous_repository:$previous_tag" = "$repository:$tag" ]]; then
+  image_id=$(docker image inspect --format '{{.Id}}' "$repository:$tag")
+  for name in "${services[@]}"; do
+    container_id=$("${compose[@]}" ps -q "$name")
+    [[ -n "$container_id" ]]
+    [[ "$(docker inspect --format '{{.Image}} {{.State.Status}}' "$container_id")" = "$image_id running" ]]
+  done
+  echo "Already deployed $repository:$tag; rollback record and images preserved."
+  exit 0
+fi
 record=".deploy-images/ci-$service-$tag-rollback.txt"
 printf '%s\n' "$repository_key=$previous_repository" "$version_key=$previous_tag" \
   "target=$repository:$tag" "digest=$digest" "delivery=$delivery" > "$record"
 docker image inspect --format '{{.Id}} {{.RepoTags}}' "$previous_repository:$previous_tag" >> "$record"
 git merge --ff-only "$revision"
-compose=(docker compose --env-file .env.server -f deploy/compose/compose.server-preview.yml)
 set_version() {
   python3 - "$repository_key" "$1" "$version_key" "$2" <<'PY'
 import os
@@ -132,4 +142,4 @@ fi
 bash scripts/prune-release-images.sh "$service" "$tag" "$previous_tag" "$repository"
 # Compressed CI archives are delivery files; loaded current/previous Docker images are retained.
 rm -f -- "$archive" "$archive.image-id"
-printf '%s\n' 'Service switched; previous image retained. Functional tests not run.'
+printf '%s\n' "Delivery: $delivery" 'Service switched; previous image retained. Functional tests not run.'

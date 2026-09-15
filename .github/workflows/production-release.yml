@@ -132,9 +132,7 @@ jobs:
           printf '%s\n' "$REGISTRY_TOKEN" | ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
             -o ConnectTimeout=15 "root@$HOST" \
             "deploy $GITHUB_SHA $SERVICE $IMAGE_DIGEST $REGISTRY_USER" || status=$?
-          delivery=registry
           if [ "$status" -eq 75 ]; then
-            delivery=github-ssh-archive
             echo 'Registry download timed out; delivering the same image from GitHub over SSH.'
             repository="ghcr.io/eors583/wechat-ai-$SERVICE"
             image="$repository:git-${GITHUB_SHA:0:7}"
@@ -159,7 +157,7 @@ jobs:
             echo "- Service: $SERVICE"
             echo "- Commit: $GITHUB_SHA"
             echo "- Image digest: $IMAGE_DIGEST"
-            echo "- Delivery: $delivery"
+            echo '- Delivery method is recorded in the server release log.'
             echo '- Functional tests were not run; manual acceptance is required.'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Remove temporary SSH identity

@@ -29,6 +29,11 @@ for tag in "$current_tag" "$previous_tag"; do
   docker image inspect "$repository:$tag" >/dev/null
 done
 
+if [ "$current_tag" = "$previous_tag" ]; then
+  echo "Release version is unchanged; retaining existing rollback images and archives."
+  exit 0
+fi
+
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 repository_dir=$(dirname -- "$script_dir")
 archive_dir="$repository_dir/.deploy-images"
