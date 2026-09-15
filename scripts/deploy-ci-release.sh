@@ -47,7 +47,28 @@ if [[ -f "$archive" && -f "$archive.image-id" ]]; then
   # The runner pulled this exact registry digest, then delivered a SHA-256 checked archive.
   cat >/dev/null
   docker load --input "$archive"
-  [[ "$(docker image inspect --format '{{.Id}}' "$repository:$tag")" = "$(cat "$archive.image-id")" ]]
+  # Classic Docker reports the config digest as Id; the containerd store may report
+  # a manifest digest. Compare the original config and unpacked layers instead.
+  python3 - "$archive" "$repository:$tag" <<'PY'
+import hashlib
+import json
+import subprocess
+import sys
+import tarfile
+from pathlib import Path
+archive, image = sys.argv[1:]
+expected = Path(archive + '.image-id').read_text().strip()
+with tarfile.open(archive, 'r:gz') as bundle:
+    manifest = json.load(bundle.extractfile('manifest.json'))
+    entry = next(item for item in manifest if image in (item.get('RepoTags') or []))
+    raw_config = bundle.extractfile(entry['Config']).read()
+if 'sha256:' + hashlib.sha256(raw_config).hexdigest() != expected:
+    raise SystemExit('Archive image configuration checksum mismatch.')
+config = json.loads(raw_config)
+loaded = json.loads(subprocess.check_output(['docker', 'image', 'inspect', image]))[0]
+if loaded['RootFS']['Layers'] != config['rootfs']['diff_ids']:
+    raise SystemExit('Loaded image filesystem layers do not match the archive.')
+PY
   delivery=github-ssh-archive
 else
   if ! timeout 45 docker login ghcr.io --username "$actor" --password-stdin \
