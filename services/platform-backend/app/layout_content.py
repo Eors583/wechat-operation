@@ -274,10 +274,6 @@ def sanitize_content_html(value: str) -> str:
                     "referrerpolicy": "no-referrer", "style": _BOUNDS + ";height:auto",
                 })
                 replacement.append(image)
-                caption = soup.new_tag("span")
-                caption.string = "▶ 播放视频" if url else "视频"
-                caption["style"] = "display:block;text-align:center"
-                replacement.append(caption)
             else:
                 replacement.string = "此媒体请在原文查看"
             if url:
@@ -292,6 +288,10 @@ def sanitize_content_html(value: str) -> str:
             continue
         original = dict(element.attrs)
         video_attributes = wechat_video_attributes(element) if name == "a" else {}
+        if video_attributes and element.find("img"):
+            for caption in element.find_all("span", recursive=False):
+                if caption.get_text(strip=True) == "▶ 播放视频":
+                    caption.decompose()
         profile_attributes = (
             _profile_attributes(element)
             if name == "figure" and element.get("data-profile-card") == "true" else {}
