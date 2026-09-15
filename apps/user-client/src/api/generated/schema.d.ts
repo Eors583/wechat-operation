@@ -1620,6 +1620,23 @@ export interface paths {
         readonly patch: operations["patch_layout_template_api_v1_layout_templates__template_id__patch"];
         readonly trace?: never;
     };
+    readonly "/api/v1/layout-templates/{template_id}/marker-images/{group_id}": {
+        readonly parameters: {
+            readonly query?: never;
+            readonly header?: never;
+            readonly path?: never;
+            readonly cookie?: never;
+        };
+        /** Get Layout Marker Image */
+        readonly get: operations["get_layout_marker_image_api_v1_layout_templates__template_id__marker_images__group_id__get"];
+        readonly put?: never;
+        readonly post?: never;
+        readonly delete?: never;
+        readonly options?: never;
+        readonly head?: never;
+        readonly patch?: never;
+        readonly trace?: never;
+    };
     readonly "/api/v1/layout-templates/extract": {
         readonly parameters: {
             readonly query?: never;
@@ -19329,6 +19346,39 @@ export interface operations {
                 content: {
                     readonly "application/json": components["schemas"]["ErrorResponse"];
                 };
+            };
+        };
+    };
+    readonly get_layout_marker_image_api_v1_layout_templates__template_id__marker_images__group_id__get: {
+        readonly parameters: {
+            readonly query: {
+                readonly version_no: number;
+            };
+            readonly header?: never;
+            readonly path: {
+                readonly group_id: string;
+                readonly template_id: string;
+            };
+            readonly cookie?: never;
+        };
+        readonly requestBody?: never;
+        readonly responses: {
+            /** @description Owned template chapter image */
+            readonly 200: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content: {
+                    readonly "image/jpeg": string;
+                    readonly "image/png": string;
+                };
+            };
+            /** @description Invalid or unavailable image */
+            readonly 422: {
+                headers: {
+                    readonly [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

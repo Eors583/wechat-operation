@@ -77,6 +77,7 @@ from app.domains.layout import (
     process_layout_extraction,
     save_layout_template,
     set_default_layout_template,
+    template_marker_image,
     validate_source_url,
 )
 from app.domains.revision import create_article_revision
@@ -2604,6 +2605,25 @@ async def bind_layout_video_source(
     )
     await session.commit()
     return Response(status_code=204)
+
+
+@router.get("/layout-templates/{template_id}/marker-images/{group_id}", response_class=Response)
+async def get_layout_marker_image(
+    template_id: str,
+    group_id: str,
+    version_no: int = Query(ge=1),
+    user: User = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+    limiter: RateLimiter = Depends(rate_limiter),
+) -> Response:
+    await limiter.check(f"layout-marker-read:{user.id}", 120, 60)
+    mime, content = await template_marker_image(
+        session, owner_id=user.id, template_id=template_id, group_id=group_id,
+        version_no=version_no,
+    )
+    return Response(content, media_type=mime, headers={
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+    })
 
 
 @router.get("/layout-templates/{template_id}", response_model=contract.LayoutTemplateDetailResponse)

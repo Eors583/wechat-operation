@@ -590,6 +590,15 @@ const authenticatedFetch = async (input: Request): Promise<Response> => {
   return fetchWithReadRecovery(new Request(request, { headers, credentials: 'include' }))
 }
 
+export const downloadTemplateMarker = async (templateId: string, groupId: string, versionNo: number) => {
+  const response = await authenticatedFetch(new Request(
+    `${baseUrl}/layout-templates/${encodeURIComponent(templateId)}/marker-images/${encodeURIComponent(groupId)}?version_no=${versionNo}`,
+    { signal: AbortSignal.timeout(20000) },
+  ))
+  if (!response.ok) throw await responseError(response)
+  return response.blob()
+}
+
 export const resolveTemplateVideoSource = async (
   sourceUrl: string, videoId: string, signal?: AbortSignal,
 ) => {

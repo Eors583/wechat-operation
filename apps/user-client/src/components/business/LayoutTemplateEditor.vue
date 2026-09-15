@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { api } from '@/api/client'
+import { api, downloadTemplateMarker } from '@/api/client'
 import { platform } from '@/platform'
 import { queryClient } from '@/boot/query'
 import { createDefaultStyles } from '@/api/styleDefaults'
@@ -230,8 +230,9 @@ const imageMarkers = computed(() => (selectedTemplate.value?.componentGroups ?? 
     const html = (selectedTemplate.value?.contentBlocks ?? [])
       .filter(block => group.blockIds.includes(block.id)).map(block => block.html).join('')
     const url = new DOMParser().parseFromString(html, 'text/html').querySelector('img')?.getAttribute('src') ?? ''
-    return { group, url: group.imageDocumentId ? markerUrls.value[group.imageDocumentId] ?? '' : url }
-  }).sort((a, b) => (a.group.sequence ?? 0) - (b.group.sequence ?? 0)))
+    const key = group.imageDocumentId ?? `${selectedId.value}:${selectedTemplate.value?.versionNo}:${group.id}`
+    return { group, key, sourceUrl: url, url: markerUrls.value[key] ?? '' }
+  }).sort((a, b) => (a.group.sequence ?? 101) - (b.group.sequence ?? 101)))
 const markerMode = computed(() => imageMarkers.value.some(item => item.group.enabled)
   ? 'image' : selectedTemplate.value?.styles.heading_marker.enabled ? 'text' : 'none')
 const setMarkerMode = (mode: string) => {
@@ -246,21 +247,39 @@ const updateImageMarker = (id: string, patch: Partial<LayoutComponentGroup>) => 
 }
 const markerUrls = ref<Record<string, string>>({})
 const loadingMarkerIds = new Set<string>()
+const markerErrors = ref<Record<string, string>>({})
 const uploadingMarker = ref(false)
 const newMarkerSequence = ref(1)
 let markerEditorDisposed = false
-watch(() => selectedTemplate.value?.componentGroups?.map(group => group.imageDocumentId).filter(Boolean), (ids) => {
-  for (const id of ids ?? []) {
-    if (!id || markerUrls.value[id] || loadingMarkerIds.has(id)) continue
-    loadingMarkerIds.add(id)
-    void api.downloadDocument(id).then(blob => {
-      if (markerEditorDisposed) return
-      if (!['image/png', 'image/jpeg'].includes(blob.type) || blob.size >= 1_000_000) throw new Error('序号图片格式无效，请重新上传。')
-      markerUrls.value[id] = URL.createObjectURL(blob)
-    }).catch(error => {
-      if (!markerEditorDisposed) $q.notify({ type: 'negative', message: error instanceof Error ? error.message : '序号图片加载失败。' })
-    })
+const loadMarker = async (item: (typeof imageMarkers.value)[number]) => {
+  const template = selectedTemplate.value
+  if (!template || loadingMarkerIds.has(item.key) || markerUrls.value[item.key]) return
+  loadingMarkerIds.add(item.key)
+  delete markerErrors.value[item.key]
+  try {
+    const blob = item.group.imageDocumentId
+      ? await api.downloadDocument(item.group.imageDocumentId)
+      : await downloadTemplateMarker(template.id, item.group.id, template.versionNo ?? 1)
+    if (markerEditorDisposed) return
+    if (!['image/png', 'image/jpeg'].includes(blob.type) || blob.size >= 1_000_000) throw new Error('序号图片格式无效，请重新上传。')
+    markerUrls.value[item.key] = URL.createObjectURL(blob)
+  } catch (error) {
+    if (!markerEditorDisposed) markerErrors.value[item.key] = error instanceof Error ? error.message : '图片下载失败，请重试。'
+  } finally {
+    loadingMarkerIds.delete(item.key)
   }
+}
+watch(() => imageMarkers.value.map(item => item.key).join('|'), () => {
+  void (async () => {
+    for (let index = 0; index < imageMarkers.value.length; index += 4) {
+      if (markerEditorDisposed) return
+      await Promise.all(imageMarkers.value.slice(index, index + 4).map(loadMarker))
+    }
+  })()
+}, { immediate: true })
+watch(selectedId, () => {
+  const used = new Set(imageMarkers.value.map(item => item.group.sequence))
+  newMarkerSequence.value = Array.from({ length: 100 }, (_, index) => index + 1).find(value => !used.has(value)) ?? 100
 }, { immediate: true })
 onBeforeUnmount(() => {
   markerEditorDisposed = true
@@ -271,9 +290,9 @@ const uploadMarker = async (existing?: LayoutComponentGroup) => {
   if (!target || saving.value || uploadingMarker.value) return
   const sequence = existing?.sequence ?? Number(newMarkerSequence.value)
   const groups = target.componentGroups ?? []
-  if (!sequence || !Number.isInteger(sequence) || sequence < 1 || sequence > 100
-    || groups.some(group => group.kind === 'decorated_heading' && group.id !== existing?.id && group.sequence === sequence)) {
-    $q.notify({ type: 'negative', message: '请填写 1—100 之间且不重复的章节编号。' })
+  existing ??= groups.find(group => group.kind === 'decorated_heading' && group.sequence === sequence)
+  if (!sequence || !Number.isInteger(sequence) || sequence < 1 || sequence > 100) {
+    $q.notify({ type: 'negative', message: '请填写 1—100 之间的章节编号。' })
     return
   }
   if (!existing && groups.length >= 100) return
@@ -842,8 +861,8 @@ const remove = async (target: LayoutTemplate) => {
               @update:model-value="setStyle('enabled', Boolean($event))"
             />
             <div v-if="activeModule === 'heading_marker'" class="template-editor__image-marker">
-              <q-input v-model.number="newMarkerSequence" label="新图片对应第几章" type="number" min="1" max="100" outlined dense :disable="uploadingMarker || saving" />
-              <q-btn outline color="primary" label="上传序号图片" icon="upload" :loading="uploadingMarker" :disable="saving || (selectedTemplate?.componentGroups?.length ?? 0) >= 100" @click="uploadMarker()" />
+              <q-input v-model.number="newMarkerSequence" label="图片对应第几章" type="number" min="1" max="100" outlined dense :disable="uploadingMarker || saving" />
+              <q-btn outline color="primary" :label="imageMarkers.some(item => item.group.sequence === Number(newMarkerSequence)) ? `替换第 ${newMarkerSequence} 章图片` : '上传序号图片'" icon="upload" :loading="uploadingMarker" :disable="saving" @click="uploadMarker()" />
             </div>
             <q-select
               v-if="activeModule === 'heading_marker'"
@@ -853,7 +872,8 @@ const remove = async (target: LayoutTemplate) => {
               :options="[{ label: '不显示', value: 'none' }, { label: '文字序号', value: 'text' }, { label: '图片序号', value: 'image', disable: !imageMarkers.length }]"
               @update:model-value="setMarkerMode"
             />
-            <template v-if="activeModule === 'heading_marker' && markerMode === 'image'">
+            <template v-if="activeModule === 'heading_marker' && imageMarkers.length">
+              <div>序号图片 · {{ imageMarkers.length }} 张</div>
               <q-select
                 :model-value="imageMarkers.every(item => item.group.fallbackRender === 'text_index') ? 'text_index' : 'error'"
                 label="缺少序号图片时" outlined dense emit-value map-options
@@ -862,20 +882,28 @@ const remove = async (target: LayoutTemplate) => {
                 @update:model-value="updateComponentGroups((selectedTemplate?.componentGroups ?? []).map(group => group.kind === 'decorated_heading' ? { ...group, fallbackRender: $event } : group))"
               />
               <section v-for="item in imageMarkers" :key="item.group.id" class="template-editor__image-marker">
+                <strong>{{ item.group.sequence ? `第 ${String(item.group.sequence).padStart(2, '0')} 章` : '待确认编号' }}</strong>
                 <img v-if="item.url" :src="item.url" :alt="`第 ${item.group.sequence ?? '?'} 章序号图片`" referrerpolicy="no-referrer" :style="{ width: `${item.group.imageWidth}px` }" />
-                <q-input :model-value="item.group.sequence" label="对应章节" type="number" min="1" max="100" outlined dense @update:model-value="updateImageMarker(item.group.id, { sequence: Number($event) })" />
-                <q-input v-if="!item.group.imageDocumentId" :model-value="item.url" label="已保存的原图地址" readonly outlined dense />
-                <div class="template-editor__marker-actions">
-                  <q-btn outline color="primary" label="替换图片" :loading="uploadingMarker" :disable="saving" @click="uploadMarker(item.group)" />
-                  <q-btn flat color="negative" label="移除映射" :disable="saving || uploadingMarker" @click="updateComponentGroups((selectedTemplate?.componentGroups ?? []).filter(group => group.id !== item.group.id))" />
+                <div v-else-if="markerErrors[item.key]" class="template-editor__marker-error">
+                  {{ markerErrors[item.key] }}
+                  <q-btn flat color="primary" label="重新下载" @click="loadMarker(item)" />
                 </div>
+                <q-skeleton v-else type="rect" height="80px" />
+                <q-expansion-item label="编号与图片设置" dense>
+                <q-input :model-value="item.group.sequence" label="对应章节" type="number" min="1" max="100" outlined dense @update:model-value="updateImageMarker(item.group.id, { sequence: Number($event) })" />
+                <q-input v-if="!item.group.imageDocumentId" :model-value="item.sourceUrl" label="原图地址" readonly outlined dense />
                 <q-input :model-value="item.group.imageWidth" label="图片宽度（px）" type="number" min="24" max="680" outlined dense @update:model-value="updateImageMarker(item.group.id, { imageWidth: Number($event) })" />
                 <q-select :model-value="item.group.containerStyle.align || 'left'" label="对齐" :options="['left', 'center', 'right']" outlined dense @update:model-value="updateImageMarker(item.group.id, { containerStyle: { ...item.group.containerStyle, align: $event } })" />
                 <q-input :model-value="item.group.containerStyle.marginTop ?? 0" label="上间距" type="number" min="0" max="72" outlined dense @update:model-value="updateImageMarker(item.group.id, { containerStyle: { ...item.group.containerStyle, marginTop: Number($event) } })" />
                 <q-input :model-value="item.group.containerStyle.marginBottom ?? 8" label="下间距" type="number" min="0" max="72" outlined dense @update:model-value="updateImageMarker(item.group.id, { containerStyle: { ...item.group.containerStyle, marginBottom: Number($event) } })" />
+                </q-expansion-item>
+                <div class="template-editor__marker-actions">
+                  <q-btn outline color="primary" label="替换图片" :loading="uploadingMarker" :disable="saving" @click="uploadMarker(item.group)" />
+                  <q-btn flat color="negative" label="移除映射" :disable="saving || uploadingMarker" @click="updateComponentGroups((selectedTemplate?.componentGroups ?? []).filter(group => group.id !== item.group.id))" />
+                </div>
               </section>
             </template>
-            <template v-else>
+            <template v-if="activeModule !== 'heading_marker' || markerMode !== 'image'">
             <label v-if="activeModule !== 'emphasis'"
               >字号<q-slider
                 :model-value="activeStyle.fontSize"
@@ -1396,6 +1424,11 @@ const remove = async (target: LayoutTemplate) => {
     gap: space.$space-2;
     min-width: 0;
     > * { min-width: 0; max-width: 100%; }
+  }
+  &__marker-error {
+    min-width: 0;
+    color: var(--app-text-secondary);
+    overflow-wrap: anywhere;
   }
 
   &__sample {

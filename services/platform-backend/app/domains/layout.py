@@ -1194,6 +1194,50 @@ async def _marker_data_uri(content: bytes, mime_type: str) -> str:
     return f"data:{mime_type};base64,{base64.b64encode(content).decode('ascii')}"
 
 
+async def template_marker_image(
+    session: AsyncSession,
+    *,
+    owner_id: str,
+    template_id: str,
+    group_id: str,
+    version_no: int,
+) -> tuple[str, bytes]:
+    template = await owned_template(session, owner_id=owner_id, template_id=template_id)
+    version = await session.scalar(
+        select(LayoutTemplateVersion).where(
+            LayoutTemplateVersion.template_id == template.id,
+            LayoutTemplateVersion.version_no == version_no,
+        )
+    )
+    if not version:
+        raise ApiError(404, "LAYOUT_TEMPLATE_EMPTY", "模板版本不存在。")
+    snapshot = validated_source_snapshot(version.source_snapshot)
+    group = next(
+        (
+            item
+            for item in snapshot["component_groups"]
+            if item["id"] == group_id and item["kind"] == "decorated_heading"
+        ),
+        None,
+    )
+    if not group or group.get("image_document_id"):
+        raise ApiError(404, "LAYOUT_MARKER_IMAGE", "原文序号图片不存在。")
+    fragment = "".join(
+        block["html"] for block in snapshot["content_blocks"] if block["id"] in group["block_ids"]
+    )
+    image = BeautifulSoup(fragment, "html.parser").find("img")
+    if not image:
+        raise ApiError(404, "LAYOUT_MARKER_IMAGE", "原文序号图片不存在。")
+    try:
+        mime, content = await WeChatPublicLayoutExtractionProvider().fetch_marker_image(
+            str(image.get("src", ""))
+        )
+        await _marker_data_uri(content, mime)
+    except ProviderUnavailable as exc:
+        raise ApiError(422, "LAYOUT_MARKER_IMAGE", str(exc)) from exc
+    return mime, content
+
+
 async def uploaded_marker_assets(
     session: AsyncSession, *, owner_id: str, snapshot: dict[str, Any]
 ) -> dict[str, Asset]:

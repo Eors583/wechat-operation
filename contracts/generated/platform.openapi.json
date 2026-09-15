@@ -5,6 +5,26 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/v1/layout-templates/{template_id}/marker-images/{group_id}": {
+      "get": {
+        "tags": ["user"],
+        "summary": "Get Layout Marker Image",
+        "operationId": "get_layout_marker_image_api_v1_layout_templates__template_id__marker_images__group_id__get",
+        "security": [{ "HTTPBearer": [] }],
+        "parameters": [
+          { "name": "template_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "group_id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "version_no", "in": "query", "required": true, "schema": { "type": "integer", "minimum": 1 } }
+        ],
+        "responses": {
+          "200": { "description": "Owned template chapter image", "content": {
+            "image/png": { "schema": { "type": "string", "format": "binary" } },
+            "image/jpeg": { "schema": { "type": "string", "format": "binary" } }
+          } },
+          "422": { "description": "Invalid or unavailable image" }
+        }
+      }
+    },
     "/api/v1/tasks/{task_id}/messages/{message_id}/preference": {
       "put": {
         "tags": ["user"],
