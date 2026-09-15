@@ -41,6 +41,7 @@ _CSS_PROPERTIES = {
     "padding-left", "text-align", "text-decoration", "text-indent", "vertical-align", "width",
     "max-width", "min-width", "overflow-wrap", "word-break", "white-space", "table-layout",
     "align-items", "justify-content", "flex-wrap", "flex-shrink", "gap",
+    "transform", "transform-origin", "box-shadow", "opacity",
 }
 _CSS_VALUE = re.compile(r"^[\w\s#.,%()'\"/+-]+$", re.UNICODE)
 _CSS_UNSAFE = re.compile(r"(?:url|expression|var|attr|image-set)\s*\(|!|@|\\\\|[\x00-\x1f]", re.I)
@@ -296,6 +297,12 @@ def sanitize_content_html(value: str) -> str:
             if name == "figure" and element.get("data-profile-card") == "true" else {}
         )
         element.attrs = {}
+        if (
+            original.get("data-layout-fragment") == "true"
+            or original.get("data-tools")
+            or original.get("data-style-id")
+        ):
+            element["data-layout-fragment"] = "true"
         element.attrs.update(video_attributes)
         if profile_attributes:
             element.attrs.update(profile_attributes)
@@ -388,7 +395,8 @@ def _selectable_parts(root: Tag, depth: int = 0) -> Iterator[tuple[str, str, str
     children = list(root.children)
     # Keep horizontal ornaments and single-paragraph illustrated cards intact.
     visual_group = bool(
-        re.search(r"(?:^|;)display:(?:inline-)?flex(?:;|$)", str(root.get("style", "")))
+        root.get("data-layout-fragment") == "true"
+        or re.search(r"(?:^|;)display:(?:inline-)?flex(?:;|$)", str(root.get("style", "")))
         or (
             root.find("img")
             and len(root.find_all("p")) <= 1
