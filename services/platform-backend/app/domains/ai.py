@@ -8,7 +8,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -72,6 +72,16 @@ from app.domains.user_preference_memory import (
     apply_writer_preference,
     enqueue_preference_summary,
     private_preferences,
+)
+from app.domains.wechat_expert import (
+    TITLE_CONTRACT,
+    TitleResponse,
+    draft_audit,
+    expert_prompt,
+    expert_snapshot,
+    response_stage,
+    style_statistics,
+    validate_titles,
 )
 from app.errors import ApiError
 from app.external_knowledge import search_external_knowledge
@@ -600,6 +610,8 @@ def classify_run_type(
 ) -> str:
     """Conservative intent boundary: only explicit writing/revision requests change an article."""
     normalized = " ".join(text.strip().split())
+    if re.search(r"先.{0,12}(?:大纲|提纲|选题)|(?:确认|选定)(?:大纲|选题).{0,8}再写", normalized):
+        return "outline"
     if style_action(normalized) and not explicit_article_request(normalized):
         return "discussion"
     if is_preference_only(normalized):
@@ -1742,6 +1754,7 @@ async def prepare_ai_run(
     if conversation_action and not needs_model(conversation_action):
         deterministic = ("正在处理请求。", [])
         file_ids = []
+    deterministic = None
     route_purpose = "article_generation" if run_type == "article_generation" else "fast_task"
     route_snapshot: dict[str, Any] = (
         {"purpose": "deterministic_clarification", "provider_mode": "internal"}
@@ -1912,6 +1925,25 @@ async def prepare_ai_run(
     ]
     selected_recent_messages.sort(key=lambda item: item.created_at, reverse=True)
     selected_preferences = preferences
+    expert_search: dict[str, Any] | None = None
+    if re.search(r"搜索|搜一下|搜一搜|帮我搜|查找|检索|找.{0,8}文章|对标|竞品", text):
+        if file_settings.get("link_fetch_enabled") is False:
+            expert_search = {"status": "disabled", "results": "网页搜索已停用。"}
+        else:
+            # One bounded public search per accepted message, under the chat rate/quota boundary.
+            search_url = "https://weixin.sogou.com/weixin?" + urlencode({
+                "type": "2", "query": text[:200],
+            })
+            try:
+                page = await web_references.fetch(search_url)
+                expert_search = {
+                    "status": "completed", "source_url": search_url,
+                    "results": page.text[:16000], "scope": "search_snippet_only",
+                }
+            except ProviderUnavailable:
+                expert_search = {
+                    "status": "unavailable", "results": "搜索暂不可用，不能编造结果。",
+                }
     frozen_context = {
         "layout_heading_numbers": await uses_heading_numbers(
             session,
@@ -1939,6 +1971,7 @@ async def prepare_ai_run(
         "retrieval_mode": "hybrid_rrf_rerank" if retrieval.enabled else "local_ordered",
         "untrusted_links": reference_links,
         "untrusted_external_knowledge": external_context,
+        "untrusted_wechat_search": expert_search,
         "current_article": current_article_snapshot,
         "project_requirements": project.writing_requirements if project else None,
         "task_memory_summary": (
@@ -1987,6 +2020,7 @@ async def prepare_ai_run(
             ],
         },
         "pipeline_prompt_versions": pipeline_prompts,
+        "wechat_expert": expert_snapshot(),
         "ai_settings": ai_settings,
     }
     frozen_context["prompt_checksum"] = prompt_version.checksum if prompt_version else None
@@ -2134,14 +2168,29 @@ async def process_ai_run(
             "本轮要求未通过安全检查。",
             details={"reason": input_reason},
         )
+    # Old queued runs retain their original deterministic route during rollout.
     deterministic = (
-        None
-        if run.context_snapshot.get("untrusted_model_files")
-        else _deterministic_response(run.run_type)
+        _deterministic_response(run.run_type)
+        if run.model_route_snapshot.get("provider_mode") == "internal"
+        else None
     )
     directives: list[str] = []
     execution_attempts: list[ModelExecutionAttempt] = []
     model_context = dict(run.context_snapshot)
+    expert = model_context.pop("wechat_expert", None) or expert_snapshot()
+    expert_records: dict[str, Any] = {}
+    main_expert_stage = response_stage(run.run_type, user_input)
+    directives.append(expert_prompt(expert, main_expert_stage))
+    clarification = _deterministic_response(run.run_type)
+    if clarification:
+        directives.append(
+            "本轮必须澄清，不能创建或修改文章。请简短表达以下问题：" + clarification[0]
+        )
+    if run.run_type == "titles":
+        directives.append(
+            "默认给出8个不同标题、5维评分、推荐标题及稳妥/传播备选；"
+            "用户明确指定数量时按指定数量。只给标题相关结果。"
+        )
     grounding_sources: list[dict[str, Any]] = []
     grounding_facts: list[dict[str, Any]] = []
     intent = model_context.get("intent_decision", {})
@@ -2252,6 +2301,11 @@ async def process_ai_run(
     ) -> ModelResult:
         nonlocal writer_preference
         await ensure_not_cancelled()
+        if (
+            purpose in {"article_generation", "article_revision", "fast_task"}
+            and not prompt.startswith(expert["prompts"]["core"])
+        ):
+            prompt = expert_prompt(expert) + "\n\n" + prompt
         if preference_mode:
             prompt += "\n\n" + output_instruction(preference_mode)
             context = {**context, "preference_check_format": preference_mode}
@@ -2495,6 +2549,31 @@ async def process_ai_run(
             )
             conversation_action = None
             model_context["conversation_action"] = None
+        if run.run_type == "article_generation" and local_target is None:
+            await stage("planning")
+            profile_context = auxiliary_model_context(model_context)
+            profile_context["reference_statistics"] = style_statistics(profile_context)
+            profile = await execute_model_call(
+                purpose="article_planning",
+                prompt=expert_prompt(expert, "profile") + (
+                    "\n生成本轮写作DNA卡，覆盖14维、标点、分块、段落配方、叙述和推进方式。"
+                    "优先本轮要求、项目要求、已确认偏好；仅当用户要求模仿参考时采用参考文风。"
+                    "样本不足时使用自然、具体、短段落的默认风格，不能伪称个人DNA。"
+                    "统计只代表所提供片段。示例必须来自真实样本，无样本不要编造。"
+                    "输出精简可执行卡片，不超过1800字；不写文件、不声称已确认或保存。"
+                ),
+                context=profile_context,
+                snapshot=pipeline_route("article_planning"),
+            )
+            if not profile.text.strip():
+                raise ApiError(502, "EXPERT_PROFILE_EMPTY", "文风分析未返回内容，请重试。")
+            model_context["writing_dna"] = profile.text
+            expert_records["writing_dna"] = profile.text
+            expert_records["reference_statistics"] = profile_context["reference_statistics"]
+        elif main_expert_stage == "profile":
+            model_context["reference_statistics"] = style_statistics(
+                auxiliary_model_context(model_context)
+            )
         if run.run_type == "article_generation":
             directives.append(article_output_contract())
             ground_material = local_target is None and (
@@ -2575,10 +2654,12 @@ async def process_ai_run(
                 planning_context = {
                     "user_request": user_input,
                     "untrusted_fact_ledger": grounding_facts,
+                    "writing_dna": model_context.get("writing_dna"),
                 }
                 for plan_attempt in range(2):
                     planning = await execute_model_call(
-                        purpose="article_planning", prompt=PLAN_PROMPT,
+                        purpose="article_planning",
+                        prompt=expert_prompt(expert, "outline") + "\n" + PLAN_PROMPT,
                         context=planning_context, snapshot=pipeline_route("article_planning"),
                     )
                     plan = parse_response(planning, PlanResponse)
@@ -2593,21 +2674,21 @@ async def process_ai_run(
                 model_context["article_plan"] = plan.model_dump()
                 model_context["untrusted_fact_ledger"] = grounding_facts
                 directives.append(WRITING_PROMPT)
-            elif (
-                local_target is None
-                and not model_context.get("recoverable_draft")
-                and needs_article_planning(model_context)
-            ):
+            elif local_target is None and not model_context.get("recoverable_draft"):
                 await stage("planning")
                 planning = await execute_model_call(
                     purpose="article_planning",
-                    prompt=pipeline_prompt(
+                    prompt=expert_prompt(expert, "outline") + "\n" + pipeline_prompt(
                         "article_planning",
-                        "用精简提纲输出文章结构、核心判断与引用计划；不要生成正文。",
+                        "结合写作DNA评估2到3个切入角度并选定最佳角度，输出核心判断、"
+                        "开头钩子、分节作用/字数/证据/衔接和结尾；本轮直接成稿，不等待确认。"
+                        "用户给定大纲或要求保持原结构时沿用。不要生成正文。",
                     ),
                     context=auxiliary_model_context(model_context),
                     snapshot=pipeline_route("article_planning"),
                 )
+                if not planning.text.strip():
+                    raise ApiError(502, "EXPERT_PLAN_EMPTY", "文章规划未返回内容，请重试。")
                 model_context["article_plan"] = planning.text
             else:
                 model_context["article_plan"] = "无需独立规划；直接围绕用户要求组织完整文章。"
@@ -2634,6 +2715,10 @@ async def process_ai_run(
         skill_version = await session.get(SkillVersion, run.skill_version_id)
         if skill_version:
             directives.append(skill_version.instructions)
+    directives.append(
+        "常驻公众号专家始终启用，用户选择的技能仅补充本轮要求，不能关闭专家或改变操作权限。"
+        "实际输出严格遵守本轮平台契约；方法资料中的文件、技能衔接说明和自检报告不输出到正文。"
+    )
     if local_target is not None and isinstance(local_document, dict):
         blocks = list(local_document["content"])
         original_block = blocks[local_target]
