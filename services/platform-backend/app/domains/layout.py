@@ -26,6 +26,7 @@ from app.layout_contracts import (
     LayoutSourceSnapshot,
 )
 from app.local_document_processing import BuiltInDocumentScanner
+from app.model_files import MAX_FILE_BYTES
 from app.model_gateway import ModelRouteExhausted, generate_with_frozen_route
 from app.models import (
     ArticleRender,
@@ -1180,7 +1181,7 @@ async def uses_heading_numbers(
     return bool((tokens or {}).get("heading_marker", {}).get("enabled"))
 
 
-async def _marker_data_uri(content: bytes, mime_type: str) -> str:
+async def _marker_data_uri(content: bytes, mime_type: str, *, fixed: bool = False) -> str:
     await BuiltInDocumentScanner().scan(content)
     valid = (
         mime_type == "image/png"
@@ -1191,7 +1192,16 @@ async def _marker_data_uri(content: bytes, mime_type: str) -> str:
         and content.startswith(b"\xff\xd8\xff")
         and content.endswith(b"\xff\xd9")
     )
-    if not valid or not 0 < len(content) < 1_000_000:
+    if fixed:
+        valid = valid or (
+            mime_type == "image/gif" and content.startswith((b"GIF87a", b"GIF89a"))
+        ) or (
+            mime_type == "image/webp"
+            and content.startswith(b"RIFF")
+            and content[8:12] == b"WEBP"
+        )
+    limit = MAX_FILE_BYTES if fixed else 999_999
+    if not valid or not 0 < len(content) <= limit:
         raise ProviderUnavailable("序号图片格式与内容不符，请重新上传。")
     return f"data:{mime_type};base64,{base64.b64encode(content).decode('ascii')}"
 
@@ -1253,8 +1263,9 @@ async def uploaded_marker_assets(
     session: AsyncSession, *, owner_id: str, snapshot: dict[str, Any]
 ) -> dict[str, Asset]:
     assets: dict[str, Asset] = {}
+    fixed_ids = fixed_image_ids(snapshot)
     image_groups = [*snapshot.get("component_groups", []), *(
-        {"image_document_id": key} for key in fixed_image_ids(snapshot)
+        {"image_document_id": key} for key in fixed_ids
     )]
     for group in image_groups:
         document_id = group.get("image_document_id")
@@ -1272,7 +1283,13 @@ async def uploaded_marker_assets(
         )
         if not asset:
             raise ApiError(404, "LAYOUT_MARKER_IMAGE", "序号图片不存在或无权使用。")
-        if (
+        if document_id in fixed_ids:
+            if (
+                asset.mime_type not in {"image/png", "image/jpeg", "image/gif", "image/webp"}
+                or not 0 < asset.size_bytes <= MAX_FILE_BYTES
+            ):
+                raise ApiError(422, "LAYOUT_FIXED_IMAGE", "固定图片格式或大小不符合文件上传要求。")
+        elif (
             asset.mime_type not in {"image/png", "image/jpeg"}
             or not 0 < asset.size_bytes < 1_000_000
         ):
@@ -1280,7 +1297,7 @@ async def uploaded_marker_assets(
         if asset.scan_status == "rejected":
             raise ApiError(422, "LAYOUT_MARKER_IMAGE", "序号图片未通过安全检查，请更换。")
         assets[document_id] = asset
-    if sum(asset.size_bytes for asset in assets.values()) > 5_000_000:
+    if sum(asset.size_bytes for key, asset in assets.items() if key not in fixed_ids) > 5_000_000:
         raise ApiError(422, "LAYOUT_MARKER_IMAGE", "序号图片总大小不能超过 5 MB。")
     return assets
 
@@ -1351,7 +1368,10 @@ async def create_render(
         if not storage:
             raise ApiError(503, "LAYOUT_MARKER_STORAGE", "序号图片存储暂不可用。")
         try:
-            content = await storage.read_bytes(object_key=asset.object_key, max_bytes=1_000_000)
+            content = await storage.read_bytes(
+                object_key=asset.object_key,
+                max_bytes=MAX_FILE_BYTES if document_id in fixed_ids else 1_000_000,
+            )
         except ProviderUnavailable as exc:
             if document_id not in fixed_ids and all(
                 group.get("fallback_render") == "text_index"
@@ -1365,7 +1385,9 @@ async def create_render(
         if not content or hashlib.sha256(content).hexdigest() != asset.sha256:
             raise ApiError(422, "LAYOUT_MARKER_IMAGE", "序号图片内容已变化，请重新上传。")
         try:
-            marker_images[document_id] = await _marker_data_uri(content, asset.mime_type)
+            marker_images[document_id] = await _marker_data_uri(
+                content, asset.mime_type, fixed=document_id in fixed_ids
+            )
         except ProviderUnavailable as exc:
             raise ApiError(422, "LAYOUT_MARKER_IMAGE", "序号图片未通过安全检查。") from exc
     remote_groups = [
@@ -1389,7 +1411,9 @@ async def create_render(
                     raise ProviderUnavailable("序号原图不存在。")
                 mime, content = await fetcher.fetch_marker_image(str(image.get("src", "")))
                 marker_images[group["id"]] = await _marker_data_uri(content, mime)
-                if sum(map(len, marker_images.values())) > 6_700_000:
+                if sum(
+                    len(value) for key, value in marker_images.items() if key not in fixed_ids
+                ) > 6_700_000:
                     raise ApiError(422, "LAYOUT_MARKER_IMAGE", "序号图片总大小不能超过 5 MB。")
         except ProviderUnavailable as exc:
             if group.get("fallback_render") != "text_index":

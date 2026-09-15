@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import type { LayoutContentBlock } from '@/api/types'
 import { mountFixedContentEditing } from '@/utils/fixedContentEditing'
@@ -73,6 +73,17 @@ const onLoad = () => {
   }
   resize()
 }
+
+watch(
+  () => props.editable,
+  (editable) => {
+    frame.value?.contentDocument
+      ?.querySelectorAll<HTMLElement>('[data-inline-text]')
+      .forEach((row) => {
+        row.contentEditable = String(!!editable)
+      })
+  },
+)
 
 onBeforeUnmount(() => cleanup())
 </script>

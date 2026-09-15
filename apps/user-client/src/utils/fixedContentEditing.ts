@@ -66,6 +66,13 @@ export const mountFixedContentEditing = (document: Document, options: Options) =
       target.dataset.inlineText = 'true'
       target.contentEditable = String(options.enabled(id))
       target.setAttribute('aria-label', '修改当前行文字')
+      target.addEventListener(
+        'mouseenter',
+        () => {
+          target.contentEditable = String(options.enabled(id))
+        },
+        { signal },
+      )
       let before = target.innerHTML
       target.addEventListener(
         'focus',
@@ -86,6 +93,7 @@ export const mountFixedContentEditing = (document: Document, options: Options) =
         'paste',
         (event) => {
           event.preventDefault()
+          if (busy || !options.enabled(id)) return
           const text = event.clipboardData?.getData('text/plain') ?? ''
           const selection = document.getSelection()
           if (!selection?.rangeCount) return
@@ -150,7 +158,7 @@ export const mountFixedContentEditing = (document: Document, options: Options) =
         if (busy || !options.enabled(id)) return
         const input = document.createElement('input')
         input.type = 'file'
-        input.accept = isVideo ? 'video/mp4' : 'image/png,image/jpeg'
+        input.accept = isVideo ? 'video/mp4' : 'image/png,image/jpeg,image/gif,image/webp'
         input.addEventListener(
           'change',
           () => {
@@ -166,8 +174,8 @@ export const mountFixedContentEditing = (document: Document, options: Options) =
                 }
                 if (!signal.aborted && options.enabled(id)) await commit(index, () => {})
               } else {
-                if (!['image/png', 'image/jpeg'].includes(file.type) || file.size >= 1_000_000)
-                  throw new Error('请选择小于 1 MB 的 PNG 或 JPG 图片。')
+                if (!['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(file.type))
+                  throw new Error('请选择 PNG、JPG、GIF 或 WebP 图片。')
                 busy = true
                 let documentId: string | undefined
                 try {
