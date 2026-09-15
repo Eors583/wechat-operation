@@ -2649,19 +2649,35 @@ async def process_ai_run(
                 })
                 # Read every available chunk without first compressing it into a theme.
                 for source in grounding_sources:
-                    extracted_facts = await execute_model_call(
-                        purpose="article_planning",
-                        prompt=EXTRACTION_PROMPT,
-                        context={
-                            "user_request": user_input,
-                            "untrusted_sources": [source],
-                            "hard_information_candidates": hard_information_candidates([source]),
-                        },
-                        snapshot=pipeline_route("article_planning"),
-                    )
-                    grounding_facts.extend(verified_facts(
-                        parse_response(extracted_facts, LedgerResponse), [source]
-                    ))
+                    extraction_context = {
+                        "user_request": user_input,
+                        "untrusted_sources": [source],
+                        "hard_information_candidates": hard_information_candidates([source]),
+                    }
+                    for extraction_attempt in range(2):
+                        extracted_facts = await execute_model_call(
+                            purpose="article_planning",
+                            prompt=EXTRACTION_PROMPT,
+                            context=extraction_context,
+                            snapshot=pipeline_route("article_planning"),
+                        )
+                        try:
+                            source_facts = verified_facts(
+                                parse_response(extracted_facts, LedgerResponse), [source]
+                            )
+                            break
+                        except ApiError as error:
+                            if extraction_attempt or error.code not in {
+                                "MATERIAL_EVIDENCE_INVALID", "MATERIAL_REVIEW_INVALID"
+                            }:
+                                raise
+                            extraction_context["correction"] = (
+                                "上次提取的格式或引文无法回验，请重新从本段原文提取。"
+                                "source_id 使用当前资料的 id；evidence 复制连续原文，"
+                                "保留标点、数字与限定条件，不改写、不拼接、不加省略号。"
+                                "只返回符合 schema 的 JSON。"
+                            )
+                    grounding_facts.extend(source_facts)
                     if len(grounding_facts) > 160:
                         raise ApiError(
                             422, "MATERIAL_FACT_BUDGET", "资料事实数量超限，请缩小资料范围。"

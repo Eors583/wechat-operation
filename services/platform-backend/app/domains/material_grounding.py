@@ -169,15 +169,37 @@ def verified_facts(response: LedgerResponse, sources: list[dict[str, Any]]) -> l
     facts = []
     for fact in response.facts:
         source = by_id.get(fact.source_id)
-        if not source or fact.evidence not in source["text"]:
+        # Extraction runs per source; a model may echo a wrong ID for that single source.
+        if source is None and len(sources) == 1:
+            source = sources[0]
+        span = locate_evidence(source["text"], fact.evidence) if source else None
+        if span is None:
             raise ApiError(
                 502, "MATERIAL_EVIDENCE_INVALID", "事实证据无法在资料中定位，未开始写作。"
             )
-        facts.append({**fact.model_dump(), "locator": {
+        start, end = span
+        facts.append({**fact.model_dump(), "source_id": source["id"],
+                      "evidence": source["text"][start:end], "locator": {
             **source["locator"],
-            "evidence_offset": source["text"].index(fact.evidence),
+            "evidence_offset": start,
         }})
     return facts
+
+
+def locate_evidence(text: str, evidence: str) -> tuple[int, int] | None:
+    """Ignore PDF layout whitespace while preserving the actual source span."""
+    if not evidence.strip():
+        return None
+    start = text.find(evidence)
+    if start >= 0:
+        return start, start + len(evidence)
+    positions = [index for index, char in enumerate(text) if not char.isspace()]
+    compact = "".join(text[index] for index in positions)
+    needle = "".join(evidence.split())
+    start = compact.find(needle)
+    if start < 0:
+        return None
+    return positions[start], positions[start + len(needle) - 1] + 1
 
 
 def validate_plan(plan: PlanResponse, facts: list[dict[str, Any]]) -> None:
@@ -198,10 +220,11 @@ def audit_report(
     covered = set()
     for item in response.coverage:
         if item.article_span:
-            if item.article_span not in article:
+            if locate_evidence(article, item.article_span) is None:
                 raise ApiError(502, "MATERIAL_REVIEW_INVALID", "核验引用与文章不符，未保存文章。")
             covered.add(item.fact_id)
-    if any(item.article_span not in article for item in response.unsupported_claims):
+    if any(locate_evidence(article, item.article_span) is None
+           for item in response.unsupported_claims):
         raise ApiError(502, "MATERIAL_REVIEW_INVALID", "核验引用与文章不符，未保存文章。")
     p0 = {fact["id"] for fact in facts if fact["importance"] == "P0"}
     p0_ratio = len(covered & p0) / len(p0) if p0 else 1.0
