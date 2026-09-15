@@ -341,6 +341,28 @@ const awaitingConfirmation = computed(() =>
 )
 const runErrorRunId = ref('')
 const streamingText = ref('')
+const streamingHtml = computed(() => renderSafeMarkdown(streamingText.value))
+let pendingStreamText = ''
+let streamFrame: number | null = null
+let scrollFrame: number | null = null
+const flushStreamText = () => {
+  if (streamFrame !== null) cancelAnimationFrame(streamFrame)
+  streamFrame = null
+  streamingText.value += pendingStreamText
+  pendingStreamText = ''
+}
+const resetStreamText = () => {
+  if (streamFrame !== null) cancelAnimationFrame(streamFrame)
+  streamFrame = null
+  pendingStreamText = ''
+  streamingText.value = ''
+  if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
+  scrollFrame = null
+}
+const queueStreamText = (text: string) => {
+  pendingStreamText += text
+  if (streamFrame === null) streamFrame = requestAnimationFrame(flushStreamText)
+}
 const conversation = ref<HTMLElement | null>(null)
 const articlePreviewPanel = ref<{
   canSave: boolean
@@ -534,8 +556,11 @@ watch(visibleMessages, async (_next, previous) => {
 watch([streamingText, runStage], async () => {
   const follow = nearConversationEnd()
   await nextTick()
-  if (follow)
-    conversation.value?.scrollTo({ top: conversation.value.scrollHeight, behavior: 'smooth' })
+  if (!follow || !pageActive || runStage.value === 'cancelled' || scrollFrame !== null) return
+  scrollFrame = requestAnimationFrame(() => {
+    scrollFrame = null
+    conversation.value?.scrollTo({ top: conversation.value.scrollHeight, behavior: 'instant' })
+  })
 })
 
 const cacheTaskResult = (result: TaskBundle) => {
@@ -627,7 +652,7 @@ const send = async (payload: {
   runError.value = ''
   runErrorCode.value = ''
   runErrorRunId.value = ''
-  streamingText.value = ''
+  resetStreamText()
   runStage.value = 'submitting'
   runStageHistory.value = ['submitting']
   try {
@@ -645,7 +670,10 @@ const send = async (payload: {
       onRunAccepted: async (runId, acceptedTaskId, clientMessageId) => {
         // Acceptance persists the task; sidebar discovery must not wait for generation.
         void queryClient.invalidateQueries({ queryKey: ['tasks'] })
-        if (token !== generationToken) void api.cancelRun(runId)
+        if (token !== generationToken)
+          void api.cancelRun(runId).catch(() => {
+            $q.notify({ message: '停止请求未确认，请刷新任务查看状态。', color: 'warning' })
+          })
         else {
           uploadProgress.value = []
           pendingMessages.value = pendingMessages.value.map((message) =>
@@ -670,11 +698,11 @@ const send = async (payload: {
         if (token === generationToken && visibleForRun()) recordRunStage(stage)
       },
       onTextDelta: (text) => {
-        if (token === generationToken && visibleForRun()) streamingText.value += text
+        if (token === generationToken && visibleForRun()) queueStreamText(text)
       },
       onArticleReady: () => {
         if (token === generationToken && visibleForRun()) {
-          streamingText.value = ''
+          resetStreamText()
           void refreshCurrentTask()
         }
       },
@@ -692,7 +720,7 @@ const send = async (payload: {
     if (token !== generationToken) return
     if (visibleForRun()) {
       runStage.value = 'completed'
-      streamingText.value = ''
+      resetStreamText()
     }
     pendingMessages.value = pendingMessages.value.filter(
       (message) => message.id !== pendingMessage.id,
@@ -728,6 +756,7 @@ const send = async (payload: {
     }
   } finally {
     if (token === generationToken) {
+      flushStreamText()
       uploadProgress.value = []
       activeUploadMessageId.value = ''
       if (visibleForRun()) {
@@ -824,11 +853,23 @@ const stop = () => {
   generationController?.abort()
   generationController = null
   generationToken += 1
+  flushStreamText()
+  if (scrollFrame !== null) cancelAnimationFrame(scrollFrame)
+  scrollFrame = null
+  uploadProgress.value = []
+  activeUploadMessageId.value = ''
+  activeGenerationTaskId.value = ''
   currentRunId.value = ''
   generating.value = false
   runStage.value = 'cancelled'
-  if (runId) void api.cancelRun(runId).finally(() => auth.refreshUser().catch(() => undefined))
-  $q.notify({ message: '生成已经停止，现有内容和资料都已保留。', color: 'info' })
+  if (runId) {
+    void api.cancelRun(runId)
+      .then(() => $q.notify({ message: '生成已停止。', color: 'info' }))
+      .catch(() => $q.notify({ message: '停止请求未确认，请刷新任务查看状态。', color: 'warning' }))
+      .finally(() => auth.refreshUser().catch(() => undefined))
+  } else {
+    $q.notify({ message: '已停止接收，已提交的任务可稍后查看。', color: 'info' })
+  }
 }
 
 const resumeOriginalRequest = () => {
@@ -858,7 +899,7 @@ const resumeOriginalRequest = () => {
   runError.value = ''
   runErrorCode.value = ''
   runErrorRunId.value = ''
-  streamingText.value = ''
+  resetStreamText()
   void api
     .resumePendingMessage({
       pendingKey: saved.key,
@@ -874,11 +915,11 @@ const resumeOriginalRequest = () => {
         if (token === generationToken && visibleForRun()) recordRunStage(stage)
       },
       onTextDelta: (text) => {
-        if (token === generationToken && visibleForRun()) streamingText.value += text
+        if (token === generationToken && visibleForRun()) queueStreamText(text)
       },
       onArticleReady: () => {
         if (token === generationToken && visibleForRun()) {
-          streamingText.value = ''
+          resetStreamText()
           void refreshCurrentTask()
         }
       },
@@ -887,7 +928,7 @@ const resumeOriginalRequest = () => {
       if (!result || token !== generationToken) return
       if (visibleForRun()) {
         runStage.value = 'completed'
-        streamingText.value = ''
+        resetStreamText()
       }
       cacheTaskResult(result)
       pendingMessages.value = pendingMessages.value.filter(
@@ -915,6 +956,7 @@ const resumeOriginalRequest = () => {
     })
     .finally(() => {
       if (token !== generationToken) return
+      flushStreamText()
       if (visibleForRun()) {
         generating.value = false
         currentRunId.value = ''
@@ -936,11 +978,12 @@ watch(
     generating.value = false
     currentRunId.value = ''
     runStage.value = null
-    streamingText.value = ''
+    resetStreamText()
   },
 )
 onBeforeUnmount(() => {
   pageActive = false
+  resetStreamText()
 })
 
 const openArticle = async (message: Message) => {
@@ -1015,7 +1058,7 @@ const openArticle = async (message: Message) => {
                   <div
                     v-if="streamingText"
                     class="message__rich-text"
-                    v-html="renderSafeMarkdown(streamingText)"
+                    v-html="streamingHtml"
                   />
                 </template>
                 <div v-else-if="isFailureMessage(message)" class="message__failure" role="alert">
@@ -1126,7 +1169,7 @@ const openArticle = async (message: Message) => {
             >
               <q-avatar color="primary" text-color="white" icon="auto_awesome" />
               <div class="message__bubble">
-                <div class="message__rich-text" v-html="renderSafeMarkdown(streamingText)" />
+                <div class="message__rich-text" v-html="streamingHtml" />
                 <q-spinner-dots v-if="generating" color="primary" size="22px" />
               </div>
             </div>
@@ -1260,7 +1303,7 @@ const openArticle = async (message: Message) => {
         <div
           v-if="streamingText"
           class="blank-create__streaming"
-          v-html="renderSafeMarkdown(streamingText)"
+          v-html="streamingHtml"
         />
         <div v-if="displayedRunFailure" class="message message--assistant message--failure">
           <q-avatar color="primary" text-color="white" icon="auto_awesome" />

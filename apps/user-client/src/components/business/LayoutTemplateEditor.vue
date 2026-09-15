@@ -1184,7 +1184,6 @@ const remove = async (target: LayoutTemplate) => {
     </div>
     <template #actions>
       <AppButton variant="ghost" label="取消" @click="$emit('update:modelValue', false)" />
-      <AppButton variant="outline" label="查看整体结果" @click="mobileStep = 4" />
       <AppButton
         label="保存模板"
         :loading="saving"
