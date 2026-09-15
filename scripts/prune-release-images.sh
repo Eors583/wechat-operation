@@ -34,7 +34,7 @@ if [ "$current_tag" = "$previous_tag" ]; then
   exit 0
 fi
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
 repository_dir=$(dirname -- "$script_dir")
 archive_dir="$repository_dir/.deploy-images"
 

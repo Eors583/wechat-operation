@@ -33,7 +33,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Deployment script lint
-        run: shellcheck scripts/ci-ssh-entry.sh scripts/deploy-ci-release.sh
+        run: shellcheck scripts/ci-ssh-entry.sh scripts/deploy-ci-release.sh scripts/prune-release-images.sh
       - name: Select production service
         id: service
         env:
