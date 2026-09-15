@@ -74,6 +74,9 @@ from app.domains.user_preference_memory import (
     private_preferences,
 )
 from app.domains.wechat_expert import (
+    BOUNDARY as EXPERT_BOUNDARY,
+)
+from app.domains.wechat_expert import (
     TITLE_CONTRACT,
     TitleResponse,
     draft_audit,
@@ -1748,16 +1751,13 @@ async def prepare_ai_run(
         )
     if run_type == "clarification" and ai_settings.get("max_clarification_rounds") == 0:
         run_type = "article_generation"
-    deterministic = None if file_ids else _deterministic_response(run_type)
     transcript_required = (
         intent_decision.get("domain") == "general"
         and intent_decision.get("fidelity") == "verbatim"
     )
-    if intent_decision.get("needs_clarification"):
-        deterministic = ("请明确本轮要处理的对象，以及希望提取原文、翻译、总结还是修改。", [])
     if conversation_action and not needs_model(conversation_action):
-        deterministic = ("正在处理请求。", [])
         file_ids = []
+    # Freeze a model route even when the platform itself will deliver the operation result.
     deterministic = None
     route_purpose = "article_generation" if run_type == "article_generation" else "fast_task"
     route_snapshot: dict[str, Any] = (
@@ -2371,7 +2371,10 @@ async def process_ai_run(
             available = context_budget(snapshot, prompt, purpose=purpose, context=context)
             if available < 4096:
                 # Keep machine contracts, security boundaries and preference protocol verbatim.
-                protected = [article_output_contract(), PRIORITY, ACCOUNT_PROFILE_INSTRUCTIONS]
+                protected = [
+                    article_output_contract(), PRIORITY, ACCOUNT_PROFILE_INSTRUCTIONS,
+                    EXPERT_BOUNDARY,
+                ]
                 if model_context.get("layout_heading_numbers"):
                     protected.append(HEADING_NUMBERING_INSTRUCTION)
                 if preference_mode:
@@ -3258,7 +3261,7 @@ async def process_ai_run(
         result = dataclass_replace(
             result, structured=canonical_output, text=extract_plain_text(canonical_output),
         )
-        allowed, reason = await safety.check_text(result.text)
+        allowed, reason = await safety.check_text(result.text + "\n" + "\n".join(title_candidates))
         if not allowed:
             raise ApiError(422, "CONTENT_SAFETY_BLOCKED", "润色结果未通过安全检查。")
         expert_records["article_plan"] = model_context.get("article_plan")
@@ -3335,6 +3338,12 @@ async def process_ai_run(
         )
         if not allowed:
             raise ApiError(422, "CONTENT_SAFETY_BLOCKED", "生成内容未通过安全检查。")
+    if expert_records and run.run_type == "article_generation" and local_target is None:
+        final_audit = draft_audit(canonical_output, user_input)
+        if not final_audit["passed"]:
+            raise ApiError(422, "EXPERT_STYLE_REVIEW_FAILED", "最终文章未通过文风检查。")
+        expert_records["final_style_audit"] = final_audit
+        run.context_snapshot = {**run.context_snapshot, "wechat_expert_results": expert_records}
     await ensure_not_cancelled()
     if run.run_type in {"article_generation", "titles"} or (
         conversation_action

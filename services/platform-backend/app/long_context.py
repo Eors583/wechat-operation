@@ -13,6 +13,8 @@ from app.model_limits import estimate_tokens, output_token_limit
 
 # Operational snapshots retain these fields; models do not need internal routing/configuration.
 _INTERNAL_FIELDS = {
+    "wechat_expert",
+    "wechat_expert_results",
     "account_style_reviews",
     "account_style_fallback",
     "output_rewrite_history",
@@ -29,6 +31,11 @@ _INTERNAL_FIELDS = {
     "retrieval_mode",
 }
 SOURCE_FIELDS = {
+    "writing_dna",
+    "reference_statistics",
+    "title_candidates",
+    "style_audit",
+    "untrusted_wechat_search",
     "selected_skills",
     "project_requirements",
     "preferences",
