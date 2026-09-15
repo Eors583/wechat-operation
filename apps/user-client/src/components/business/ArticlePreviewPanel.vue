@@ -60,7 +60,7 @@ const saving = ref(false)
 const saveState = ref<'saved' | 'saving' | 'failed'>('saved')
 const versionNo = ref(props.article.versionNo)
 const title = ref(props.article.title)
-const view = ref<'edit' | 'layout'>('edit')
+const view = ref<'edit' | 'layout'>('layout')
 const editorReady = ref(false)
 const fullPreviewHtml = ref('')
 const fullPreviewLoading = ref(false)
@@ -144,6 +144,7 @@ watch(
   () => [props.accountId, props.template?.id, props.template?.versionId],
   () => {
     invalidateFullPreview()
+    view.value = 'layout'
     if (layoutDirty.value) markDirty()
   },
 )
@@ -341,7 +342,7 @@ onBeforeUnmount(() => {
         <template #prepend><q-icon name="auto_awesome" /></template>
       </q-select>
       <span v-if="template" class="article-panel__template-status">
-        已应用：{{ template.name }}
+        {{ view === 'layout' && fullPreviewHtml ? '已应用' : '已选模板' }}：{{ template.name }}
       </span>
       <span
         v-if="accountsError || templatesError"
