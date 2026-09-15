@@ -1057,12 +1057,6 @@ def _document_with_locked_content(
         if is_heading and image_components:
             number = heading_index[0] + 1
             if number not in decorations:
-                if not text_fallback:
-                    raise ApiError(
-                        422,
-                        "LAYOUT_MARKER_MISSING",
-                        f"缺少第 {number} 章的序号图片，请补齐或选择文字降级。",
-                    )
                 parts.append(
                     _heading_marker_html(
                         {
