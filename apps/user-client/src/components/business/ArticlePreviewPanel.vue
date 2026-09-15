@@ -6,7 +6,8 @@ import Link from '@tiptap/extension-link'
 import Image from '@tiptap/extension-image'
 import { useQuasar } from 'quasar'
 import type { Article, LayoutTemplate, OfficialAccount } from '@/api/types'
-import { api } from '@/api/client'
+import { api, downloadTemplateMarker } from '@/api/client'
+import { headingMarkers, headingMarkerKey, type HeadingMarker } from '@/editor/headingMarkers'
 import { createDefaultStyles } from '@/api/styleDefaults'
 import { queryClient } from '@/boot/query'
 import { moduleParagraph } from '@/editor/moduleParagraph'
@@ -54,7 +55,9 @@ const fallbackStyles = createDefaultStyles()
 const previewCssVariables = computed(() =>
   templatePreviewCssVariables(props.template?.styles ?? fallbackStyles),
 )
-const hasHeadingMarker = computed(() => props.template?.styles.heading_marker.enabled === true)
+const hasHeadingMarker = computed(
+  () => !editorMarkers.value.length && props.template?.styles.heading_marker.enabled === true,
+)
 const dirty = ref(false)
 const saving = ref(false)
 const saveState = ref<'saved' | 'saving' | 'failed'>('saved')
@@ -66,6 +69,53 @@ const fullPreviewHtml = ref('')
 const fullPreviewLoading = ref(false)
 const fullPreviewError = ref('')
 const fixedContent = useArticleFixedContent(() => props.template)
+const editorMarkers = ref<HeadingMarker[]>([])
+watch(
+  fixedContent.template,
+  (template, _previous, onCleanup) => {
+    let active = true
+    const urls: string[] = []
+    onCleanup(() => {
+      active = false
+      urls.forEach((url) => URL.revokeObjectURL(url))
+    })
+    editorMarkers.value = (template?.componentGroups ?? [])
+      .filter((group) => group.enabled && group.kind === 'decorated_heading')
+      .map((group) => ({ group, loading: true }))
+    if (!template) return
+    const pending = editorMarkers.value
+    void (async () => {
+      for (let index = 0; index < pending.length && active; index += 4) {
+        await Promise.all(
+          pending.slice(index, index + 4).map(async (marker) => {
+            try {
+              const blob = marker.group.imageDocumentId
+                ? await api.downloadDocument(marker.group.imageDocumentId)
+                : await downloadTemplateMarker(
+                    template.id,
+                    marker.group.id,
+                    template.versionNo ?? 1,
+                  )
+              if (!active) return
+              if (!['image/png', 'image/jpeg'].includes(blob.type) || blob.size >= 1_000_000)
+                throw new Error('序号图片格式无效')
+              marker.url = URL.createObjectURL(blob)
+              urls.push(marker.url)
+            } catch {
+              // The decoration displays the template's text fallback or an unavailable notice.
+            } finally {
+              if (active) {
+                marker.loading = false
+                editorMarkers.value = [...pending]
+              }
+            }
+          }),
+        )
+      }
+    })()
+  },
+  { immediate: true },
+)
 const hasFixedContent = computed(() =>
   Boolean(fixedContent.beforeHtml.value || fixedContent.afterHtml.value),
 )
@@ -101,6 +151,7 @@ const editor = useEditor({
   content: props.article.contentJson ?? props.article.contentHtml,
   editorProps: { attributes: { class: 'tiptap-body', 'aria-label': '文章预览富文本编辑器' } },
   onCreate: ({ editor: instance }) => {
+    instance.registerPlugin(headingMarkers(() => editorMarkers.value))
     const separated = separateArticleTitle(instance.getJSON(), props.article.title)
     title.value = separated.title
     if (separated.separated) {
@@ -110,6 +161,11 @@ const editor = useEditor({
     editorReady.value = true
   },
   onUpdate: markDirty,
+})
+watch(editorMarkers, () => {
+  const instance = editor.value
+  if (instance && !instance.isDestroyed)
+    instance.view.dispatch(instance.state.tr.setMeta(headingMarkerKey, true))
 })
 
 const hydrateArticle = () => {
@@ -614,6 +670,16 @@ onBeforeUnmount(() => {
 <style scoped lang="scss">
 @use '@/styles/mixins/article-content' as *;
 @use '@/styles/tokens/primitive' as space;
+
+:deep(.article-heading-image) {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+:deep(.article-heading-image--text) {
+  @include preview-module('heading-marker');
+}
 
 .article-panel {
   display: grid;
