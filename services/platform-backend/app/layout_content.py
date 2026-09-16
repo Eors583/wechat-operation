@@ -40,7 +40,8 @@ _CSS_PROPERTIES = {
     "margin-bottom", "margin-left", "padding", "padding-top", "padding-right", "padding-bottom",
     "padding-left", "text-align", "text-decoration", "text-indent", "vertical-align", "width",
     "max-width", "min-width", "overflow-wrap", "word-break", "white-space", "table-layout",
-    "align-items", "justify-content", "flex-wrap", "flex-shrink", "gap",
+    "align-items", "align-self", "justify-content", "flex", "flex-flow",
+    "flex-wrap", "flex-shrink", "gap",
     "transform", "transform-origin", "box-shadow", "opacity",
 }
 _CSS_VALUE = re.compile(r"^[\w\s#.,%()'\"/+-]+$", re.UNICODE)
@@ -183,8 +184,48 @@ def wechat_video_attributes(element: Tag) -> dict[str, str]:
     return attrs
 
 
+def _videosnap_attributes(element: Tag) -> dict[str, str]:
+    attributes = {"data-pluginname": "mpvideosnap", "data-type": "video"}
+    for key, pattern in {
+        "data-id": r"[A-Za-z0-9_/-]{1,256}",
+        "data-nonceid": r"[0-9]{1,30}",
+        "data-username": r"[A-Za-z0-9_@.-]{1,256}",
+        "data-width": r"[0-9]{1,5}", "data-height": r"[0-9]{1,5}",
+    }.items():
+        value = str(element.get(key, ""))
+        if re.fullmatch(pattern, value):
+            attributes[key] = value
+    for key in ("data-url", "data-headimgurl", "data-authiconurl"):
+        value = _safe_url(str(element.get(key, "")), image=True)
+        if value:
+            attributes[key] = value
+    for key, limit in {"data-desc": 2000, "data-nickname": 200}.items():
+        attributes[key] = str(element.get(key, ""))[:limit]
+    return attributes
+
+
+def _videosnap_card(element: Tag) -> Tag:
+    attributes = _videosnap_attributes(element)
+    soup = BeautifulSoup("", "html.parser")
+    card = soup.new_tag("figure", attrs={
+        **attributes, "data-videosnap-card": "true",
+        "style": "margin:0;" + _BOUNDS,
+    })
+    if attributes.get("data-url"):
+        card.append(soup.new_tag("img", attrs={
+            "src": attributes["data-url"], "alt": "视频号封面",
+            "referrerpolicy": "no-referrer",
+            "style": "display:block;width:100%;height:auto;" + _BOUNDS,
+        }))
+    else:
+        caption = soup.new_tag("figcaption")
+        caption.string = attributes.get("data-desc") or "视频号"
+        card.append(caption)
+    return card
+
+
 def native_wechat_profile_cards(value: str) -> str:
-    """Use native account components in the draft payload, not the preview artwork."""
+    """Restore native account and video cards in the draft payload."""
     soup = BeautifulSoup(value, "html.parser")
     for card in soup.select('figure[data-profile-card="true"]'):
         attributes = _profile_attributes(card)
@@ -207,6 +248,14 @@ def native_wechat_profile_cards(value: str) -> str:
         })
         wrapper.append(profile)
         card.replace_with(wrapper)
+    for card in soup.select('figure[data-videosnap-card="true"]'):
+        attributes = _videosnap_attributes(card)
+        if not attributes.get("data-id") or not attributes.get("data-nonceid"):
+            continue
+        video = soup.new_tag("mp-common-videosnap", attrs=attributes)
+        video["class"] = "js_uneditable custom_select_card channels_iframe videosnap_video_iframe"
+        video["contenteditable"] = "false"
+        card.replace_with(video)
     return str(soup)
 
 
@@ -256,6 +305,13 @@ def sanitize_content_html(value: str) -> str:
         if name == "mp-common-profile":
             element.replace_with(_profile_card(element))
             continue
+        if name == "mp-common-videosnap":
+            element.replace_with(_videosnap_card(element))
+            continue
+        # Empty zero-width SVGs are layout spacers in WeChat separators, not media.
+        if name == "svg" and not element.find(True) and not element.get_text(strip=True):
+            element.decompose()
+            continue
         if name in _DROP_TAGS:
             element.decompose()
             continue
@@ -296,7 +352,14 @@ def sanitize_content_html(value: str) -> str:
             _profile_attributes(element)
             if name == "figure" and element.get("data-profile-card") == "true" else {}
         )
+        videosnap_attributes = (
+            _videosnap_attributes(element)
+            if name == "figure" and element.get("data-videosnap-card") == "true" else {}
+        )
         element.attrs = {}
+        if videosnap_attributes:
+            element.attrs.update(videosnap_attributes)
+            element["data-videosnap-card"] = "true"
         image_document_id = str(original.get("data-fixed-image-id", ""))
         if name == "img" and re.fullmatch(
             r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", image_document_id
