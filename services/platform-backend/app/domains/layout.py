@@ -623,22 +623,6 @@ async def process_layout_extraction(
                 group["confidence"] = decision["confidence"]
         if image_inputs:
             apply_visual_markers(result.source_snapshot, image_inputs, structured["image_markers"])
-            account = (
-                await session.get(OfficialAccount, template.official_account_id)
-                if template.official_account_id
-                else None
-            )
-            source_name = str(result.source_snapshot.get("account_name", "")).strip()
-            if not account or not source_name or source_name != account.name.strip():
-                # Keep original assets available, but do not silently reuse
-                # another account's branding. Users can select image mode.
-                for group in result.source_snapshot.get("component_groups", []):
-                    if group["kind"] == "decorated_heading":
-                        group["enabled"] = False
-                style_tokens["heading_marker"] = {
-                    **style_tokens.get("heading_marker", {}),
-                    "enabled": True,
-                }
         model_assist = {
             "purpose": "layout_extraction",
             "route_version_id": route_snapshot.get("route_version_id"),
